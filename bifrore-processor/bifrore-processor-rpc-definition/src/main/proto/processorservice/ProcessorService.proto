@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+import "Message.proto";
+
+option java_multiple_files = true;
+option java_package = "bifromq.re.processor.rpc.proto";
+option java_outer_classname = "ProcessorServiceProto";
+option optimize_for = SPEED;
+
+package processorservice;
+
+service ProcessorService {
+  rpc subscribe(SubscribeRequest) returns (SubscribeResponse) {}
+  rpc unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse) {}
+}
+
+message SubscribeRequest {
+  uint32 reqId = 1;
+  string topicFilter = 2;
+  commontype.QoS qos = 3;
+}
+
+message SubscribeResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+}
+
+message UnsubscribeRequest {
+  uint32 reqId = 1;
+  string topicFilter = 2;
+}
+
+message UnsubscribeResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+}

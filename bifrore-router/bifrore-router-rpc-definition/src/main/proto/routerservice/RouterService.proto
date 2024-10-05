@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package routerservice;
+
+option java_multiple_files = true;
+option java_package = "bifromq.re.router.rpc.proto";
+option java_outer_classname = "RouterServiceProto";
+option optimize_for = SPEED;
+
+
+service RouterService {
+  rpc match(MatchRequest) returns (MatchResponse) {}
+  rpc addRule(AddRuleRequest) returns (AddRuleResponse) {}
+  rpc deleteRule(DeleteRuleRequest) returns (DeleteRuleResponse) {}
+  rpc listRule(ListRuleRequest) returns (ListRuleResponse) {}
+}
+
+message RuleMeta {
+  string plaintextRule = 1;
+  string topicFilter = 2;
+  repeated string destinations = 3;
+}
+
+message CompiledRule {
+  string ruleId = 1;
+  bytes expressionObj = 2;
+  repeated string destinations = 3;
+}
+
+message MatchRequest {
+  uint32 reqId = 1;
+  string topic = 2;
+}
+
+message MatchResponse {
+  enum Code {
+    OK = 0;
+    NOT_EXIST = 1;
+    ERROR = 2;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+  repeated bytes parsedRuleInBytes = 3;
+}
+
+message AddRuleRequest {
+  uint32 reqId = 1;
+  string rule = 2;
+  repeated string destinations = 3;
+}
+
+message AddRuleResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+  string ruleId = 3;
+  optional string failReason = 4;
+}
+
+message DeleteRuleRequest {
+  uint32 reqId = 1;
+  string ruleId = 2;
+}
+
+message DeleteRuleResponse {
+  enum Code {
+    OK = 0;
+    NOT_EXIST = 1;
+    ERROR = 2;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+  optional string failReason = 3;
+}
+
+message ListRuleRequest {
+  uint32 reqId = 1;
+}
+
+message ListRuleResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint32 reqId = 1;
+  Code code = 2;
+  repeated RuleMeta rules = 3;
+  optional string failReason = 4;
+}

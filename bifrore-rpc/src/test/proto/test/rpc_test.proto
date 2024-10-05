@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "bifromq.re.baserpc.test";
+option java_outer_classname = "RPCTestProto";
+
+package test;
+
+service RPCTest {
+  rpc unary (Request) returns (Response) {}
+}
+
+message Request {
+  uint32 id = 1;
+  string value = 2;
+  bytes bin = 3;
+}
+
+message Response {
+  uint32 id = 1;
+  string value = 2;
+  bytes bin = 3;
+}

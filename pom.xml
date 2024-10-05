@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>bifromq.re</groupId>
+    <artifactId>bifrore-parent</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <packaging>pom</packaging>
+    <name>BifroRE</name>
+    <modules>
+        <module>bifrore-admin</module>
+        <module>bifrore-processor</module>
+        <module>build</module>
+        <module>bifrore-rpc</module>
+        <module>bifrore-destination-plugin</module>
+        <module>bifrore-router</module>
+        <module>bifrore-common</module>
+    </modules>
+
+    <properties>
+        <javax.annotation.api.version>1.3.2</javax.annotation.api.version>
+        <!-- third party version-->
+        <vertx.web.version>4.5.8</vertx.web.version>
+        <lombok.version>1.18.22</lombok.version>
+        <slf4j.api.version>1.7.36</slf4j.api.version>
+        <protoc.version>3.21.12</protoc.version>
+        <grpc.version>1.53.0</grpc.version>
+        <jackson.version>2.15.2</jackson.version>
+        <netty.version>4.1.94.Final</netty.version>
+
+        <!-- maven.plugin.version-->
+        <maven.compiler.plugin.version>3.10.1</maven.compiler.plugin.version>
+        <os.plugin.version>1.6.2</os.plugin.version>
+        <protobuf.plugin.version>0.6.1</protobuf.plugin.version>
+
+        <!-- build properties -->
+        <java.source.version>17</java.source.version>
+        <java.target.version>17</java.target.version>
+        <source.encoding>UTF-8</source.encoding>
+
+        <!-- test dependencies -->
+        <testng.version>7.9.0</testng.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!--bifreRE base-->
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-base</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!--bifreRE admin-->
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-admin-worker</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-admin-store</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!--bifreRE common type-->
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-common-type</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!--bifreRE processor-->
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-processor-destination</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-processor-worker</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!--third party-->
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.api.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protoc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java-util</artifactId>
+                <version>${protoc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.grpc</groupId>
+                <artifactId>grpc-core</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.grpc</groupId>
+                <artifactId>grpc-bom</artifactId>
+                <type>pom</type>
+                <scope>import</scope>
+                <version>${grpc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <type>pom</type>
+                <scope>import</scope>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>javax.annotation</groupId>
+                <artifactId>javax.annotation-api</artifactId>
+                <version>${javax.annotation.api.version}</version>
+            </dependency>
+
+            <!-- test dependencies -->
+            <dependency>
+                <groupId>org.testng</groupId>
+                <artifactId>testng</artifactId>
+                <version>${testng.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <extensions>
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>${os.plugin.version}</version>
+            </extension>
+        </extensions>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven.compiler.plugin.version}</version>
+                    <configuration>
+                        <source>${java.source.version}</source>
+                        <target>${java.target.version}</target>
+                        <encoding>${source.encoding}</encoding>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.xolstice.maven.plugins</groupId>
+                    <artifactId>protobuf-maven-plugin</artifactId>
+                    <version>${protobuf.plugin.version}</version>
+                    <configuration>
+                        <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}
+                        </protocArtifact>
+                        <pluginId>grpc-java</pluginId>
+                        <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}
+                        </pluginArtifact>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>compile</goal>
+                                <goal>compile-custom</goal>
+                                <goal>test-compile</goal>
+                                <goal>test-compile-custom</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+</project>

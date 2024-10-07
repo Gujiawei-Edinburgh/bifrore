@@ -13,6 +13,7 @@ service RouterService {
   rpc addRule(AddRuleRequest) returns (AddRuleResponse) {}
   rpc deleteRule(DeleteRuleRequest) returns (DeleteRuleResponse) {}
   rpc listRule(ListRuleRequest) returns (ListRuleResponse) {}
+  rpc listTopiFilters(ListTopicFilterRequest) returns (ListTopicFilterResponse) {}
 }
 
 message RuleMeta {
@@ -89,4 +90,18 @@ message ListRuleResponse {
   Code code = 2;
   repeated RuleMeta rules = 3;
   optional string failReason = 4;
+}
+
+message ListTopicFilterRequest {
+  uint32 reqId = 1;
+}
+
+message ListTopicFilterResponse {
+  uint32 reqId = 1;
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  Code code = 2;
+  repeated string topicFilters = 3;
 }

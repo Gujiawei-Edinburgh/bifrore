@@ -30,6 +30,26 @@
             <groupId>bifromq.re</groupId>
             <artifactId>bifrore-common-type</artifactId>
         </dependency>
+        <dependency>
+            <groupId>bifromq.re</groupId>
+            <artifactId>bifrore-common-parser</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>bifromq.re</groupId>
+            <artifactId>bifrore-destination-plugin</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>bifromq.re</groupId>
+            <artifactId>bifrore-router-client</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <version>3.1.5</version>
+        </dependency>
     </dependencies>
 
 </project>

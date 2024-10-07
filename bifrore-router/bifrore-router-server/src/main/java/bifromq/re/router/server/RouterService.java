@@ -186,6 +186,17 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
         }, responseObserver);
     }
 
+    @Override
+    public void listTopiFilters(ListTopicFilterRequest request, StreamObserver<ListTopicFilterResponse> responseObserver) {
+        response(metadata -> {
+            CompletableFuture<ListTopicFilterResponse> future = new CompletableFuture<>();
+            ListTopicFilterResponse.Builder builder = ListTopicFilterResponse.newBuilder();
+            builder.setReqId(request.getReqId());
+            builder.addAllTopicFilters(topicFilterMap.keySet());
+            return future;
+        }, responseObserver);
+    }
+
     private RuleMeta parseRuleMeta(byte[] ruleMetaInBytes) throws InvalidProtocolBufferException {
         return RuleMeta.parseFrom(ruleMetaInBytes);
     }

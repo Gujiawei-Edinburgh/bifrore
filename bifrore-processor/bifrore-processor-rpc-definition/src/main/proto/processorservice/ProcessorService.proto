@@ -15,7 +15,7 @@ service ProcessorService {
 }
 
 message SubscribeRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   string topicFilter = 2;
   commontype.QoS qos = 3;
 }
@@ -25,12 +25,13 @@ message SubscribeResponse {
     OK = 0;
     ERROR = 1;
   }
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   Code code = 2;
+  optional string reason = 3;
 }
 
 message UnsubscribeRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   string topicFilter = 2;
 }
 
@@ -39,6 +40,7 @@ message UnsubscribeResponse {
     OK = 0;
     ERROR = 1;
   }
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   Code code = 2;
+  optional string reason = 3;
 }

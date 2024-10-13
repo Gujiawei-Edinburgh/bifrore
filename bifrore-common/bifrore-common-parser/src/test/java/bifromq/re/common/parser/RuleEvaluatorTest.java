@@ -19,7 +19,6 @@ public class RuleEvaluatorTest {
     private final Message inputMessage = Message.newBuilder()
             .setQos(QoS.AT_LEAST_ONCE)
             .setTopic("testTopic")
-            .setClientId("testClientId")
             .setPayload(ByteString.copyFrom("{\"height\": 5, \"pressure\": 10, \"temp\": 31}".getBytes()))
             .build();
     private final RuleEvaluator evaluator = new RuleEvaluator();

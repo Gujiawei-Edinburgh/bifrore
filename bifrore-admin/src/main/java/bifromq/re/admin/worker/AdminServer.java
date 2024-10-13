@@ -9,16 +9,18 @@ import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.ws.rs.Path;
-import java.util.List;
 
 @Slf4j
-public class AdminWorker {
+class AdminServer implements IAdminServer {
+    private final int port;
     private final Router router;
 
-    public AdminWorker(Vertx vertx, int port, List<Handler<RoutingContext>> handlers) {
-        this.router = Router.router(vertx);
-        handlers.forEach(this::addToRouter);
-        vertx.createHttpServer().listen(port, asyncResult -> {
+    public AdminServer(AdminServerBuilder builder) {
+        Vertx vertx = builder.vertx;
+        router = Router.router(builder.vertx);
+        port = builder.port;
+        builder.handlers.forEach(this::addToRouter);
+        vertx.createHttpServer().listen(builder.port, asyncResult -> {
             if (asyncResult.succeeded()) {
                 log.info("bifrore admin worker started on: {}", port);
             } else {

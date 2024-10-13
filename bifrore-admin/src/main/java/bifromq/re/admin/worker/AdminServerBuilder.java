@@ -7,32 +7,32 @@ import io.vertx.ext.web.RoutingContext;
 import java.util.ArrayList;
 import java.util.List;
 
-public class AdminWorkerBuilder {
-    private Vertx vertx;
-    private int port;
-    private final List<Handler<RoutingContext>> handlers = new ArrayList<>();
+public class AdminServerBuilder {
+    Vertx vertx;
+    int port;
+    List<Handler<RoutingContext>> handlers = new ArrayList<>();
 
-    public AdminWorkerBuilder vertx(Vertx vertx) {
+    public AdminServerBuilder vertx(Vertx vertx) {
         this.vertx = vertx;
         return this;
     }
 
-    public AdminWorkerBuilder port(int port) {
+    public AdminServerBuilder port(int port) {
         this.port = port;
         return this;
     }
 
-    public AdminWorkerBuilder addHandler(Handler<RoutingContext> handler) {
+    public AdminServerBuilder addHandler(Handler<RoutingContext> handler) {
         this.handlers.add(handler);
         return this;
     }
 
-    public AdminWorkerBuilder addHandlers(List<Handler<RoutingContext>> handlers) {
+    public AdminServerBuilder addHandlers(List<Handler<RoutingContext>> handlers) {
         this.handlers.addAll(handlers);
         return this;
     }
 
-    public AdminWorker build() {
+    public IAdminServer build() {
         if (vertx == null) {
             throw new IllegalArgumentException("Vertx instance must be provided");
         }
@@ -42,6 +42,6 @@ public class AdminWorkerBuilder {
         if (handlers.isEmpty()) {
             throw new IllegalArgumentException("At least one handler must be added");
         }
-        return new AdminWorker(vertx, port, handlers);
+        return new AdminServer(this);
     }
 }

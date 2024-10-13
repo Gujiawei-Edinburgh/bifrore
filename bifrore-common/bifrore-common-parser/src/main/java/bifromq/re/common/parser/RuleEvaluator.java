@@ -32,7 +32,6 @@ public class RuleEvaluator {
     private Message evaluateExpression(Parsed parsed, Message message, Map<String, Object> contextMap) {
         Message.Builder builder = Message.newBuilder();
         builder.setQos(message.getQos());
-        builder.setClientId(message.getClientId());
         builder.setTopic(message.getTopic());
         if (parsed.getCompiledAliasExpressions().containsKey("*")) {
             builder.setPayload(message.getPayload());
@@ -49,9 +48,7 @@ public class RuleEvaluator {
     }
 
     private Map<String, Object> createContextFromPayload(Message message) {
-        Map<String, Object> context = new HashMap<>() {{
-            put("clientId", message.getClientId());
-        }};
+        Map<String, Object> context = new HashMap<>();
         JsonObject payload = parsePayload(message);
         payload.entrySet().forEach(entry -> {
             if (entry.getValue().isJsonPrimitive()) {

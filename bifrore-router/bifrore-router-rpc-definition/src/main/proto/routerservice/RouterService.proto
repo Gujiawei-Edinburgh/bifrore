@@ -45,7 +45,7 @@ message MatchResponse {
 }
 
 message AddRuleRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   string rule = 2;
   repeated string destinations = 3;
 }
@@ -55,14 +55,14 @@ message AddRuleResponse {
     OK = 0;
     ERROR = 1;
   }
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   Code code = 2;
   string ruleId = 3;
   optional string failReason = 4;
 }
 
 message DeleteRuleRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   string ruleId = 2;
 }
 
@@ -72,13 +72,13 @@ message DeleteRuleResponse {
     NOT_EXIST = 1;
     ERROR = 2;
   }
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   Code code = 2;
   optional string failReason = 3;
 }
 
 message ListRuleRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
 }
 
 message ListRuleResponse {
@@ -86,18 +86,18 @@ message ListRuleResponse {
     OK = 0;
     ERROR = 1;
   }
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   Code code = 2;
   repeated RuleMeta rules = 3;
   optional string failReason = 4;
 }
 
 message ListTopicFilterRequest {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
 }
 
 message ListTopicFilterResponse {
-  uint32 reqId = 1;
+  uint64 reqId = 1;
   enum Code {
     OK = 0;
     ERROR = 1;

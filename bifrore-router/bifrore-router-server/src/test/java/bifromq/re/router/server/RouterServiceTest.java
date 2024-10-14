@@ -1,31 +1,53 @@
 package bifromq.re.router.server;
 
+import bifromq.re.processor.client.IProcessorClient;
+import bifromq.re.processor.rpc.proto.SubscribeResponse;
+import bifromq.re.processor.rpc.proto.UnsubscribeResponse;
 import bifromq.re.router.rpc.proto.*;
 import io.grpc.stub.StreamObserver;
+import lombok.SneakyThrows;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
 public class RouterServiceTest {
+    AutoCloseable closeable;
+    @Mock
+    private IProcessorClient processorClient;
+    private RouterService routerService;
     private final Map<String, byte[]> idMap = new ConcurrentHashMap<>();
     private final Map<String, List<byte[]>> topicFilterMap = new ConcurrentHashMap<>();
-    private final RouterService routerService = new RouterService(idMap, topicFilterMap);
     private final String topicFilter = "a/b/+";
     private final String ruleExpression = "select * from \"a/b/+\" where temp > 40";
 
+    @BeforeMethod
+    public void setUp() {
+        closeable = MockitoAnnotations.openMocks(this);
+        routerService = new RouterService(idMap, topicFilterMap, processorClient);
+    }
+
+    @SneakyThrows
     @AfterMethod
     public void clearRuleMap() {
         idMap.clear();
         topicFilterMap.clear();
+        closeable.close();
     }
 
 
     @Test
-    public void testAddRule() {
+    public void testAddRuleOk() {
         AddRuleRequest request = AddRuleRequest.newBuilder()
                 .setReqId(1)
                 .setRule(ruleExpression)
@@ -34,6 +56,11 @@ public class RouterServiceTest {
                     add("console");
                 }})
                 .build();
+        when(processorClient.subscribe(any()))
+                .thenReturn(CompletableFuture.completedFuture(SubscribeResponse.newBuilder()
+                        .setReqId(1)
+                        .setCode(SubscribeResponse.Code.OK)
+                        .build()));
         AddRuleResponse[] subscribeResponses = new AddRuleResponse[1];
         StreamObserver<AddRuleResponse> subscribeObserver = new StreamObserver<>() {
 
@@ -60,6 +87,91 @@ public class RouterServiceTest {
         assert idMap.size() == 1;
         assert topicFilterMap.containsKey(topicFilter);
         assert topicFilterMap.size() == 1;
+    }
+
+    @Test
+    public void testAddRuleWithSubFail() {
+        AddRuleRequest request = AddRuleRequest.newBuilder()
+                .setReqId(1)
+                .setRule(ruleExpression)
+                .addAllDestinations(new ArrayList<>() {{
+                    add("log");
+                    add("console");
+                }})
+                .build();
+        when(processorClient.subscribe(any()))
+                .thenReturn(CompletableFuture.completedFuture(SubscribeResponse.newBuilder()
+                        .setReqId(1)
+                        .setCode(SubscribeResponse.Code.ERROR)
+                        .setReason("testFailReason")
+                        .build()));
+        AddRuleResponse[] subscribeResponses = new AddRuleResponse[1];
+        StreamObserver<AddRuleResponse> subscribeObserver = new StreamObserver<>() {
+
+            @Override
+            public void onNext(AddRuleResponse value) {
+                subscribeResponses[0] = value;
+            }
+
+            @Override
+            public void onError(Throwable t) {
+
+            }
+
+            @Override
+            public void onCompleted() {
+
+            }
+        };
+        routerService.addRule(request, subscribeObserver);
+        AddRuleResponse subscribeResponse = subscribeResponses[0];
+        assert subscribeResponse.getReqId() == request.getReqId();
+        assert subscribeResponse.getCode() == AddRuleResponse.Code.ERROR;
+        assert !idMap.containsKey(generateRuleId(ruleExpression));
+        assert idMap.isEmpty();
+        assert !topicFilterMap.containsKey(topicFilter);
+        assert topicFilterMap.isEmpty();
+    }
+
+    @Test
+    public void testAddRuleWithSubException() {
+        AddRuleRequest request = AddRuleRequest.newBuilder()
+                .setReqId(1)
+                .setRule(ruleExpression)
+                .addAllDestinations(new ArrayList<>() {{
+                    add("log");
+                    add("console");
+                }})
+                .build();
+        CompletableFuture<SubscribeResponse> future = new CompletableFuture<>();
+        future.completeExceptionally(new RuntimeException("testException"));
+        when(processorClient.subscribe(any())).thenReturn(future);
+        AddRuleResponse[] subscribeResponses = new AddRuleResponse[1];
+        StreamObserver<AddRuleResponse> subscribeObserver = new StreamObserver<>() {
+
+            @Override
+            public void onNext(AddRuleResponse value) {
+                subscribeResponses[0] = value;
+            }
+
+            @Override
+            public void onError(Throwable t) {
+
+            }
+
+            @Override
+            public void onCompleted() {
+
+            }
+        };
+        routerService.addRule(request, subscribeObserver);
+        AddRuleResponse subscribeResponse = subscribeResponses[0];
+        assert subscribeResponse.getReqId() == request.getReqId();
+        assert subscribeResponse.getCode() == AddRuleResponse.Code.ERROR;
+        assert !idMap.containsKey(generateRuleId(ruleExpression));
+        assert idMap.isEmpty();
+        assert !topicFilterMap.containsKey(topicFilter);
+        assert topicFilterMap.isEmpty();
     }
 
     @Test
@@ -124,12 +236,18 @@ public class RouterServiceTest {
     }
 
     @Test
-    public void testDeleteRule() {
+    public void testDeleteRuleOk() {
         addRule(ruleExpression);
         DeleteRuleRequest request = DeleteRuleRequest.newBuilder()
                 .setReqId(2)
                 .setRuleId(generateRuleId(ruleExpression))
                 .build();
+        when(processorClient.unsubscribe(any()))
+                .thenReturn(CompletableFuture.completedFuture(UnsubscribeResponse.newBuilder()
+                        .setReqId(2)
+                        .setCode(UnsubscribeResponse.Code.OK)
+                        .setReason("testFailReason")
+                        .build()));
         DeleteRuleResponse[] deleteRuleResponses = new DeleteRuleResponse[1];
         StreamObserver<DeleteRuleResponse> unsubscribeResponseStreamObserver = new StreamObserver<>() {
 
@@ -157,11 +275,18 @@ public class RouterServiceTest {
     }
 
     @Test
-    public void testDeleteWithNoExist() {
+    public void testDeleteRuleWithUnsubFail() {
+        addRule(ruleExpression);
         DeleteRuleRequest request = DeleteRuleRequest.newBuilder()
                 .setReqId(2)
                 .setRuleId(generateRuleId(ruleExpression))
                 .build();
+        when(processorClient.unsubscribe(any()))
+                .thenReturn(CompletableFuture.completedFuture(UnsubscribeResponse.newBuilder()
+                        .setReqId(2)
+                        .setCode(UnsubscribeResponse.Code.ERROR)
+                        .setReason("testFailReason")
+                        .build()));
         DeleteRuleResponse[] deleteRuleResponses = new DeleteRuleResponse[1];
         StreamObserver<DeleteRuleResponse> unsubscribeResponseStreamObserver = new StreamObserver<>() {
 
@@ -183,7 +308,45 @@ public class RouterServiceTest {
         routerService.deleteRule(request, unsubscribeResponseStreamObserver);
         DeleteRuleResponse deleteRuleResponse = deleteRuleResponses[0];
         assert deleteRuleResponse.getReqId() == request.getReqId();
-        assert deleteRuleResponse.getCode() == DeleteRuleResponse.Code.NOT_EXIST;
+        assert deleteRuleResponse.getCode() == DeleteRuleResponse.Code.ERROR;
+        assert idMap.size() == 1;
+        assert topicFilterMap.size() == 1;
+    }
+
+    @Test
+    public void testDeleteRuleWithUnsubException() {
+        addRule(ruleExpression);
+        DeleteRuleRequest request = DeleteRuleRequest.newBuilder()
+                .setReqId(2)
+                .setRuleId(generateRuleId(ruleExpression))
+                .build();
+        CompletableFuture<UnsubscribeResponse> future = new CompletableFuture<>();
+        future.completeExceptionally(new RuntimeException("testException"));
+        when(processorClient.unsubscribe(any())).thenReturn(future);
+        DeleteRuleResponse[] deleteRuleResponses = new DeleteRuleResponse[1];
+        StreamObserver<DeleteRuleResponse> unsubscribeResponseStreamObserver = new StreamObserver<>() {
+
+            @Override
+            public void onNext(DeleteRuleResponse value) {
+                deleteRuleResponses[0] = value;
+            }
+
+            @Override
+            public void onError(Throwable t) {
+
+            }
+
+            @Override
+            public void onCompleted() {
+
+            }
+        };
+        routerService.deleteRule(request, unsubscribeResponseStreamObserver);
+        DeleteRuleResponse deleteRuleResponse = deleteRuleResponses[0];
+        assert deleteRuleResponse.getReqId() == request.getReqId();
+        assert deleteRuleResponse.getCode() == DeleteRuleResponse.Code.ERROR;
+        assert idMap.size() == 1;
+        assert topicFilterMap.size() == 1;
     }
 
     @Test
@@ -251,7 +414,44 @@ public class RouterServiceTest {
         assert matchResponse.getParsedRuleInBytesCount() == 0;
     }
 
+    @Test
+    public void testListTopicFilters() {
+        addRule(ruleExpression);
+        String anotherRuleExpression = "select * from \"a/b/+\" where height > 10";
+        addRule(anotherRuleExpression);
+        ListTopicFilterRequest request = ListTopicFilterRequest.newBuilder().setReqId(1).build();
+        ListTopicFilterResponse[] responses = new ListTopicFilterResponse[1];
+        StreamObserver<ListTopicFilterResponse> streamObserver = new StreamObserver<>() {
+
+            @Override
+            public void onNext(ListTopicFilterResponse value) {
+                responses[0] = value;
+            }
+
+            @Override
+            public void onError(Throwable t) {
+
+            }
+
+            @Override
+            public void onCompleted() {
+
+            }
+        };
+        routerService.listTopiFilters(request, streamObserver);
+        ListTopicFilterResponse listTopicFilterResponse = responses[0];
+        assert listTopicFilterResponse.getReqId() == request.getReqId();
+        assert listTopicFilterResponse.getCode() == ListTopicFilterResponse.Code.OK;
+        assert idMap.size() == 2;
+        assert topicFilterMap.size() == 1;
+    }
+
     private void addRule(String rule) {
+        when(processorClient.subscribe(any()))
+                .thenReturn(CompletableFuture.completedFuture(SubscribeResponse.newBuilder()
+                        .setReqId(1)
+                        .setCode(SubscribeResponse.Code.OK)
+                        .build()));
         AddRuleRequest request = AddRuleRequest.newBuilder()
                 .setReqId(1)
                 .setRule(rule)

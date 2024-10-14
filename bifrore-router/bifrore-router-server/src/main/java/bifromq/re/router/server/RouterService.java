@@ -3,6 +3,12 @@ package bifromq.re.router.server;
 import bifromq.re.common.parser.ParsedRule;
 import bifromq.re.common.parser.util.ParsedRuleHelper;
 import bifromq.re.common.parser.util.SerializeUtil;
+import bifromq.re.commontype.QoS;
+import bifromq.re.processor.client.IProcessorClient;
+import bifromq.re.processor.rpc.proto.SubscribeRequest;
+import bifromq.re.processor.rpc.proto.SubscribeResponse;
+import bifromq.re.processor.rpc.proto.UnsubscribeRequest;
+import bifromq.re.processor.rpc.proto.UnsubscribeResponse;
 import bifromq.re.router.rpc.proto.*;
 import bifromq.re.router.server.util.TopicFilterUtil;
 import com.google.protobuf.ByteString;
@@ -10,6 +16,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,11 +29,14 @@ import static bifromq.re.baserpc.UnaryResponse.response;
 public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
     private final Map<String, byte[]> idMap;
     private final Map<String, List<byte[]>> topicFilterMap;
+    private final IProcessorClient processorClient;
 
     public RouterService(Map<String, byte[]> idMap,
-                         Map<String, List<byte[]>> topicFilterMap) {
+                         Map<String, List<byte[]>> topicFilterMap,
+                         IProcessorClient processorClient) {
         this.idMap = idMap;
         this.topicFilterMap = topicFilterMap;
+        this.processorClient = processorClient;
     }
 
     @Override
@@ -62,38 +72,60 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
             try {
                 ParsedRule parsedRule = ParsedRuleHelper.getInstance(request.getRule());
                 String topicFilter = parsedRule.getTopicFilter();
-                byte[] serializedParsed = SerializeUtil.serializeParsed(parsedRule.getParsed());
-                String ruleId = generateRuleId(request.getRule());
-                idMap.putIfAbsent(ruleId, RuleMeta.newBuilder()
-                        .setPlaintextRule(request.getRule())
+                processorClient.subscribe(SubscribeRequest.newBuilder()
+                        .setReqId(request.getReqId())
                         .setTopicFilter(topicFilter)
-                        .build().toByteArray());
-                CompiledRule compiledRule = CompiledRule.newBuilder()
-                        .setRuleId(ruleId)
-                        .setExpressionObj(ByteString.copyFrom(serializedParsed))
-                        .addAllDestinations(request.getDestinationsList())
-                        .build();
-                while (true) {
-                    List<byte[]> existingRules = topicFilterMap.get(topicFilter);
-                    List<byte[]> updatedRules;
-                    if (existingRules == null) {
-                        updatedRules = new ArrayList<>();
-                    } else {
-                        updatedRules = new ArrayList<>(existingRules);
-                    }
-                    updatedRules.add(compiledRule.toByteArray());
-                    if (existingRules == null) {
-                        if (topicFilterMap.putIfAbsent(topicFilter, updatedRules) == null) {
-                            break;
+                        .setQos(QoS.AT_LEAST_ONCE)
+                        .build()).whenComplete((v, e) -> {
+                    if (e != null || v.getCode() == SubscribeResponse.Code.ERROR) {
+                        builder.setCode(AddRuleResponse.Code.ERROR);
+                        String failReason;
+                        if (e != null) {
+                            failReason = e.getMessage();
+                        }else {
+                            failReason = v.getReason();
                         }
+                        builder.setFailReason(failReason);
                     }else {
-                        if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
-                            break;
+                        try {
+                            byte[] serializedParsed = SerializeUtil.serializeParsed(parsedRule.getParsed());
+                            String ruleId = generateRuleId(request.getRule());
+                            idMap.putIfAbsent(ruleId, RuleMeta.newBuilder()
+                                    .setPlaintextRule(request.getRule())
+                                    .setTopicFilter(topicFilter)
+                                    .build().toByteArray());
+                            CompiledRule compiledRule = CompiledRule.newBuilder()
+                                    .setRuleId(ruleId)
+                                    .setExpressionObj(ByteString.copyFrom(serializedParsed))
+                                    .addAllDestinations(request.getDestinationsList())
+                                    .build();
+                            while (true) {
+                                List<byte[]> existingRules = topicFilterMap.get(topicFilter);
+                                List<byte[]> updatedRules;
+                                if (existingRules == null) {
+                                    updatedRules = new ArrayList<>();
+                                } else {
+                                    updatedRules = new ArrayList<>(existingRules);
+                                }
+                                updatedRules.add(compiledRule.toByteArray());
+                                if (existingRules == null) {
+                                    if (topicFilterMap.putIfAbsent(topicFilter, updatedRules) == null) {
+                                        break;
+                                    }
+                                }else {
+                                    if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
+                                        break;
+                                    }
+                                }
+                            }
+                            builder.setCode(AddRuleResponse.Code.OK);
+                        }catch (IOException exception) {
+                            builder.setCode(AddRuleResponse.Code.ERROR);
+                            builder.setFailReason(exception.getMessage());
                         }
                     }
-                }
-                builder.setCode(AddRuleResponse.Code.OK);
-                future.complete(builder.build());
+                    future.complete(builder.build());
+                });
             } catch (Exception e) {
                 log.error("Subscribe failed", e);
                 builder.setCode(AddRuleResponse.Code.ERROR);
@@ -110,48 +142,59 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
             CompletableFuture<DeleteRuleResponse> future = new CompletableFuture<>();
             DeleteRuleResponse.Builder builder = DeleteRuleResponse.newBuilder();
             builder.setReqId(request.getReqId());
-            byte[] deleted = idMap.remove(request.getRuleId());
-            if (deleted == null) {
-                builder.setCode(DeleteRuleResponse.Code.NOT_EXIST);
-                future.complete(builder.build());
-                return future;
-            }
-            try {
-                RuleMeta ruleMeta = RuleMeta.parseFrom(deleted);
-                String topicFilter = ruleMeta.getTopicFilter();
-                while (true) {
-                    List<byte[]> existingRules = topicFilterMap.get(topicFilter);
-                    if (existingRules == null || existingRules.isEmpty()) {
-                        builder.setCode(DeleteRuleResponse.Code.NOT_EXIST);
-                        break;
-                    }
-                    List<byte[]> updatedRules = new ArrayList<>(existingRules);
-                    updatedRules.removeIf(compiledRuleBytes -> {
-                        try {
-                            CompiledRule compiledRule = CompiledRule.parseFrom(compiledRuleBytes);
-                            return compiledRule.getRuleId().equals(request.getRuleId());
-                        } catch (InvalidProtocolBufferException e) {
-                            return false;
+            processorClient.unsubscribe(UnsubscribeRequest.newBuilder().build())
+                    .whenComplete((v, e) -> {
+                        if (e != null || v.getCode() == UnsubscribeResponse.Code.ERROR) {
+                            builder.setCode(DeleteRuleResponse.Code.ERROR);
+                            String failReason;
+                            if (e != null) {
+                                failReason = e.getMessage();
+                            }else {
+                                failReason = v.getReason();
+                            }
+                            builder.setFailReason(failReason);
+                        }else {
+                            byte[] deleted = idMap.remove(request.getRuleId());
+                            if (deleted == null) {
+                                builder.setCode(DeleteRuleResponse.Code.OK);
+                                future.complete(builder.build());
+                                return;
+                            }
+                            try {
+                                RuleMeta ruleMeta = RuleMeta.parseFrom(deleted);
+                                String topicFilter = ruleMeta.getTopicFilter();
+                                while (true) {
+                                    List<byte[]> existingRules = topicFilterMap.get(topicFilter);
+                                    if (existingRules == null || existingRules.isEmpty()) {
+                                        break;
+                                    }
+                                    List<byte[]> updatedRules = new ArrayList<>(existingRules);
+                                    updatedRules.removeIf(compiledRuleBytes -> {
+                                        try {
+                                            CompiledRule compiledRule = CompiledRule.parseFrom(compiledRuleBytes);
+                                            return compiledRule.getRuleId().equals(request.getRuleId());
+                                        } catch (InvalidProtocolBufferException ex) {
+                                            return false;
+                                        }
+                                    });
+                                    if (updatedRules.isEmpty()) {
+                                        topicFilterMap.remove(topicFilter);
+                                        break;
+                                    }else {
+                                        if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
+                                            break;
+                                        }
+                                    }
+                                }
+                                builder.setCode(DeleteRuleResponse.Code.OK);
+                            } catch (InvalidProtocolBufferException ex) {
+                                builder.setCode(DeleteRuleResponse.Code.ERROR);
+                                builder.setFailReason(ex.getMessage());
+                            }
                         }
+                        future.complete(builder.build());
                     });
-                    if (updatedRules.isEmpty()) {
-                        topicFilterMap.remove(topicFilter);
-                        break;
-                    }else {
-                        if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
-                            builder.setCode(DeleteRuleResponse.Code.OK);
-                            break;
-                        }
-                    }
-                }
-                future.complete(builder.build());
-                return future;
-            } catch (InvalidProtocolBufferException e) {
-                builder.setCode(DeleteRuleResponse.Code.ERROR);
-                builder.setFailReason(e.getMessage());
-                future.complete(builder.build());
-                return future;
-            }
+            return future;
         }, responseObserver);
     }
 
@@ -193,6 +236,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
             ListTopicFilterResponse.Builder builder = ListTopicFilterResponse.newBuilder();
             builder.setReqId(request.getReqId());
             builder.addAllTopicFilters(topicFilterMap.keySet());
+            future.complete(builder.build());
             return future;
         }, responseObserver);
     }

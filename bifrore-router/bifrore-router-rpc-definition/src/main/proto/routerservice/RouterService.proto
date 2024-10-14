@@ -69,8 +69,7 @@ message DeleteRuleRequest {
 message DeleteRuleResponse {
   enum Code {
     OK = 0;
-    NOT_EXIST = 1;
-    ERROR = 2;
+    ERROR = 1;
   }
   uint64 reqId = 1;
   Code code = 2;

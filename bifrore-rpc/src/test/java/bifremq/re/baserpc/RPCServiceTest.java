@@ -1,5 +1,6 @@
 package bifremq.re.baserpc;
 
+import bifromq.re.baserpc.IClusterManager;
 import bifromq.re.baserpc.IRPCClient;
 import bifromq.re.baserpc.IRPCServer;
 import bifromq.re.baserpc.test.RPCTestGrpc;
@@ -8,16 +9,19 @@ import bifromq.re.baserpc.test.Response;
 import bifromq.re.baserpc.util.NettyUtil;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
+import com.hazelcast.core.Hazelcast;
 import io.grpc.stub.StreamObserver;
 import org.testng.annotations.AfterTest;
 import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
-
 import java.util.HashMap;
 import java.util.Map;
 
 public class RPCServiceTest {
-    private IRPCServer server = IRPCServer.newBuilder()
+    private final IClusterManager clusterManager = IClusterManager.newBuilder()
+            .servers(Hazelcast.newHazelcastInstance().getSet("servers"))
+            .build();
+    private final IRPCServer server = IRPCServer.newBuilder()
             .id("testId")
             .host("127.0.0.1")
             .port(8080)
@@ -35,14 +39,16 @@ public class RPCServiceTest {
                     responseObserver.onCompleted();
                 }
             }.bindService())
+            .clusterManager(clusterManager)
             .build();
-    private IRPCClient client = IRPCClient.newBuilder()
+    private final IRPCClient client = IRPCClient.newBuilder()
             .serviceUniqueName("test.RPCTest")
             .sslContext(null)
             .eventLoopGroup(NettyUtil.createEventLoopGroup())
             .executor(MoreExecutors.directExecutor())
+            .clusterManager(clusterManager)
             .build();
-    private Map<String, String> metadata = new HashMap<>();
+    private final Map<String, String> metadata = new HashMap<>();
 
     @BeforeTest
     public void setUp() {
@@ -52,6 +58,7 @@ public class RPCServiceTest {
     @AfterTest
     public void tearDown() {
         server.shutdown();
+        clusterManager.close();
     }
 
     @Test

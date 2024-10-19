@@ -19,7 +19,7 @@ class RPCServer implements IRPCServer {
     private final String id;
     private final List<ServerServiceDefinition> serviceDefinitions;
     private final Server server;
-    private final IServiceRegister serviceRegister = new ServiceRegisterImpl();
+    private final IServiceRegister serviceRegister;
 
     RPCServer(RPCServerBuilder builder) {
         NettyServerBuilder nettyServerBuilder = NettyServerBuilder
@@ -31,6 +31,7 @@ class RPCServer implements IRPCServer {
         bindServices(nettyServerBuilder);
         this.server = nettyServerBuilder.build();
         this.id = builder.id;
+        this.serviceRegister = new ServiceRegisterImpl(builder.clusterManager);
     }
 
     private void bindServices(ServerBuilder<?> builder) {
@@ -48,7 +49,7 @@ class RPCServer implements IRPCServer {
             serviceDefinitions.forEach(each -> {
                 String serviceName = each.getServiceDescriptor().getName();
                 log.info("Start server register for service: {}", serviceName);
-                serviceRegister.register(serviceName, id, (InetSocketAddress) server.getListenSockets().get(0));
+                serviceRegister.register(id, (InetSocketAddress) server.getListenSockets().get(0));
             });
             log.info("RPCServer started");
         }catch (IOException e) {
@@ -60,7 +61,7 @@ class RPCServer implements IRPCServer {
         serviceDefinitions.forEach(each -> {
             String serviceName = each.getServiceDescriptor().getName();
             log.debug("Unregistering server for service: {}", serviceName);
-            serviceRegister.unregister(serviceName, id, (InetSocketAddress) server.getListenSockets().get(0));
+            serviceRegister.unregister(id, (InetSocketAddress) server.getListenSockets().get(0));
         });
         shutdownInternalServer();
     }

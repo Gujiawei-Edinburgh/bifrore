@@ -1,5 +1,6 @@
 package bifromq.re.baserpc.nameresolver;
 
+import bifromq.re.baserpc.IClusterManager;
 import io.grpc.NameResolver;
 import io.grpc.NameResolverProvider;
 
@@ -22,8 +23,8 @@ public class ServiceNameResolverProvider extends NameResolverProvider {
         return Integer.MAX_VALUE;
     }
 
-    public static void register(String serviceUniqueName) {
-        RESOLVERS.put(serviceUniqueName, new ServiceNameResolver(serviceUniqueName));
+    public static void register(String serviceUniqueName, IClusterManager clusterManager) {
+        RESOLVERS.put(serviceUniqueName, new ServiceNameResolver(serviceUniqueName, clusterManager));
     }
 
     @Override

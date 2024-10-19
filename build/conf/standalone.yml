@@ -1,0 +1,29 @@
+# This configuration file contains overrides for the default values of available configuration options.
+# Please note that configuration options in different versions of BifroMQ may change.
+# Once the BifroMQ service process is started, the consolidated configuration will be output in the info.log,
+# providing a helpful reference for writing and customizing this file.
+
+# if the node is responsible for cluster bootstrap. NOTE: there must be EXACTLY ONE bootstrap node in cluster deployment
+bootstrap: true
+
+# Enabling runtime throttling at tenant-level, specify the Fully Qualified Name of the resource throttler class from your plugin.
+# or experiment with the built-in resource throttler which is a simple webhook based implementation.
+# resourceThrottlerFQN: "com.baidu.demo.plugin.DemoResourceThrottler"
+
+mqttServerConfig:
+  tcpListener:
+    port: 1883
+
+# config for building BifroMQ cluster
+clusterConfig:
+  # The environment of the cluster, cluster member under same env can communicate with each other
+  env: "Test"
+  # The host address to bind for inter-member communication. If left blank, a site-local address will be used if available
+  host:
+  # This is the port for listening to cluster membership-related messages. If left blank, the operating system will help find an available one automatically.
+  # For seed nodes, it is recommended to specify an explicit port number to simplify the cluster building process.
+  port:
+  # Optionally using DNS to achieve cluster member address discovery
+  clusterDomainName:
+  # comma separated list of <ADDRESS>:<PORT> for joining the cluster
+  seedEndpoints:

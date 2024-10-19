@@ -1,5 +1,6 @@
 package bifromq.re.baserpc.discovery;
 
+import bifromq.re.baserpc.IClusterManager;
 import io.reactivex.rxjava3.core.Observable;
 
 import java.net.InetSocketAddress;
@@ -11,8 +12,8 @@ public interface ITrafficDiscovery {
 
     void stop();
 
-    static ITrafficDiscovery getInstance(String serverUniqueName) {
-        return new TrafficDiscoveryImpl(serverUniqueName);
+    static ITrafficDiscovery getInstance(IClusterManager clusterManager) {
+        return new TrafficDiscoveryImpl(clusterManager);
     }
 
     class Server {
@@ -20,7 +21,7 @@ public interface ITrafficDiscovery {
         public final SocketAddress hostAddr;
 
         public Server(String serverInfo) {
-            String[] serverMetadata = serverInfo.split(TrafficProvider.ServerInfoSeparator);
+            String[] serverMetadata = serverInfo.split(TrafficHelper.ServerInfoSeparator);
             this.id = serverMetadata[0];
             this.hostAddr = new InetSocketAddress(serverMetadata[1], Integer.parseInt(serverMetadata[2]));
         }

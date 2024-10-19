@@ -1,5 +1,6 @@
 package bifromq.re.baserpc.nameresolver;
 
+import bifromq.re.baserpc.IClusterManager;
 import bifromq.re.baserpc.discovery.ITrafficDiscovery;
 import io.grpc.Attributes;
 import io.grpc.EquivalentAddressGroup;
@@ -18,9 +19,9 @@ public class ServiceNameResolver extends NameResolver {
     private final ITrafficDiscovery trafficDiscovery;
     private final CompositeDisposable disposable = new CompositeDisposable();
 
-    public ServiceNameResolver(String serviceUniqueName) {
+    public ServiceNameResolver(String serviceUniqueName, IClusterManager clusterManager) {
         this.serviceUniqueName = serviceUniqueName;
-        this.trafficDiscovery = ITrafficDiscovery.getInstance(serviceUniqueName);
+        this.trafficDiscovery = ITrafficDiscovery.getInstance(clusterManager);
     }
 
     @Override

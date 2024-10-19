@@ -19,6 +19,7 @@ public final class RPCClientBuilder {
     private long keepAliveInSec;
     private long idleTimeoutInSec;
     private SslContext sslContext;
+    private IClusterManager clusterManager;
 
     RPCClientBuilder() {
     }
@@ -56,10 +57,15 @@ public final class RPCClientBuilder {
         return this;
     }
 
-    public RPCClient build() {
+    public RPCClientBuilder clusterManager(IClusterManager clusterManager) {
+        this.clusterManager = clusterManager;
+        return this;
+    }
+
+    public IRPCClient build() {
         Preconditions.checkNotNull(serviceUniqueName, "serviceUniqueName must be set");
         NameResolverRegistry.getDefaultRegistry().register(ServiceNameResolverProvider.INSTANCE);
-        ServiceNameResolverProvider.register(serviceUniqueName);
+        ServiceNameResolverProvider.register(serviceUniqueName, clusterManager);
         NettyChannelBuilder channelBuilder = NettyChannelBuilder
                 .forTarget(ServiceNameResolverProvider.SCHEME + "://" + serviceUniqueName)
                 .defaultLoadBalancingPolicy("round_robin")

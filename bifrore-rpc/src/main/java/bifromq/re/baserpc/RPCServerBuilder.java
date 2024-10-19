@@ -21,6 +21,7 @@ public final class RPCServerBuilder {
     EventLoopGroup workerEventLoopGroup;
     SslContext sslContext;
     Executor executor;
+    IClusterManager clusterManager;
     List<ServerServiceDefinition> serviceDefinitions = new ArrayList<>();
 
     public RPCServerBuilder id(String id) {
@@ -56,6 +57,11 @@ public final class RPCServerBuilder {
             Preconditions.checkArgument(sslContext.isServer(), "Server auth must be enabled");
         }
         this.sslContext = sslContext;
+        return this;
+    }
+
+    public RPCServerBuilder clusterManager(IClusterManager clusterManager) {
+        this.clusterManager = clusterManager;
         return this;
     }
 

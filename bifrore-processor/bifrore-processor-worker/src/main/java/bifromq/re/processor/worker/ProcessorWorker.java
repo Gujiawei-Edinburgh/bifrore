@@ -52,11 +52,7 @@ class ProcessorWorker implements IProcessorWorker {
         port = builder.port;
         clientPrefix = builder.clientPrefix;
         producerManager = new ProducerManager(builder.pluginManager);
-        routerClient = IRouterClient.newBuilder()
-                .executor(builder.executor)
-                .eventLoopGroup(builder.eventLoopGroup)
-                .sslContext(builder.sslContext)
-                .build();
+        routerClient = builder.routerClient;
         matchedRules = Caffeine.newBuilder()
                 .maximumSize(100)
                 .build(topic -> routerClient.match(MatchRequest.newBuilder().setTopic(topic).build()));

@@ -1,10 +1,7 @@
 package bifromq.re.processor.worker;
 
-import io.netty.channel.EventLoopGroup;
-import io.netty.handler.ssl.SslContext;
+import bifromq.re.router.client.IRouterClient;
 import org.pf4j.PluginManager;
-
-import java.util.concurrent.Executor;
 
 public class ProcessorWorkerBuilder {
     int clientNum;
@@ -18,9 +15,7 @@ public class ProcessorWorkerBuilder {
     int port;
     String clientPrefix;
     PluginManager pluginManager;
-    Executor executor;
-    EventLoopGroup eventLoopGroup;
-    SslContext sslContext;
+    IRouterClient routerClient;
 
     public ProcessorWorkerBuilder clientNum(int clientNum) {
         this.clientNum = clientNum;
@@ -77,18 +72,8 @@ public class ProcessorWorkerBuilder {
         return this;
     }
 
-    public ProcessorWorkerBuilder executor(Executor executor) {
-        this.executor = executor;
-        return this;
-    }
-
-    public ProcessorWorkerBuilder eventLoopGroup(EventLoopGroup eventLoopGroup) {
-        this.eventLoopGroup = eventLoopGroup;
-        return this;
-    }
-
-    public ProcessorWorkerBuilder sslContext(SslContext sslContext) {
-        this.sslContext = sslContext;
+    public ProcessorWorkerBuilder routerClient(IRouterClient routerClient) {
+        this.routerClient = routerClient;
         return this;
     }
 

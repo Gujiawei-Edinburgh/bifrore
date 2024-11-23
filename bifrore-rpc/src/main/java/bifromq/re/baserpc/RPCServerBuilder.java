@@ -70,6 +70,11 @@ public final class RPCServerBuilder {
         return this;
     }
 
+    public RPCServerBuilder executor(Executor executor) {
+        this.executor = executor;
+        return this;
+    }
+
     public RPCServer build() {
         Preconditions.checkNotNull(id, "ID must be set");
         Preconditions.checkArgument(!serviceDefinitions.isEmpty());

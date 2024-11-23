@@ -7,14 +7,14 @@ public class ProcessorServerBuilder {
     ProcessorWorkerBuilder processorWorkerBuilder;
     RPCServerBuilder rpcServerBuilder;
 
-    public ProcessorWorkerBuilder processorWorkerBuilder(ProcessorWorkerBuilder processorWorkerBuilder) {
+    public ProcessorServerBuilder processorWorkerBuilder(ProcessorWorkerBuilder processorWorkerBuilder) {
         this.processorWorkerBuilder = processorWorkerBuilder;
-        return processorWorkerBuilder;
+        return this;
     }
 
-    public RPCServerBuilder rpcServerBuilder(RPCServerBuilder rpcServerBuilder) {
+    public ProcessorServerBuilder rpcServerBuilder(RPCServerBuilder rpcServerBuilder) {
         this.rpcServerBuilder = rpcServerBuilder;
-        return rpcServerBuilder;
+        return this;
     }
 
     public IProcessorServer build() {

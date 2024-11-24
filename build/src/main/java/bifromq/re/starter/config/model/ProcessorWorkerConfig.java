@@ -13,7 +13,7 @@ public class ProcessorWorkerConfig {
     private boolean cleanStart;
     private boolean ordered;
     private long sessionExpiryInterval;
-    private String host;
-    private int port;
+    private String brokerHost;
+    private int brokerPort;
     private String clientPrefix;
 }

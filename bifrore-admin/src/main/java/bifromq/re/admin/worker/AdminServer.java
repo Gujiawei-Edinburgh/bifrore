@@ -4,6 +4,7 @@ import bifromq.re.admin.worker.util.AnnotationHelper;
 import io.netty.handler.codec.http.HttpMethod;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServer;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
@@ -20,9 +21,10 @@ class AdminServer implements IAdminServer {
         router = Router.router(builder.vertx);
         port = builder.port;
         builder.handlers.forEach(this::addToRouter);
-        vertx.createHttpServer().listen(builder.port, asyncResult -> {
+        HttpServer server = vertx.createHttpServer();
+        server.requestHandler(router).listen(builder.port, asyncResult -> {
             if (asyncResult.succeeded()) {
-                log.info("bifrore admin worker started on: {}", port);
+                log.info("Bifrore admin worker started on: {}", port);
             } else {
                 log.error("Failed to start HTTP server: {}", asyncResult.cause().getMessage());
             }

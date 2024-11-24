@@ -11,6 +11,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class StandaloneConfig {
+    private boolean bootstrap;
     private int adminServerPort;
     @JsonSetter(nulls = Nulls.SKIP)
     private RPCClientConfig rpcClientConfig = new RPCClientConfig();

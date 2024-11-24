@@ -1,7 +1,10 @@
 package bifromq.re.starter;
 
-import bifromq.re.baserpc.IRPCServer;
-import bifromq.re.baserpc.RPCServerBuilder;
+import bifromq.re.admin.worker.IAdminServer;
+import bifromq.re.admin.worker.handler.AddRuleHandler;
+import bifromq.re.admin.worker.handler.DeleteRuleHandler;
+import bifromq.re.admin.worker.handler.ListRuleHandler;
+import bifromq.re.baserpc.*;
 import bifromq.re.processor.client.IProcessorClient;
 import bifromq.re.processor.server.IProcessorServer;
 import bifromq.re.processor.worker.IProcessorWorker;
@@ -35,14 +38,26 @@ import java.util.concurrent.TimeUnit;
 public class StandaloneStarter extends BaseStarter {
     private ExecutorService ioClientExecutor;
     private ExecutorService ioServerExecutor;
+    private IRPCServer rpcServer;
     private Vertx vertx;
+    private PluginManager pluginManager;
+    private IProcessorClient processorClient;
+    private IRouterClient routerClient;
+    private IProcessorServer processorServer;
+    private IRouterServer routerServer;
+    private IAdminServer adminServer;
 
     @Override
     protected void init(StandaloneConfig config) {
         printConfig(config);
 
-        PluginManager pluginManager = new DefaultPluginManager();
+        pluginManager = new DefaultPluginManager();
+        pluginManager.loadPlugins();
+        pluginManager.startPlugins();
         HazelcastInstance hz = buildHazelcastInstance();
+        IClusterManager clusterManager = IClusterManager.newBuilder()
+                .servers(hz.getSet("servers"))
+                .build();
 
         ioClientExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
                 new ThreadPoolExecutor(config.getRpcClientConfig().getWorkerThreads(),
@@ -64,26 +79,32 @@ public class StandaloneStarter extends BaseStarter {
 
         VertxOptions vertxOptions = new VertxOptions();
         vertxOptions.setEventLoopPoolSize(1)
-                .setWorkerPoolSize(1);
+                .setWorkerPoolSize(2);
         vertx = Vertx.vertx(vertxOptions);
+
+        SslContext clientSslContext = config.getRpcClientConfig().getSslConfig() != null ?
+                buildClientSslContext(config.getRpcClientConfig().getSslConfig()) : null;
+        SslContext serverSslContext = config.getRpcClientConfig().getSslConfig() != null ?
+                buildServerSslContext(config.getRpcServerConfig().getSslConfig()) : null;
 
         RPCServerBuilder rpcServerBuilder = IRPCServer.newBuilder()
                 .host(config.getRpcServerConfig().getHost())
                 .port(config.getRpcServerConfig().getPort())
                 .bossEventLoopGroup(rpcServerBossELG)
                 .workerEventLoopGroup(ioRPCWorkerELG)
-                .executor(ioServerExecutor);
-
-        SslContext clientSslContext = config.getRpcClientConfig().getSslConfig() != null ?
-                buildClientSslContext(config.getRpcClientConfig().getSslConfig()) : null;
-
-        IProcessorClient processorClient = IProcessorClient.newBuilder()
+                .sslContext(serverSslContext)
+                .executor(ioServerExecutor)
+                .clusterManager(clusterManager);
+        RPCClientBuilder rpcClientBuilder = IRPCClient.newBuilder()
                 .executor(ioClientExecutor)
                 .sslContext(clientSslContext)
+                .clusterManager(clusterManager);
+
+        processorClient = IProcessorClient.newBuilder()
+                .rpcClientBuilder(rpcClientBuilder)
                 .build();
-        IRouterClient routerClient = IRouterClient.newBuilder()
-                .executor(ioServerExecutor)
-                .sslContext(clientSslContext)
+        routerClient = IRouterClient.newBuilder()
+                .rpcClientBuilder(rpcClientBuilder)
                 .build();
 
         ProcessorWorkerBuilder processorWorkerBuilder = IProcessorWorker.newBuilder()
@@ -94,22 +115,31 @@ public class StandaloneStarter extends BaseStarter {
                 .cleanStart(config.getProcessorWorkerConfig().isCleanStart())
                 .ordered(config.getProcessorWorkerConfig().isOrdered())
                 .sessionExpiryInterval(config.getProcessorWorkerConfig().getSessionExpiryInterval())
-                .host(config.getProcessorWorkerConfig().getHost())
-                .port(config.getProcessorWorkerConfig().getPort())
+                .host(config.getProcessorWorkerConfig().getBrokerHost())
+                .port(config.getProcessorWorkerConfig().getBrokerPort())
                 .clientPrefix(config.getProcessorWorkerConfig().getClientPrefix())
                 .routerClient(routerClient)
                 .pluginManager(pluginManager);
-        IProcessorServer processorServer = IProcessorServer.newBuilder()
+        processorServer = IProcessorServer.newBuilder()
                 .processorWorkerBuilder(processorWorkerBuilder)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IRouterServer routerServer = IRouterServer.newBuilder()
+        routerServer = IRouterServer.newBuilder()
                 .idMap(hz.getMap("idMap"))
                 .topicFilterMap(hz.getMap("topicFilterMap"))
                 .processorClient(processorClient)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
+
+        adminServer = IAdminServer.newBuilder()
+                .port(config.getAdminServerPort())
+                .vertx(vertx)
+                .addHandler(new AddRuleHandler(routerClient))
+                .addHandler(new DeleteRuleHandler(routerClient))
+                .addHandler(new ListRuleHandler(routerClient))
+                .build();
+        rpcServer = rpcServerBuilder.build();
     }
 
     @Override
@@ -119,10 +149,13 @@ public class StandaloneStarter extends BaseStarter {
 
     public void start() {
         super.start();
+        rpcServer.start();
         log.info("Standalone rule engine started");
     }
 
     public void stop() {
+        rpcServer.shutdown();
+        pluginManager.stopPlugins();
         log.info("Standalone rule engine stopped");
         super.stop();
     }

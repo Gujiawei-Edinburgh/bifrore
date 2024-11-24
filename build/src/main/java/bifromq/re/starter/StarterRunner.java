@@ -29,8 +29,6 @@ public class StarterRunner {
             Runtime.getRuntime().addShutdownHook(shutdownThread);
         } catch (Throwable e) {
             log.error("Caught an exception in thread[{}]", Thread.currentThread().getName(), e);
-            System.out.println(e.getMessage());
-            formatter.printHelp("CMD", cliOptions());
         }
     }
 

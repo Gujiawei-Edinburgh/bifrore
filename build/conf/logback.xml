@@ -45,63 +45,6 @@
         </encoder>
     </appender>
 
-    <appender name="crdtLogFile" class="ch.qos.logback.classic.sift.SiftingAppender">
-        <discriminator>
-            <key>sift_key</key>
-            <defaultValue>default</defaultValue>
-        </discriminator>
-        <sift>
-            <appender name="${sift_key}" class="ch.qos.logback.core.FileAppender">
-                <file>${logDir}/crdt/${sift_key}.log</file>
-                <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                    <fileNamePattern>${logDir}/crdt/${sift_key}.%d{yyyy-MM-dd_HH}.log</fileNamePattern>
-                    <maxHistory>7</maxHistory>
-                </rollingPolicy>
-                <encoder>
-                    <pattern>${crdtLogPattern}</pattern>
-                </encoder>
-            </appender>
-        </sift>
-    </appender>
-
-    <appender name="raftLogFile" class="ch.qos.logback.classic.sift.SiftingAppender">
-        <discriminator>
-            <key>sift_key</key>
-            <defaultValue>default</defaultValue>
-        </discriminator>
-        <sift>
-            <appender name="${sift_key}" class="ch.qos.logback.core.FileAppender">
-                <file>${logDir}/raft/${sift_key}.log</file>
-                <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                    <fileNamePattern>${logDir}/raft/${sift_key}.%d{yyyy-MM-dd_HH}.log</fileNamePattern>
-                    <maxHistory>7</maxHistory>
-                </rollingPolicy>
-                <encoder>
-                    <pattern>${raftLogPattern}</pattern>
-                </encoder>
-            </appender>
-        </sift>
-    </appender>
-
-    <appender name="balancerLogFile" class="ch.qos.logback.classic.sift.SiftingAppender">
-        <discriminator>
-            <key>sift_key</key>
-            <defaultValue>default</defaultValue>
-        </discriminator>
-        <sift>
-            <appender name="${sift_key}" class="ch.qos.logback.core.FileAppender">
-                <file>${logDir}/balancer/${sift_key}.log</file>
-                <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                    <fileNamePattern>${logDir}/balancer/${sift_key}.%d{yyyy-MM-dd_HH}.log</fileNamePattern>
-                    <maxHistory>7</maxHistory>
-                </rollingPolicy>
-                <encoder>
-                    <pattern>${balancerLogPattern}</pattern>
-                </encoder>
-            </appender>
-        </sift>
-    </appender>
-
     <appender name="traceLogFile" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${logDir}/trace.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
@@ -193,19 +136,7 @@
         <appender-ref ref="errorLogFile"/>
     </logger>
 
-    <logger name="com.baidu.bifromq.basecrdt" level="INFO" additivity="false">
-        <appender-ref ref="crdtLogFile"/>
-    </logger>
-
-    <logger name="com.baidu.bifromq.basekv.raft" level="INFO" additivity="false">
-        <appender-ref ref="raftLogFile"/>
-    </logger>
-
-    <logger name="balancer.logger" level="INFO" additivity="false">
-        <appender-ref ref="balancerLogFile"/>
-    </logger>
-
-    <!--FOLLOWING LOGGER IS ONLY FOR DEMO PURPOSE-->
+    <logger name="com.hazelcast.system.logo" level="OFF"/>
     <logger name="DemoEventLogger" level="INFO" additivity="false">
         <appender-ref ref="eventLogFile"/>
     </logger>

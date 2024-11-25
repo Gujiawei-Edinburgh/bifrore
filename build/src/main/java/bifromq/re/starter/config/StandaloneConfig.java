@@ -1,5 +1,6 @@
 package bifromq.re.starter.config;
 
+import bifromq.re.starter.config.model.ClusterConfig;
 import bifromq.re.starter.config.model.ProcessorWorkerConfig;
 import bifromq.re.starter.config.model.RPCClientConfig;
 import bifromq.re.starter.config.model.RPCServerConfig;
@@ -11,7 +12,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class StandaloneConfig {
-    private boolean bootstrap;
+    private ClusterConfig clusterConfig;
     private int adminServerPort;
     @JsonSetter(nulls = Nulls.SKIP)
     private RPCClientConfig rpcClientConfig = new RPCClientConfig();

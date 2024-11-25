@@ -12,8 +12,14 @@ import bifromq.re.processor.worker.ProcessorWorkerBuilder;
 import bifromq.re.router.client.IRouterClient;
 import bifromq.re.router.server.IRouterServer;
 import bifromq.re.starter.config.StandaloneConfig;
+import bifromq.re.starter.config.model.ClusterConfig;
 import bifromq.re.starter.utils.ConfigUtil;
 import bifromq.re.starter.utils.ResourceUtil;
+import com.hazelcast.cluster.MembershipEvent;
+import com.hazelcast.cluster.MembershipListener;
+import com.hazelcast.config.Config;
+import com.hazelcast.config.JoinConfig;
+import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import io.micrometer.core.instrument.Metrics;
@@ -43,6 +49,7 @@ public class StandaloneStarter extends BaseStarter {
     private PluginManager pluginManager;
     private IProcessorClient processorClient;
     private IRouterClient routerClient;
+    private IProcessorWorker processorWorker;
     private IProcessorServer processorServer;
     private IRouterServer routerServer;
     private IAdminServer adminServer;
@@ -54,7 +61,18 @@ public class StandaloneStarter extends BaseStarter {
         pluginManager = new DefaultPluginManager();
         pluginManager.loadPlugins();
         pluginManager.startPlugins();
-        HazelcastInstance hz = buildHazelcastInstance();
+        HazelcastInstance hz = buildHazelcastInstance(config.getClusterConfig());
+        hz.getCluster().addMembershipListener(new MembershipListener() {
+            @Override
+            public void memberAdded(MembershipEvent membershipEvent) {
+                log.info("New member joined: {}", membershipEvent.getMember());
+            }
+
+            @Override
+            public void memberRemoved(MembershipEvent membershipEvent) {
+                log.info("Member left: {}", membershipEvent.getMember());
+            }
+        });
         IClusterManager clusterManager = IClusterManager.newBuilder()
                 .servers(hz.getSet("servers"))
                 .build();
@@ -120,8 +138,9 @@ public class StandaloneStarter extends BaseStarter {
                 .clientPrefix(config.getProcessorWorkerConfig().getClientPrefix())
                 .routerClient(routerClient)
                 .pluginManager(pluginManager);
+        processorWorker = processorWorkerBuilder.build();
         processorServer = IProcessorServer.newBuilder()
-                .processorWorkerBuilder(processorWorkerBuilder)
+                .processorWorker(processorWorker)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
@@ -150,6 +169,7 @@ public class StandaloneStarter extends BaseStarter {
     public void start() {
         super.start();
         rpcServer.start();
+        processorWorker.start();
         log.info("Standalone rule engine started");
     }
 
@@ -166,8 +186,18 @@ public class StandaloneStarter extends BaseStarter {
         log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
     }
 
-    private HazelcastInstance buildHazelcastInstance() {
-        return Hazelcast.newHazelcastInstance();
+    private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) {
+        Config config = new Config();
+        config.setClusterName(clusterConfig.getClusterName());
+        NetworkConfig networkConfig = config.getNetworkConfig();
+        networkConfig.setPort(clusterConfig.getPort())
+                .setPortAutoIncrement(true);
+        JoinConfig joinConfig = networkConfig.getJoin();
+        joinConfig.getMulticastConfig().setEnabled(false);
+        joinConfig.getTcpIpConfig()
+                .setEnabled(true)
+                .addMember(clusterConfig.getMemberAddress());
+        return Hazelcast.newHazelcastInstance(config);
     }
 
     public static void main(String[] args) {

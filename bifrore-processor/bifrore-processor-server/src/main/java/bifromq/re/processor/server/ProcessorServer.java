@@ -4,7 +4,7 @@ package bifromq.re.processor.server;
 class ProcessorServer implements IProcessorServer {
 
     ProcessorServer(ProcessorServerBuilder builder) {
-        ProcessorService processorService = new ProcessorService(builder.processorWorkerBuilder.build());
+        ProcessorService processorService = new ProcessorService(builder.processorWorker);
         builder.rpcServerBuilder.addService(processorService.bindService());
     }
 }

@@ -1,14 +1,15 @@
 package bifromq.re.processor.server;
 
 import bifromq.re.baserpc.RPCServerBuilder;
+import bifromq.re.processor.worker.IProcessorWorker;
 import bifromq.re.processor.worker.ProcessorWorkerBuilder;
 
 public class ProcessorServerBuilder {
-    ProcessorWorkerBuilder processorWorkerBuilder;
+    IProcessorWorker processorWorker;
     RPCServerBuilder rpcServerBuilder;
 
-    public ProcessorServerBuilder processorWorkerBuilder(ProcessorWorkerBuilder processorWorkerBuilder) {
-        this.processorWorkerBuilder = processorWorkerBuilder;
+    public ProcessorServerBuilder processorWorker(IProcessorWorker processorWorker) {
+        this.processorWorker = processorWorker;
         return this;
     }
 

@@ -1,4 +1,8 @@
-bootstrap: true
+clusterConfig:
+  bootstrap: true
+  clusterName: bifrore
+  port: 5701
+  memberAddress: 127.0.0.1
 adminServerPort: 80
 rpcServerConfig:
   port: 50051

@@ -31,7 +31,6 @@
         <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-core</artifactId>
-            <version>1.53.0</version>
         </dependency>
         <dependency>
             <groupId>io.grpc</groupId>
@@ -60,12 +59,10 @@
         <dependency>
             <groupId>com.hazelcast</groupId>
             <artifactId>hazelcast</artifactId>
-            <version>5.5.0</version>
         </dependency>
         <dependency>
             <groupId>io.reactivex.rxjava3</groupId>
             <artifactId>rxjava</artifactId>
-            <version>3.1.5</version>
         </dependency>
     </dependencies>
 

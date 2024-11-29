@@ -50,7 +50,7 @@ class AdminServer implements IAdminServer {
             }else if (method.equals(HttpMethod.PATCH)) {
                 router.patch(path.value()).handler(handler);
             }else {
-                log.warn("unsupported HTTP method: {}", method);
+                log.warn("Unsupported HTTP method: {}", method);
             }
         }else {
             log.warn("No http method specified for http request handler: {}", handler.getClass().getName());

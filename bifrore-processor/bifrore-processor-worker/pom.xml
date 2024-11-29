@@ -15,12 +15,10 @@
         <dependency>
             <groupId>io.reactivex.rxjava3</groupId>
             <artifactId>rxjava</artifactId>
-            <version>3.1.5</version>
         </dependency>
         <dependency>
             <groupId>com.hivemq</groupId>
             <artifactId>hivemq-mqtt-client</artifactId>
-            <version>1.3.0</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -33,22 +31,18 @@
         <dependency>
             <groupId>bifromq.re</groupId>
             <artifactId>bifrore-common-parser</artifactId>
-            <version>1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>bifromq.re</groupId>
             <artifactId>bifrore-destination-plugin</artifactId>
-            <version>1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>bifromq.re</groupId>
             <artifactId>bifrore-router-client</artifactId>
-            <version>1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
-            <version>3.1.5</version>
         </dependency>
     </dependencies>
 

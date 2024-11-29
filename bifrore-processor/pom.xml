@@ -17,7 +17,7 @@
         <module>bifrore-processor-worker</module>
         <module>bifrore-processor-rpc-definition</module>
         <module>bifrore-processor-server</module>
-        <module>bifromq-processor-client</module>
+        <module>bifrore-processor-client</module>
     </modules>
 
 </project>

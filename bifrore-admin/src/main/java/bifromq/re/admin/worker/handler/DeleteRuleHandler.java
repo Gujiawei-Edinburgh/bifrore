@@ -1,6 +1,5 @@
 package bifromq.re.admin.worker.handler;
 
-import bifromq.re.admin.worker.http.DeleteRuleHttpResponse;
 import bifromq.re.router.client.IRouterClient;
 import bifromq.re.router.rpc.proto.DeleteRuleRequest;
 import bifromq.re.router.rpc.proto.DeleteRuleResponse;
@@ -11,7 +10,6 @@ import lombok.extern.slf4j.Slf4j;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.Path;
 import java.util.List;
-import java.util.Optional;
 
 @Path("/rule/delete")
 @Slf4j
@@ -42,17 +40,9 @@ public class DeleteRuleHandler extends AbstractHandler {
                                 .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                 .end("Delete rules failed, error: " + v.getFailReason());
                     }else {
-                        DeleteRuleHttpResponse response = new DeleteRuleHttpResponse(true);
-                        Optional<String> jsonResponse = buildJsonSting(response);
-                        if (jsonResponse.isPresent()) {
-                            ctx.response().
-                                    setStatusCode(HttpResponseStatus.OK.code())
-                                    .end(jsonResponse.get());
-                        }else {
-                            ctx.response()
-                                    .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
-                                    .end("Delete rule failed, error: JsonProcessingException");
-                        }
+                        ctx.response().
+                                setStatusCode(HttpResponseStatus.OK.code())
+                                .end("Delete rules ok");
                     }
                 });
     }

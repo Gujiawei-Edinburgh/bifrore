@@ -9,9 +9,8 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.ws.rs.POST;
+import javax.ws.rs.GET;
 import javax.ws.rs.Path;
-import java.util.Optional;
 
 @Path("/list/rule")
 @Slf4j
@@ -21,7 +20,7 @@ public class ListRuleHandler extends AbstractHandler {
         super(routerClient);
     }
 
-    @POST
+    @GET
     @Override
     public void handle(RoutingContext ctx) {
         routerClient.listRule(ListRuleRequest.newBuilder()
@@ -38,16 +37,9 @@ public class ListRuleHandler extends AbstractHandler {
                                 .end("List rule failed, error: " + v.getFailReason());
                     }else {
                         ListRuleHttpResponse response = new ListRuleHttpResponse(v.getRulesList());
-                        Optional<String> jsonResponse = buildJsonSting(response);
-                        if (jsonResponse.isPresent()) {
-                            ctx.response().
-                                    setStatusCode(HttpResponseStatus.OK.code())
-                                    .end(jsonResponse.get());
-                        }else {
-                            ctx.response()
-                                    .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
-                                    .end("List rule failed, error: JsonProcessingException");
-                        }
+                        ctx.response().
+                                setStatusCode(HttpResponseStatus.OK.code())
+                                .end(response.toString());
                     }
                 });
     }

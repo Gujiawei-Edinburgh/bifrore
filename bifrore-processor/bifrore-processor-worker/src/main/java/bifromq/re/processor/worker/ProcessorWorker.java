@@ -126,7 +126,7 @@ class ProcessorWorker implements IProcessorWorker {
 
     private void initProcessorWorker() {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        routerClient.listTopicFilter().thenAccept(topicFilters -> {
+        routerClient.listTopicFilter().thenAccept(listTopicFilterResponse -> {
             for (int idx = 0; idx < clientNum; idx++) {
                 String identifier = clientPrefix + idx;
                 Mqtt5AsyncClient asyncClient = Mqtt5Client.builder()
@@ -150,8 +150,9 @@ class ProcessorWorker implements IProcessorWorker {
                                 mqtt5ConnAck.getReasonCode());
                         future.completeExceptionally(new RuntimeException(mqtt5ConnAck.getReasonCode().toString()));
                     }else {
+                        clients.add(asyncClient);
                         List<CompletableFuture<Void>> subscribeFutures = new ArrayList<>();
-                        topicFilters.getTopicFiltersList().forEach(topicFilter -> {
+                        listTopicFilterResponse.getTopicFiltersList().forEach(topicFilter -> {
                             CompletableFuture<Void> subscribeFuture = new CompletableFuture<>();
                             subscribeFutures.add(subscribeFuture);
                             Mqtt5Subscribe mqtt5Subscribe = Mqtt5Subscribe.builder()
@@ -165,9 +166,9 @@ class ProcessorWorker implements IProcessorWorker {
                                             subscribeFuture.completeExceptionally(
                                                     new RuntimeException("Init client during subscription", error)
                                             );
+                                            clients.remove(asyncClient);
                                         }else {
                                             subscribeFuture.complete(null);
-                                            clients.add(asyncClient);
                                         }
                                     }));
                         });

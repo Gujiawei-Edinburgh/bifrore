@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -118,6 +119,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                                     }
                                 }
                             }
+                            builder.setRuleId(UUID.randomUUID().toString());
                             builder.setCode(AddRuleResponse.Code.OK);
                         }catch (IOException exception) {
                             builder.setCode(AddRuleResponse.Code.ERROR);

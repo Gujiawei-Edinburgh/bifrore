@@ -183,7 +183,7 @@ public class StandaloneStarter extends BaseStarter {
     private void printConfig(StandaloneConfig config) {
         List<String> arguments = ManagementFactory.getRuntimeMXBean().getInputArguments();
         log.info("JVM arguments: \n  {}", String.join("\n  ", arguments));
-        log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
+        // log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
     }
 
     private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) {

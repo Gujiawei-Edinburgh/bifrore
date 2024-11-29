@@ -23,13 +23,28 @@
     <properties>
         <javax.annotation.api.version>1.3.2</javax.annotation.api.version>
         <!-- third party version-->
-        <vertx.web.version>4.5.8</vertx.web.version>
+        <vertx.web.version>4.4.6</vertx.web.version>
         <lombok.version>1.18.22</lombok.version>
         <slf4j.api.version>1.7.36</slf4j.api.version>
         <protoc.version>3.21.12</protoc.version>
         <grpc.version>1.53.0</grpc.version>
         <jackson.version>2.15.2</jackson.version>
         <netty.version>4.1.94.Final</netty.version>
+        <javax.ws.rs-api.version>2.1.1</javax.ws.rs-api.version>
+        <jackson-databind.version>2.17.2</jackson-databind.version>
+        <jackson-datatype-protobuf.version>0.9.13</jackson-datatype-protobuf.version>
+        <trino-parser.version>411</trino-parser.version>
+        <mvel2.version>2.4.12.Final</mvel2.version>
+        <gson.version>2.8.8</gson.version>
+        <pf4j.version>3.10.0</pf4j.version>
+        <rxjava.version>3.1.5</rxjava.version>
+        <hivemq-mqtt-client.version>1.3.0</hivemq-mqtt-client.version>
+        <caffeine.version>3.1.5</caffeine.version>
+        <hazelcast.version>5.5.0</hazelcast.version>
+        <logback.version>1.2.13</logback.version>
+        <jackson-dataformat-yaml.version>2.15.2</jackson-dataformat-yaml.version>
+        <commons-cli.version>1.5.0</commons-cli.version>
+        <micrometer-core.version>1.12.2</micrometer-core.version>
 
         <!-- maven.plugin.version-->
         <maven.compiler.plugin.version>3.10.1</maven.compiler.plugin.version>
@@ -43,42 +58,70 @@
 
         <!-- test dependencies -->
         <testng.version>7.9.0</testng.version>
+        <mockito-core.version>4.6.0</mockito-core.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <!--bifreRE base-->
+            <!--bifrore-modules-->
             <dependency>
                 <groupId>bifromq.re</groupId>
-                <artifactId>bifrore-base</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <!--bifreRE admin-->
-            <dependency>
-                <groupId>bifromq.re</groupId>
-                <artifactId>bifrore-admin-worker</artifactId>
+                <artifactId>bifrore-admin</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>bifromq.re</groupId>
-                <artifactId>bifrore-admin-store</artifactId>
+                <artifactId>bifrore-common-parser</artifactId>
                 <version>${project.version}</version>
             </dependency>
-            <!--bifreRE common type-->
             <dependency>
                 <groupId>bifromq.re</groupId>
                 <artifactId>bifrore-common-type</artifactId>
                 <version>${project.version}</version>
             </dependency>
-            <!--bifreRE processor-->
             <dependency>
                 <groupId>bifromq.re</groupId>
-                <artifactId>bifrore-processor-destination</artifactId>
+                <artifactId>bifrore-destination-plugin</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-processor-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-processor-rpc-definition</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-processor-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>bifromq.re</groupId>
                 <artifactId>bifrore-processor-worker</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-router-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-router-rpc-definition</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-router-server</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifromq.re</groupId>
+                <artifactId>bifrore-rpc</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <!--third party-->
@@ -87,6 +130,87 @@
                 <artifactId>lombok</artifactId>
                 <version>${lombok.version}</version>
             </dependency>
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-web</artifactId>
+                <version>${vertx.web.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>javax.ws.rs</groupId>
+                <artifactId>javax.ws.rs-api</artifactId>
+                <version>${javax.ws.rs-api.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson-databind.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.hubspot.jackson</groupId>
+                <artifactId>jackson-datatype-protobuf</artifactId>
+                <version>${jackson-datatype-protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.trino</groupId>
+                <artifactId>trino-parser</artifactId>
+                <version>${trino-parser.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mvel</groupId>
+                <artifactId>mvel2</artifactId>
+                <version>${mvel2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>${gson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.pf4j</groupId>
+                <artifactId>pf4j</artifactId>
+                <version>${pf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.reactivex.rxjava3</groupId>
+                <artifactId>rxjava</artifactId>
+                <version>${rxjava.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.hivemq</groupId>
+                <artifactId>hivemq-mqtt-client</artifactId>
+                <version>${hivemq-mqtt-client.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.hazelcast</groupId>
+                <artifactId>hazelcast</artifactId>
+                <version>${hazelcast.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-classic</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.dataformat</groupId>
+                <artifactId>jackson-dataformat-yaml</artifactId>
+                <version>${jackson-dataformat-yaml.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>commons-cli</groupId>
+                <artifactId>commons-cli</artifactId>
+                <version>${commons-cli.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+                <version>${micrometer-core.version}</version>
+            </dependency>
+
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
@@ -105,6 +229,7 @@
             <dependency>
                 <groupId>io.grpc</groupId>
                 <artifactId>grpc-core</artifactId>
+                <version>${grpc.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.grpc</groupId>
@@ -132,6 +257,11 @@
                 <artifactId>testng</artifactId>
                 <version>${testng.version}</version>
                 <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-core</artifactId>
+                <version>${mockito-core.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

@@ -16,6 +16,6 @@ processorWorkerConfig:
   ordered: false
   sessionExpiryInterval: 3000
   brokerHost: 127.0.0.1
-  brokerPort: 8003
+  brokerPort: 1883
   clientPrefix: bifrore
 

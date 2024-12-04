@@ -10,6 +10,7 @@ import bifromq.re.router.rpc.proto.MatchRequest;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.protobuf.ByteString;
+import com.hivemq.client.mqtt.MqttClientTransportConfig;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5Client;
 import com.hivemq.client.mqtt.mqtt5.message.auth.Mqtt5SimpleAuth;
@@ -23,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 class ProcessorWorker implements IProcessorWorker {
@@ -50,7 +52,7 @@ class ProcessorWorker implements IProcessorWorker {
         sessionExpiryInterval = builder.sessionExpiryInterval;
         host = builder.host;
         port = builder.port;
-        clientPrefix = builder.clientPrefix;
+        clientPrefix = builder.clientPrefix + "/" + builder.nodeId;
         producerManager = new ProducerManager(builder.pluginManager);
         routerClient = builder.routerClient;
         matchedRules = Caffeine.newBuilder()
@@ -67,6 +69,9 @@ class ProcessorWorker implements IProcessorWorker {
     @Override
     public CompletableFuture<Void> sub(String topicFilter) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
+        if (clients.isEmpty()) {
+            return handleEmptyClientList();
+        }
         clients.forEach(asyncClient -> {
             CompletableFuture<Void> future = new CompletableFuture<>();
             futures.add(future);
@@ -94,6 +99,9 @@ class ProcessorWorker implements IProcessorWorker {
     @Override
     public CompletableFuture<Void> unsub(String topicFilter) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
+        if (clients.isEmpty()) {
+            return handleEmptyClientList();
+        }
         clients.forEach(asyncClient -> {
             CompletableFuture<Void> future = new CompletableFuture<>();
             futures.add(future);
@@ -128,11 +136,15 @@ class ProcessorWorker implements IProcessorWorker {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         routerClient.listTopicFilter().thenAccept(listTopicFilterResponse -> {
             for (int idx = 0; idx < clientNum; idx++) {
-                String identifier = clientPrefix + idx;
+                String identifier = clientPrefix + "/" + idx;
                 Mqtt5AsyncClient asyncClient = Mqtt5Client.builder()
                         .identifier(identifier)
                         .serverHost(host)
                         .serverPort(port)
+                        .transportConfig(MqttClientTransportConfig.builder()
+                                .mqttConnectTimeout(10, TimeUnit.SECONDS)
+                                .socketConnectTimeout(10, TimeUnit.SECONDS)
+                                .build())
                         .buildAsync();
                 CompletableFuture<Void> future = new CompletableFuture<>();
                 futures.add(future);
@@ -144,12 +156,15 @@ class ProcessorWorker implements IProcessorWorker {
                         .cleanStart(cleanStart)
                         .sessionExpiryInterval(sessionExpiryInterval)
                         .build();
-                asyncClient.connect(mqtt5Connect).thenAccept(mqtt5ConnAck -> {
-                    if (mqtt5ConnAck.getReasonCode() != Mqtt5ConnAckReasonCode.SUCCESS) {
+                asyncClient.connect(mqtt5Connect).whenComplete((mqtt5ConnAck, conErr) -> {
+                    if (conErr != null) {
+                        log.error("ClientId: {} connect to broker failed, ", identifier, conErr);
+                        future.completeExceptionally(conErr);
+                    } else if (mqtt5ConnAck.getReasonCode() != Mqtt5ConnAckReasonCode.SUCCESS) {
                         log.error("ClientId: {} connect to broker failed: {}", identifier,
                                 mqtt5ConnAck.getReasonCode());
                         future.completeExceptionally(new RuntimeException(mqtt5ConnAck.getReasonCode().toString()));
-                    }else {
+                    } else {
                         clients.add(asyncClient);
                         List<CompletableFuture<Void>> subscribeFutures = new ArrayList<>();
                         listTopicFilterResponse.getTopicFiltersList().forEach(topicFilter -> {
@@ -183,15 +198,15 @@ class ProcessorWorker implements IProcessorWorker {
                     }
                 });
             }
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .whenComplete((v,e) -> {
+                        if (e != null) {
+                            log.error("Failed to init processor worker: ", e);
+                        }else {
+                            log.info("Init processor worker ok, clientNum: {}", clientNum);
+                        }
+                    });
         });
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                .whenComplete((v,e) -> {
-                    if (e != null) {
-                        log.error("Failed to init processor worker: ", e);
-                    }else {
-                        log.info("Init processor worker ok, clientNum: {}", clientNum);
-                    }
-                });
     }
 
     private void handlePublishedMsg(Mqtt5Publish published) {
@@ -242,5 +257,11 @@ class ProcessorWorker implements IProcessorWorker {
 
     private String convertToSharedSubscription(String topicFilter) {
         return "$share/" + groupName + "/" + topicFilter;
+    }
+
+    private CompletableFuture<Void> handleEmptyClientList() {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        future.completeExceptionally(new RuntimeException("No available client found"));
+        return future;
     }
 }

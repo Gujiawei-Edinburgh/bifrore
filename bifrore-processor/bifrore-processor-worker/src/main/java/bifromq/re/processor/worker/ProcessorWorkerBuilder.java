@@ -4,6 +4,7 @@ import bifromq.re.router.client.IRouterClient;
 import org.pf4j.PluginManager;
 
 public class ProcessorWorkerBuilder {
+    String nodeId;
     int clientNum;
     String groupName;
     String userName;
@@ -16,6 +17,11 @@ public class ProcessorWorkerBuilder {
     String clientPrefix;
     PluginManager pluginManager;
     IRouterClient routerClient;
+
+    public ProcessorWorkerBuilder nodeId(String nodeId) {
+        this.nodeId = nodeId;
+        return this;
+    }
 
     public ProcessorWorkerBuilder clientNum(int clientNum) {
         this.clientNum = clientNum;

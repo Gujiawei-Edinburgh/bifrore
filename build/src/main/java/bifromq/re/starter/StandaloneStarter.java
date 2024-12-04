@@ -35,6 +35,7 @@ import org.pf4j.PluginManager;
 
 import java.lang.management.ManagementFactory;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -56,6 +57,7 @@ public class StandaloneStarter extends BaseStarter {
 
     @Override
     protected void init(StandaloneConfig config) {
+        String nodeId = UUID.randomUUID().toString();
         printConfig(config);
 
         pluginManager = new DefaultPluginManager();
@@ -106,6 +108,7 @@ public class StandaloneStarter extends BaseStarter {
                 buildServerSslContext(config.getRpcServerConfig().getSslConfig()) : null;
 
         RPCServerBuilder rpcServerBuilder = IRPCServer.newBuilder()
+                .id(nodeId)
                 .host(config.getRpcServerConfig().getHost())
                 .port(config.getRpcServerConfig().getPort())
                 .bossEventLoopGroup(rpcServerBossELG)
@@ -126,6 +129,7 @@ public class StandaloneStarter extends BaseStarter {
                 .build();
 
         ProcessorWorkerBuilder processorWorkerBuilder = IProcessorWorker.newBuilder()
+                .nodeId(nodeId)
                 .clientNum(config.getProcessorWorkerConfig().getClientNum())
                 .groupName(config.getProcessorWorkerConfig().getGroupName())
                 .userName(config.getProcessorWorkerConfig().getUserName())
@@ -183,7 +187,7 @@ public class StandaloneStarter extends BaseStarter {
     private void printConfig(StandaloneConfig config) {
         List<String> arguments = ManagementFactory.getRuntimeMXBean().getInputArguments();
         log.info("JVM arguments: \n  {}", String.join("\n  ", arguments));
-        // log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
+        log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
     }
 
     private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) {

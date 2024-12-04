@@ -5,12 +5,6 @@
     <formats>
         <format>tar.gz</format>
     </formats>
-    <files>
-        <file>
-            <source>../build-plugin-demo/target/demo-plugin-${project.parent.version}.jar</source>
-            <outputDirectory>plugins</outputDirectory>
-        </file>
-    </files>
     <fileSets>
         <fileSet>
             <lineEnding>unix</lineEnding>

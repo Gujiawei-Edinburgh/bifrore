@@ -9,13 +9,12 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.Executor;
 
 
 @Slf4j
 public final class RPCServerBuilder {
-    String id = UUID.randomUUID().toString() + "/" + hashCode();
+    String id;
     String host;
     int port = 0;
     EventLoopGroup bossEventLoopGroup;

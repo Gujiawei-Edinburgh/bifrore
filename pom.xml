@@ -42,7 +42,7 @@
         <caffeine.version>3.1.5</caffeine.version>
         <hazelcast.version>5.5.0</hazelcast.version>
         <logback.version>1.2.13</logback.version>
-        <jackson-dataformat-yaml.version>2.15.2</jackson-dataformat-yaml.version>
+        <jackson-dataformat-yaml.version>2.17.2</jackson-dataformat-yaml.version>
         <commons-cli.version>1.5.0</commons-cli.version>
         <micrometer-core.version>1.12.2</micrometer-core.version>
 
@@ -50,6 +50,7 @@
         <maven.compiler.plugin.version>3.10.1</maven.compiler.plugin.version>
         <os.plugin.version>1.6.2</os.plugin.version>
         <protobuf.plugin.version>0.6.1</protobuf.plugin.version>
+        <maven.assembly.plugin.version>3.4.1</maven.assembly.plugin.version>
 
         <!-- build properties -->
         <java.source.version>17</java.source.version>
@@ -326,6 +327,11 @@
                             </goals>
                         </execution>
                     </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <version>${maven.assembly.plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

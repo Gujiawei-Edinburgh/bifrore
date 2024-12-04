@@ -1,4 +1,5 @@
 #! /bin/bash
+# fork from BifroMQ
 
 if [ $# -lt 4 ]; then
   echo "USAGE: $0 -c classname -f filename [-fg]"
@@ -31,6 +32,7 @@ BASE_DIR=$(
   pwd
 )/..
 
+BIN_DIR="$BASE_DIR/bin"
 CONF_DIR="$BASE_DIR/conf"
 CONF_FILE="$CONF_DIR/$FILE_NAME"
 PLUGIN_DIR="$BASE_DIR/plugins"
@@ -38,6 +40,7 @@ LOG_CONF_FILE="$CONF_DIR/logback.xml"
 LIB_DIR="$BASE_DIR/lib"
 CLASSPATH=$(echo "$LIB_DIR/*")
 
+# Log directory to use
 if [ "x$LOG_DIR" = "x" ]; then
   LOG_DIR="$BASE_DIR/logs"
 fi
@@ -46,14 +49,24 @@ mkdir -p "$LOG_DIR"
 if [ "x$DATA_DIR" = "x" ]; then
   DATA_DIR="$BASE_DIR/data"
 fi
-mkdir -p "$DATA_DIR"
 
-if [ -z ${BIND_ADDR} ]; then
-  BIND_ADDR=$(ifconfig -a | grep inet | grep -v 127.0.0.1 | grep -v inet6 | awk '{print $2}' | tr -d "addr:" | head -1)
-fi
+PID_FILE="$BIN_DIR/pid"
 
 pid() {
-  echo "$(ps -ef | grep $NAME | grep java | grep -v grep | awk '{print $2}')"
+  if [ -f "$PID_FILE" ]; then
+    cat "$PID_FILE"
+  else
+    echo ""
+  fi
+}
+
+is_pid_running() {
+  local pid=$1
+  if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 total_memory() {
@@ -73,11 +86,13 @@ memory_in_mb() {
   echo $(($1 / 1024 / 1024))
 }
 
-if [ -n "$(pid)" ]; then
-  echo "$NAME already started: $(pid)"
-  exit 1
+existing_pid=$(pid)
+if is_pid_running "$existing_pid"; then
+  echo "$NAME is already running with PID $existing_pid"
+  exit 0
 fi
 
+# get java version
 if [ -z "$JAVA_HOME" ]; then
   JAVA="java"
 else
@@ -111,10 +126,6 @@ if [ -z "$JVM_PERF_OPTS" ]; then
   JVM_PERF_OPTS="-server -XX:MaxInlineLevel=15 -Djava.awt.headless=true"
 fi
 
-function evalOpts() {
-   EVAL_JVM_GC_OPTS=("$@")
-}
-
 # GC options
 if [ -z "$JVM_GC_OPTS" ]; then
   JVM_GC_OPTS="-XX:+UnlockExperimentalVMOptions \
@@ -123,47 +134,47 @@ if [ -z "$JVM_GC_OPTS" ]; then
   -XX:ZAllocationSpikeTolerance=5 \
   -Xlog:async \
   -Xlog:gc:file='${LOG_DIR}/gc-%t.log:time,tid,tags:filecount=5,filesize=50m' \
+  -XX:+CrashOnOutOfMemoryError \
   -XX:+HeapDumpOnOutOfMemoryError \
   -XX:HeapDumpPath='${LOG_DIR}' \
 "
 fi
 
 eval JVM_GC=("$JVM_GC_OPTS")
+# Memory options
 if [ -z "$JVM_HEAP_OPTS" ]; then
-  MEMORY_FRACTION=70
-  HEAP_MEMORY=$(($MEMORY /100 * $MEMORY_FRACTION))
+  MEMORY_FRACTION=70 # Percentage of total memory to use
+  HEAP_MEMORY=$(($MEMORY / 100 * $MEMORY_FRACTION))
   MIN_HEAP_MEMORY=$(($HEAP_MEMORY / 2))
 
-  MAX_DIRECT_MEMORY_FRACTION=20
-  MAX_DIRECT_MEMORY=$(($MEMORY /100 * $MAX_DIRECT_MEMORY_FRACTION))
+  # Calculate max direct memory based on total memory
+  MAX_DIRECT_MEMORY_FRACTION=20 # Percentage of total memory to use for max direct memory
+  MAX_DIRECT_MEMORY=$(($MEMORY / 100 * $MAX_DIRECT_MEMORY_FRACTION))
 
   META_SPACE_MEMORY=128m
   MAX_META_SPACE_MEMORY=500m
 
+  # Set heap options
   JVM_HEAP_OPTS="-Xms$(memory_in_mb ${MIN_HEAP_MEMORY})m -Xmx$(memory_in_mb ${HEAP_MEMORY})m -XX:MetaspaceSize=${META_SPACE_MEMORY} -XX:MaxMetaspaceSize=${MAX_META_SPACE_MEMORY} -XX:MaxDirectMemorySize=${MAX_DIRECT_MEMORY}"
 fi
 
-if [ -z "$EXTRA_JVM_OPTS" ]; then
-  EXTRA_JVM_OPTS=""
-fi
+EXTRA_JVM_OPTS="$EXTRA_JVM_OPTS -Dio.netty.tryReflectionSetAccessible=true -Dio.netty.allocator.cacheTrimIntervalMillis=5000 --add-opens java.base/java.nio=ALL-UNNAMED"
 
-if [ "x$JVM_DEBUG" != "x" ]; then
-
+# Set Debug options if enabled
+if [ "x$JVM_DEBUG" = "xtrue" ]; then
   DEFAULT_JAVA_DEBUG_PORT="8008"
-
   if [ -z "$JAVA_DEBUG_PORT" ]; then
     JAVA_DEBUG_PORT="$DEFAULT_JAVA_DEBUG_PORT"
   fi
-
   DEFAULT_JAVA_DEBUG_OPTS="-Djava.net.preferIPv4Stack=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=${DEBUG_SUSPEND_FLAG:-n},address=*:$JAVA_DEBUG_PORT"
   if [ -z "$JAVA_DEBUG_OPTS" ]; then
     JAVA_DEBUG_OPTS="$DEFAULT_JAVA_DEBUG_OPTS"
   fi
-
   echo "Enabling Java debug options: $JAVA_DEBUG_OPTS"
   EXTRA_JVM_OPTS="$JAVA_DEBUG_OPTS $EXTRA_JVM_OPTS"
 fi
 
+# Enable core dump generation
 ulimit -c unlimited
 
 if [ "x$FOREGROUND_MODE" = "xtrue" ]; then
@@ -172,7 +183,6 @@ if [ "x$FOREGROUND_MODE" = "xtrue" ]; then
     -DLOG_DIR="$LOG_DIR" \
     -DCONF_DIR="$CONF_DIR" \
     -DDATA_DIR="$DATA_DIR" \
-    -DBIND_ADDR="$BIND_ADDR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \
     -Dpf4j.pluginsDir="$PLUGIN_DIR" \
     $NAME -c "$CONF_FILE"
@@ -182,11 +192,10 @@ else
     -DLOG_DIR="$LOG_DIR" \
     -DCONF_DIR="$CONF_DIR" \
     -DDATA_DIR="$DATA_DIR" \
-    -DBIND_ADDR="$BIND_ADDR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \
     -Dpf4j.pluginsDir="$PLUGIN_DIR" \
-    -Dhazelcast.logging.type=slf4j \
     $NAME -c "$CONF_FILE" >"${LOG_DIR}/stdout.log" 2>&1 </dev/null &
-  PIDS=$(pid)
+  PIDS=$!
+  echo "$PIDS" > "$PID_FILE"
   echo "$NAME process started: $PIDS"
 fi

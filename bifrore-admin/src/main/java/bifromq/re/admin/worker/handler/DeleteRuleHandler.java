@@ -1,5 +1,6 @@
 package bifromq.re.admin.worker.handler;
 
+import bifromq.re.baserpc.clock.HLC;
 import bifromq.re.router.client.IRouterClient;
 import bifromq.re.router.rpc.proto.DeleteRuleRequest;
 import bifromq.re.router.rpc.proto.DeleteRuleResponse;
@@ -9,9 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import javax.ws.rs.DELETE;
 import javax.ws.rs.Path;
-import java.util.List;
 
-@Path("/rule/delete")
+@Path("/delete/rule")
 @Slf4j
 public class DeleteRuleHandler extends AbstractHandler {
 
@@ -22,14 +22,18 @@ public class DeleteRuleHandler extends AbstractHandler {
     @DELETE
     @Override
     public void handle(RoutingContext ctx) {
-        List<String> ruleIds = ctx.queryParams().getAll("ruleId");
-        if (ruleIds.isEmpty()) {
+        String ruleId = ctx.queryParams().get("ruleId");
+        if (ruleId == null || ruleId.isEmpty()) {
             ctx.response().
-                    setStatusCode(HttpResponseStatus.OK.code())
-                    .end("Delete rules ok");
+                    setStatusCode(HttpResponseStatus.BAD_REQUEST.code())
+                    .end("RuleId is required");
             return;
         }
-        routerClient.deleteRule(DeleteRuleRequest.newBuilder().build())
+        DeleteRuleRequest deleteRuleRequest = DeleteRuleRequest.newBuilder()
+                .setReqId(HLC.INST.get())
+                .setRuleId(ruleId)
+                .build();
+        routerClient.deleteRule(deleteRuleRequest)
                 .whenComplete((v, e) -> {
                     if (e != null) {
                         ctx.response()

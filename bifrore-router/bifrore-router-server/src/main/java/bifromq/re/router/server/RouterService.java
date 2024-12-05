@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -119,7 +118,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                                     }
                                 }
                             }
-                            builder.setRuleId(UUID.randomUUID().toString());
+                            builder.setRuleId(ruleId);
                             builder.setCode(AddRuleResponse.Code.OK);
                         }catch (IOException exception) {
                             builder.setCode(AddRuleResponse.Code.ERROR);
@@ -144,58 +143,70 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
             CompletableFuture<DeleteRuleResponse> future = new CompletableFuture<>();
             DeleteRuleResponse.Builder builder = DeleteRuleResponse.newBuilder();
             builder.setReqId(request.getReqId());
-            processorClient.unsubscribe(UnsubscribeRequest.newBuilder().build())
-                    .whenComplete((v, e) -> {
-                        if (e != null || v.getCode() == UnsubscribeResponse.Code.ERROR) {
-                            builder.setCode(DeleteRuleResponse.Code.ERROR);
-                            String failReason;
-                            if (e != null) {
-                                failReason = e.getMessage();
-                            }else {
-                                failReason = v.getReason();
-                            }
-                            builder.setFailReason(failReason);
-                        }else {
-                            byte[] deleted = idMap.remove(request.getRuleId());
-                            if (deleted == null) {
-                                builder.setCode(DeleteRuleResponse.Code.OK);
-                                future.complete(builder.build());
-                                return;
-                            }
-                            try {
-                                RuleMeta ruleMeta = RuleMeta.parseFrom(deleted);
-                                String topicFilter = ruleMeta.getTopicFilter();
-                                while (true) {
-                                    List<byte[]> existingRules = topicFilterMap.get(topicFilter);
-                                    if (existingRules == null || existingRules.isEmpty()) {
-                                        break;
-                                    }
-                                    List<byte[]> updatedRules = new ArrayList<>(existingRules);
-                                    updatedRules.removeIf(compiledRuleBytes -> {
-                                        try {
-                                            CompiledRule compiledRule = CompiledRule.parseFrom(compiledRuleBytes);
-                                            return compiledRule.getRuleId().equals(request.getRuleId());
-                                        } catch (InvalidProtocolBufferException ex) {
-                                            return false;
-                                        }
-                                    });
-                                    if (updatedRules.isEmpty()) {
-                                        topicFilterMap.remove(topicFilter);
-                                        break;
-                                    }else {
-                                        if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
-                                            break;
-                                        }
-                                    }
-                                }
-                                builder.setCode(DeleteRuleResponse.Code.OK);
-                            } catch (InvalidProtocolBufferException ex) {
-                                builder.setCode(DeleteRuleResponse.Code.ERROR);
-                                builder.setFailReason(ex.getMessage());
-                            }
+            byte[] deleted = idMap.remove(request.getRuleId());
+            if (deleted == null) {
+                builder.setCode(DeleteRuleResponse.Code.OK);
+                future.complete(builder.build());
+                return future;
+            }
+            try {
+                RuleMeta ruleMeta = RuleMeta.parseFrom(deleted);
+                String topicFilter = ruleMeta.getTopicFilter();
+                boolean emptyRules = false;
+                while (true) {
+                    List<byte[]> existingRules = topicFilterMap.get(topicFilter);
+                    if (existingRules == null || existingRules.isEmpty()) {
+                        break;
+                    }
+                    List<byte[]> updatedRules = new ArrayList<>(existingRules);
+                    updatedRules.removeIf(compiledRuleBytes -> {
+                        try {
+                            CompiledRule compiledRule = CompiledRule.parseFrom(compiledRuleBytes);
+                            return compiledRule.getRuleId().equals(request.getRuleId());
+                        } catch (InvalidProtocolBufferException ex) {
+                            return false;
                         }
-                        future.complete(builder.build());
                     });
+                    if (updatedRules.isEmpty()) {
+                        topicFilterMap.remove(topicFilter);
+                        emptyRules = true;
+                        break;
+                    }else {
+                        if (topicFilterMap.replace(topicFilter, existingRules, updatedRules)) {
+                            break;
+                        }
+                    }
+                }
+                if (emptyRules) {
+                    UnsubscribeRequest unsubscribeRequest = UnsubscribeRequest.newBuilder()
+                            .setReqId(request.getReqId())
+                            .setTopicFilter(topicFilter)
+                            .build();
+                    processorClient.unsubscribe(unsubscribeRequest)
+                            .whenComplete((v, e) -> {
+                                if (e != null || v.getCode() == UnsubscribeResponse.Code.ERROR) {
+                                    builder.setCode(DeleteRuleResponse.Code.ERROR);
+                                    String failReason;
+                                    if (e != null) {
+                                        failReason = e.getMessage();
+                                    }else {
+                                        failReason = v.getReason();
+                                    }
+                                    builder.setFailReason(failReason);
+                                }else {
+                                    builder.setCode(DeleteRuleResponse.Code.OK);
+                                }
+                                future.complete(builder.build());
+                            });
+                } else {
+                    builder.setCode(DeleteRuleResponse.Code.OK);
+                    future.complete(builder.build());
+                }
+            } catch (InvalidProtocolBufferException ex) {
+                builder.setCode(DeleteRuleResponse.Code.ERROR);
+                builder.setFailReason(ex.getMessage());
+                future.complete(builder.build());
+            }
             return future;
         }, responseObserver);
     }

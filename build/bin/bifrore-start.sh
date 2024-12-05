@@ -185,6 +185,8 @@ if [ "x$FOREGROUND_MODE" = "xtrue" ]; then
     -DDATA_DIR="$DATA_DIR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \
     -Dpf4j.pluginsDir="$PLUGIN_DIR" \
+    -Dhazelcast.logging.type=slf4j \
+    -Dhazelcast.logo.enabled=false \
     $NAME -c "$CONF_FILE"
 else
   nohup "$JAVA" $JVM_HEAP_OPTS $JVM_PERF_OPTS "${JVM_GC[@]}" $EXTRA_JVM_OPTS \
@@ -194,6 +196,8 @@ else
     -DDATA_DIR="$DATA_DIR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \
     -Dpf4j.pluginsDir="$PLUGIN_DIR" \
+    -Dhazelcast.logging.type=slf4j \
+    -Dhazelcast.logo.enabled=false \
     $NAME -c "$CONF_FILE" >"${LOG_DIR}/stdout.log" 2>&1 </dev/null &
   PIDS=$!
   echo "$PIDS" > "$PID_FILE"

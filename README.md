@@ -48,12 +48,22 @@ docker run --network host -d --name bifrore bifrore:latest
 - Add A Rule and Test
 
 ```bash
- # Add a rule
+ # Add a basic rule
  curl -X PUT http://localhost/add/rule -d '{"expression": "select * from a", "destinations": ["DevOnly"]}'
+ # Add a filtering and mapping rule
+ curl -X PUT http://localhost:81/add/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["DevOnly"]}'
  # List the existing rules
  curl http://localhost/list/rule
 ```
 
 - Send a message on topic `a`
 
-You can use any MQTT UI tool (such as MQTTX) to send a message on the rule's topic. The rule engine will process the message using the default DevOnly destination plugin.
+You can use any MQTT client tools (such as MQTTX) to send a message on the rule's topic. The rule engine will process 
+the message based on the given rule and send the processed messages to the destinations.
+
+- Delete a Rule
+```bash
+curl -X DELETE "http://localhost:81/delete/rule?ruleId=$YOUR_RULE_ID"
+```
+The corresponding rule will be deleted. If all the rules are deleted for a given topicFilter, the rule engine will 
+unsubscribe the topicFilter.

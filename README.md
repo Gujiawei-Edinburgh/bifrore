@@ -13,7 +13,7 @@ The MQTT-Based Rule Engine is a versatile solution designed for real-time rule e
 
 # Architecture
 
-![rule-engine.svg](./readme/rule-engine.svg)
+![rule-engine.svg](docs/figures/rule-engine.svg)
 
 ## Core Components
 
@@ -49,11 +49,11 @@ docker run --network host -d --name bifrore bifrore:latest
 
 ```bash
  # Add a basic rule
- curl -X PUT http://localhost/add/rule -d '{"expression": "select * from a", "destinations": ["DevOnly"]}'
+ curl -X PUT http://localhost:8088/rule -d '{"expression": "select * from a", "destinations": ["DevOnly"]}'
  # Add a filtering and mapping rule
- curl -X PUT http://localhost:81/add/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["DevOnly"]}'
+ curl -X PUT http://localhost:8088/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["DevOnly"]}'
  # List the existing rules
- curl http://localhost/list/rule
+ curl http://localhost:8088/rule
 ```
 
 - Send a message on topic `a`
@@ -63,7 +63,7 @@ the message based on the given rule and send the processed messages to the desti
 
 - Delete a Rule
 ```bash
-curl -X DELETE "http://localhost:81/delete/rule?ruleId=$YOUR_RULE_ID"
+curl -X DELETE "http://localhost:8088/rule?ruleId=$YOUR_RULE_ID"
 ```
 The corresponding rule will be deleted. If all the rules are deleted for a given topicFilter, the rule engine will 
 unsubscribe the topicFilter.

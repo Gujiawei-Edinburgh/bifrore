@@ -17,10 +17,10 @@ COMMAND=$1
 shift
 
 if [ $COMMAND = "start" ]; then
-  exec "$BASE_DIR/bin/bifrore-start.sh" -c bifromq.re.starter.StandaloneStarter -f standalone.yml "$@"
+  exec "$BASE_DIR/bin/bifrore-start.sh" -c bifrore.starter.StandaloneStarter -f standalone.yml "$@"
 elif [ $COMMAND = "stop" ]; then
   exec "$BASE_DIR/bin/bifrore-stop.sh" StandaloneStarter
 elif [ $COMMAND = "restart" ]; then
   sh "$BASE_DIR/bin/bifrore-stop.sh" StandaloneStarter
-  "$BASE_DIR/bin/bifrore-start.sh" -c bifromq.re.starter.StandaloneStarter -f standalone.yml "$@"
+  "$BASE_DIR/bin/bifrore-start.sh" -c bifrore.starter.StandaloneStarter -f standalone.yml "$@"
 fi

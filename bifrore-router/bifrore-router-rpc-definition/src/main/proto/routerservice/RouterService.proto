@@ -3,7 +3,7 @@ syntax = "proto3";
 package routerservice;
 
 option java_multiple_files = true;
-option java_package = "bifromq.re.router.rpc.proto";
+option java_package = "bifrore.router.rpc.proto";
 option java_outer_classname = "RouterServiceProto";
 option optimize_for = SPEED;
 

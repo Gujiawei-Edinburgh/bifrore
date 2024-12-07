@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>bifromq.re</groupId>
+    <groupId>bifrore</groupId>
     <artifactId>bifrore-parent</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>
     <name>BifroRE</name>
@@ -66,62 +66,62 @@
         <dependencies>
             <!--bifrore-modules-->
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-admin</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-common-parser</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-common-type</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-destination-plugin</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-processor-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-processor-rpc-definition</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-processor-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-processor-worker</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-router-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-router-rpc-definition</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-router-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>bifromq.re</groupId>
+                <groupId>bifrore</groupId>
                 <artifactId>bifrore-rpc</artifactId>
                 <version>${project.version}</version>
             </dependency>

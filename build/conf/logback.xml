@@ -143,7 +143,7 @@
     <logger name="org.reflections" level="WARN" additivity="false"/>
     <logger name="org.pf4j" level="WARN" additivity="false"/>
 
-    <logger name="bifromq.re" level="INFO" additivity="false">
+    <logger name="bifrore" level="INFO" additivity="false">
         <appender-ref ref="traceLogFile"/>
         <appender-ref ref="debugLogFile"/>
         <appender-ref ref="infoLogFile"/>

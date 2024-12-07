@@ -1,12 +1,12 @@
 package bifremq.re.baserpc;
 
-import bifromq.re.baserpc.IClusterManager;
-import bifromq.re.baserpc.IRPCClient;
-import bifromq.re.baserpc.IRPCServer;
-import bifromq.re.baserpc.test.RPCTestGrpc;
-import bifromq.re.baserpc.test.Request;
-import bifromq.re.baserpc.test.Response;
-import bifromq.re.baserpc.util.NettyUtil;
+import bifrore.baserpc.IClusterManager;
+import bifrore.baserpc.IRPCClient;
+import bifrore.baserpc.IRPCServer;
+import bifrore.baserpc.test.RPCTestGrpc;
+import bifrore.baserpc.test.Request;
+import bifrore.baserpc.test.Response;
+import bifrore.baserpc.util.NettyUtil;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import com.hazelcast.core.Hazelcast;

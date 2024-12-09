@@ -14,7 +14,6 @@ public class StarterRunner {
 
     public static <S extends BaseStarter> void run(Class<S> starterClazz, String[] args) {
         CommandLineParser parser = new DefaultParser();
-        HelpFormatter formatter = new HelpFormatter();
         try {
             CommandLine cmd = parser.parse(cliOptions(), args);
             File confFile = new File(cmd.getOptionValue("c"));

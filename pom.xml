@@ -211,7 +211,11 @@
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer-core.version}</version>
             </dependency>
-
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-registry-prometheus</artifactId>
+                <version>${micrometer-core.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>

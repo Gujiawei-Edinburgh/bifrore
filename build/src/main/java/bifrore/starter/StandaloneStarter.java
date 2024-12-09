@@ -22,9 +22,15 @@ import com.hazelcast.config.JoinConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import io.micrometer.core.instrument.binder.netty4.NettyEventExecutorMetrics;
+import io.micrometer.core.instrument.config.MeterFilter;
+import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
+import io.micrometer.prometheus.PrometheusConfig;
+import io.micrometer.prometheus.PrometheusMeterRegistry;
 import io.netty.channel.EventLoopGroup;
 import io.netty.handler.ssl.SslContext;
 import io.vertx.core.Vertx;
@@ -33,7 +39,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.pf4j.DefaultPluginManager;
 import org.pf4j.PluginManager;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
+import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +61,7 @@ public class StandaloneStarter extends BaseStarter {
     private IProcessorClient processorClient;
     private IRouterClient routerClient;
     private IProcessorWorker processorWorker;
+    private Thread promExporterPortThread;
     private IProcessorServer processorServer;
     private IRouterServer routerServer;
     private IAdminServer adminServer;
@@ -163,6 +174,30 @@ public class StandaloneStarter extends BaseStarter {
                 .addHandler(new ListRuleHandler(routerClient))
                 .build();
         rpcServer = rpcServerBuilder.build();
+
+        try {
+            PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+            registry.config().meterFilter(new MeterFilter() {
+                @Override
+                public DistributionStatisticConfig configure(Meter.Id id, DistributionStatisticConfig config) {
+                    return DistributionStatisticConfig.builder()
+                            .expiry(Duration.ofSeconds(5))
+                            .build().merge(config);
+                }
+            });
+            HttpServer prometheusExportServer =
+                    HttpServer.create(new InetSocketAddress(config.getPromExporterPort()), 0);
+            prometheusExportServer.createContext("/metrics", httpExchange -> {
+                String response = registry.scrape();
+                httpExchange.sendResponseHeaders(200, response.getBytes().length);
+                try (OutputStream os = httpExchange.getResponseBody()) {
+                    os.write(response.getBytes());
+                }
+            });
+            promExporterPortThread = new Thread(prometheusExportServer::start);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -174,6 +209,7 @@ public class StandaloneStarter extends BaseStarter {
         super.start();
         rpcServer.start();
         processorWorker.start();
+        promExporterPortThread.start();
         log.info("Standalone rule engine started");
     }
 

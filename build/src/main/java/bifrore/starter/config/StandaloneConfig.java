@@ -14,6 +14,7 @@ import lombok.Setter;
 public class StandaloneConfig {
     private ClusterConfig clusterConfig;
     private int adminServerPort;
+    private int promExporterPort;
     @JsonSetter(nulls = Nulls.SKIP)
     private RPCClientConfig rpcClientConfig = new RPCClientConfig();
     @JsonSetter(nulls = Nulls.SKIP)

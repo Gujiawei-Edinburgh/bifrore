@@ -72,6 +72,10 @@
             <groupId>bifrore</groupId>
             <artifactId>bifrore-admin</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
     </dependencies>
     <build>
         <finalName>bifrore-${project.parent.version}</finalName>

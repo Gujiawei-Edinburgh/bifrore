@@ -28,6 +28,10 @@
             <groupId>bifrore</groupId>
             <artifactId>bifrore-processor-rpc-definition</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.rocksdb</groupId>
+            <artifactId>rocksdbjni</artifactId>
+        </dependency>
         <!-- test dependencies -->
         <dependency>
             <groupId>org.mockito</groupId>

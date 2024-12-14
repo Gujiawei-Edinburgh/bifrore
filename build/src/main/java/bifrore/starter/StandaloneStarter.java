@@ -11,6 +11,7 @@ import bifrore.processor.worker.IProcessorWorker;
 import bifrore.processor.worker.ProcessorWorkerBuilder;
 import bifrore.router.client.IRouterClient;
 import bifrore.router.server.IRouterServer;
+import bifrore.router.server.store.IdMapStore;
 import bifrore.starter.config.StandaloneConfig;
 import bifrore.starter.config.model.ClusterConfig;
 import bifrore.starter.utils.ConfigUtil;
@@ -18,6 +19,8 @@ import bifrore.starter.utils.ResourceUtil;
 import com.hazelcast.cluster.MembershipEvent;
 import com.hazelcast.cluster.MembershipListener;
 import com.hazelcast.config.Config;
+import com.hazelcast.config.MapConfig;
+import com.hazelcast.config.MapStoreConfig;
 import com.hazelcast.config.JoinConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.core.Hazelcast;
@@ -38,6 +41,7 @@ import io.vertx.core.VertxOptions;
 import lombok.extern.slf4j.Slf4j;
 import org.pf4j.DefaultPluginManager;
 import org.pf4j.PluginManager;
+import org.rocksdb.RocksDBException;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -66,7 +70,12 @@ public class StandaloneStarter extends BaseStarter {
         pluginManager = new DefaultPluginManager();
         pluginManager.loadPlugins();
         pluginManager.startPlugins();
-        HazelcastInstance hz = buildHazelcastInstance(config.getClusterConfig());
+        HazelcastInstance hz;
+        try {
+            hz = buildHazelcastInstance(config.getClusterConfig());
+        }catch (RocksDBException e) {
+            throw new RuntimeException(e);
+        }
         hz.getCluster().addMembershipListener(new MembershipListener() {
             @Override
             public void memberAdded(MembershipEvent membershipEvent) {
@@ -146,19 +155,19 @@ public class StandaloneStarter extends BaseStarter {
                 .routerClient(routerClient)
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
-        IProcessorServer.newBuilder()
+        IProcessorServer processorServer = IProcessorServer.newBuilder()
                 .processorWorker(processorWorker)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IRouterServer.newBuilder()
+        IRouterServer routerServer = IRouterServer.newBuilder()
                 .idMap(hz.getMap("idMap"))
                 .topicFilterMap(hz.getMap("topicFilterMap"))
                 .processorClient(processorClient)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IAdminServer.newBuilder()
+        IAdminServer adminServer = IAdminServer.newBuilder()
                 .port(config.getAdminServerPort())
                 .vertx(vertx)
                 .addHandler(new AddRuleHandler(routerClient))
@@ -218,8 +227,14 @@ public class StandaloneStarter extends BaseStarter {
         log.info("Config(YAML): \n{}", ConfigUtil.serialize(config));
     }
 
-    private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) {
+    private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) throws RocksDBException {
         Config config = new Config();
+        MapStoreConfig mapStoreConfig = new MapStoreConfig()
+                .setImplementation(new IdMapStore("idMap"))
+                .setWriteDelaySeconds(0);
+        MapConfig idMapConfig = new MapConfig("idMap")
+                .setMapStoreConfig(mapStoreConfig);
+        config.addMapConfig(idMapConfig);
         config.setClusterName(clusterConfig.getClusterName());
         NetworkConfig networkConfig = config.getNetworkConfig();
         networkConfig.setPort(clusterConfig.getPort())

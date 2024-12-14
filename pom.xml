@@ -18,6 +18,7 @@
         <module>bifrore-destination-plugin</module>
         <module>bifrore-router</module>
         <module>bifrore-common</module>
+        <module>bifrore-metrics</module>
     </modules>
 
     <properties>

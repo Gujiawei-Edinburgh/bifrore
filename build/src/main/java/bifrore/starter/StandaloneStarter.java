@@ -53,18 +53,10 @@ import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class StandaloneStarter extends BaseStarter {
-    private ExecutorService ioClientExecutor;
-    private ExecutorService ioServerExecutor;
     private IRPCServer rpcServer;
-    private Vertx vertx;
     private PluginManager pluginManager;
-    private IProcessorClient processorClient;
-    private IRouterClient routerClient;
     private IProcessorWorker processorWorker;
     private Thread promExporterPortThread;
-    private IProcessorServer processorServer;
-    private IRouterServer routerServer;
-    private IAdminServer adminServer;
 
     @Override
     protected void init(StandaloneConfig config) {
@@ -90,12 +82,12 @@ public class StandaloneStarter extends BaseStarter {
                 .servers(hz.getSet("servers"))
                 .build();
 
-        ioClientExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
+        ExecutorService ioClientExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
                 new ThreadPoolExecutor(config.getRpcClientConfig().getWorkerThreads(),
                         config.getRpcClientConfig().getWorkerThreads(), 0L,
                         TimeUnit.MILLISECONDS, new LinkedTransferQueue<>(),
                         ResourceUtil.newThreadFactory("rpc-client-executor")), "rpc-client-executor");
-        ioServerExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
+        ExecutorService ioServerExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
                 new ThreadPoolExecutor(config.getRpcServerConfig().getWorkerThreads(),
                         config.getRpcServerConfig().getWorkerThreads(), 0L,
                         TimeUnit.MILLISECONDS, new LinkedTransferQueue<>(),
@@ -111,7 +103,7 @@ public class StandaloneStarter extends BaseStarter {
         VertxOptions vertxOptions = new VertxOptions();
         vertxOptions.setEventLoopPoolSize(1)
                 .setWorkerPoolSize(2);
-        vertx = Vertx.vertx(vertxOptions);
+        Vertx vertx = Vertx.vertx(vertxOptions);
 
         SslContext clientSslContext = config.getRpcClientConfig().getSslConfig() != null ?
                 buildClientSslContext(config.getRpcClientConfig().getSslConfig()) : null;
@@ -132,10 +124,10 @@ public class StandaloneStarter extends BaseStarter {
                 .sslContext(clientSslContext)
                 .clusterManager(clusterManager);
 
-        processorClient = IProcessorClient.newBuilder()
+        IProcessorClient processorClient = IProcessorClient.newBuilder()
                 .rpcClientBuilder(rpcClientBuilder)
                 .build();
-        routerClient = IRouterClient.newBuilder()
+        IRouterClient routerClient = IRouterClient.newBuilder()
                 .rpcClientBuilder(rpcClientBuilder)
                 .build();
 
@@ -154,19 +146,19 @@ public class StandaloneStarter extends BaseStarter {
                 .routerClient(routerClient)
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
-        processorServer = IProcessorServer.newBuilder()
+        IProcessorServer.newBuilder()
                 .processorWorker(processorWorker)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        routerServer = IRouterServer.newBuilder()
+        IRouterServer.newBuilder()
                 .idMap(hz.getMap("idMap"))
                 .topicFilterMap(hz.getMap("topicFilterMap"))
                 .processorClient(processorClient)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        adminServer = IAdminServer.newBuilder()
+        IAdminServer.newBuilder()
                 .port(config.getAdminServerPort())
                 .vertx(vertx)
                 .addHandler(new AddRuleHandler(routerClient))

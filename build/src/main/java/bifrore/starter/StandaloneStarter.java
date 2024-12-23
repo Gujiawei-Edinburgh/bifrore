@@ -155,19 +155,19 @@ public class StandaloneStarter extends BaseStarter {
                 .routerClient(routerClient)
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
-        IProcessorServer processorServer = IProcessorServer.newBuilder()
+        IProcessorServer.newBuilder()
                 .processorWorker(processorWorker)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IRouterServer routerServer = IRouterServer.newBuilder()
+        IRouterServer.newBuilder()
                 .idMap(hz.getMap("idMap"))
                 .topicFilterMap(hz.getMap("topicFilterMap"))
                 .processorClient(processorClient)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IAdminServer adminServer = IAdminServer.newBuilder()
+        IAdminServer.newBuilder()
                 .port(config.getAdminServerPort())
                 .vertx(vertx)
                 .addHandler(new AddRuleHandler(routerClient))
@@ -186,6 +186,7 @@ public class StandaloneStarter extends BaseStarter {
                             .build().merge(config);
                 }
             });
+            Metrics.addRegistry(registry);
             HttpServer prometheusExportServer =
                     HttpServer.create(new InetSocketAddress(config.getPromExporterPort()), 0);
             prometheusExportServer.createContext("/metrics", httpExchange -> {

@@ -3,7 +3,7 @@ package bifrore.router.server.store;
 import com.hazelcast.map.MapLoader;
 import com.hazelcast.map.MapStore;
 import org.rocksdb.*;
-
+import io.micrometer.core.instrument.Metrics;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,6 +21,10 @@ abstract class RocksDBMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> 
                            Function<byte[], V> valueDeserializer) throws RocksDBException {
         RocksDB.loadLibrary();
         Options options = new Options().setCreateIfMissing(true);
+        Statistics stat = new Statistics();
+        options.setStatistics(stat);
+        Metrics.gauge("rocksdb.block_cache_hits", stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
+        Metrics.gauge("rocksdb.block_cache_misses", stat.getTickerCount(TickerType.BLOCK_CACHE_MISS));
         this.rocksDB = RocksDB.open(options, dbPath);
         this.keySerializer = keySerializer;
         this.valueSerializer = valueSerializer;

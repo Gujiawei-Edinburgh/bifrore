@@ -66,4 +66,26 @@ public class ProcessorService extends ProcessorServiceGrpc.ProcessorServiceImplB
             return future;
         }, responseObserver);
     }
+
+    @Override
+    public void addDestination(AddDestinationRequest request, StreamObserver<AddDestinationResponse> responseObserver) {
+        response(metadata -> {
+            CompletableFuture<AddDestinationResponse> future = new CompletableFuture<>();
+            AddDestinationResponse.Builder builder = AddDestinationResponse.newBuilder();
+            builder.setReqId(request.getReqId());
+            processorWorker.addDestination(request.getDestinationType(), request.getDestinationCfgMap())
+                    .whenComplete((v, e) -> {
+                        if (e != null) {
+                            log.error("Failed to add destination: {}", request.getDestinationCfgMap(), e);
+                            builder.setCode(AddDestinationResponse.Code.ERROR).setReason(e.getMessage());
+                            future.complete(builder.build());
+                        }else {
+                            builder.setCode(AddDestinationResponse.Code.OK);
+                            builder.setDestinationId(v);
+                            future.complete(builder.build());
+                        }
+                    });
+            return future;
+        }, responseObserver);
+    }
 }

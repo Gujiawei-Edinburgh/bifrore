@@ -53,7 +53,7 @@ class ProcessorWorker implements IProcessorWorker {
         host = builder.host;
         port = builder.port;
         clientPrefix = builder.clientPrefix + "/" + builder.nodeId;
-        producerManager = new ProducerManager(builder.pluginManager);
+        producerManager = new ProducerManager(builder.pluginManager, builder.callerCfgs);
         routerClient = builder.routerClient;
         matchedRules = Caffeine.newBuilder()
                 .maximumSize(100)
@@ -122,6 +122,11 @@ class ProcessorWorker implements IProcessorWorker {
                         log.error("Failed to unsubscribe topicFilter: {}, ", topicFilter, e);
                     }
                 });
+    }
+
+    @Override
+    public CompletableFuture<String> addDestination(String destinationType, Map<String, String> destinationCfg) {
+        return producerManager.createDestinationCaller(destinationType, destinationCfg);
     }
 
     @Override

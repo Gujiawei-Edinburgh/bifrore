@@ -47,6 +47,7 @@
         <commons-cli.version>1.5.0</commons-cli.version>
         <micrometer-core.version>1.12.2</micrometer-core.version>
         <rocksdb.version>9.4.0</rocksdb.version>
+        <kafka.clients.version>3.9.0</kafka.clients.version>
 
         <!-- maven.plugin.version-->
         <maven.compiler.plugin.version>3.10.1</maven.compiler.plugin.version>
@@ -261,6 +262,11 @@
                 <groupId>org.rocksdb</groupId>
                 <artifactId>rocksdbjni</artifactId>
                 <version>${rocksdb.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>${kafka.clients.version}</version>
             </dependency>
 
             <!-- test dependencies -->

@@ -1,6 +1,7 @@
 package bifrore.starter;
 
 import bifrore.admin.worker.IAdminServer;
+import bifrore.admin.worker.handler.AddDestinationHandler;
 import bifrore.admin.worker.handler.AddRuleHandler;
 import bifrore.admin.worker.handler.DeleteRuleHandler;
 import bifrore.admin.worker.handler.ListRuleHandler;
@@ -153,6 +154,7 @@ public class StandaloneStarter extends BaseStarter {
                 .port(config.getProcessorWorkerConfig().getBrokerPort())
                 .clientPrefix(config.getProcessorWorkerConfig().getClientPrefix())
                 .routerClient(routerClient)
+                .callerCfgs(hz.getMap("callerCfgs"))
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
         IProcessorServer.newBuilder()
@@ -173,6 +175,7 @@ public class StandaloneStarter extends BaseStarter {
                 .addHandler(new AddRuleHandler(routerClient))
                 .addHandler(new DeleteRuleHandler(routerClient))
                 .addHandler(new ListRuleHandler(routerClient))
+                .addHandler(new AddDestinationHandler(processorClient))
                 .build();
         rpcServer = rpcServerBuilder.build();
 

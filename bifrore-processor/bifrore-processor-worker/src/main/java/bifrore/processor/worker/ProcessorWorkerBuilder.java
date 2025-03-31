@@ -1,7 +1,10 @@
 package bifrore.processor.worker;
 
 import bifrore.router.client.IRouterClient;
+import com.hazelcast.map.IMap;
 import org.pf4j.PluginManager;
+
+import java.util.Map;
 
 public class ProcessorWorkerBuilder {
     String nodeId;
@@ -17,6 +20,7 @@ public class ProcessorWorkerBuilder {
     String clientPrefix;
     PluginManager pluginManager;
     IRouterClient routerClient;
+    IMap<String, byte[]> callerCfgs;
 
     public ProcessorWorkerBuilder nodeId(String nodeId) {
         this.nodeId = nodeId;
@@ -80,6 +84,11 @@ public class ProcessorWorkerBuilder {
 
     public ProcessorWorkerBuilder routerClient(IRouterClient routerClient) {
         this.routerClient = routerClient;
+        return this;
+    }
+
+    public ProcessorWorkerBuilder callerCfgs(IMap<String, byte[]> callerCfgs) {
+        this.callerCfgs = callerCfgs;
         return this;
     }
 

@@ -12,6 +12,7 @@ package processorservice;
 service ProcessorService {
   rpc subscribe(SubscribeRequest) returns (SubscribeResponse) {}
   rpc unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse) {}
+  rpc addDestination(AddDestinationRequest) returns(AddDestinationResponse) {}
 }
 
 message SubscribeRequest {
@@ -43,4 +44,21 @@ message UnsubscribeResponse {
   uint64 reqId = 1;
   Code code = 2;
   optional string reason = 3;
+}
+
+message AddDestinationRequest {
+  uint64 reqId = 1;
+  string destinationType = 2;
+  map<string, string> destinationCfg = 3;
+}
+
+message AddDestinationResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint64 reqId = 1;
+  Code code = 2;
+  string destinationId = 3;
+  optional string reason = 4;
 }

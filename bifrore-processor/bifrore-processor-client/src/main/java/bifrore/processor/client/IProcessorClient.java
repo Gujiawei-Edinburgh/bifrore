@@ -1,5 +1,7 @@
 package bifrore.processor.client;
 
+import bifrore.processor.rpc.proto.AddDestinationRequest;
+import bifrore.processor.rpc.proto.AddDestinationResponse;
 import bifrore.processor.rpc.proto.SubscribeRequest;
 import bifrore.processor.rpc.proto.SubscribeResponse;
 import bifrore.processor.rpc.proto.UnsubscribeRequest;
@@ -15,4 +17,6 @@ public interface IProcessorClient {
     CompletableFuture<SubscribeResponse> subscribe(SubscribeRequest request);
 
     CompletableFuture<UnsubscribeResponse> unsubscribe(UnsubscribeRequest request);
+
+    CompletableFuture<AddDestinationResponse> addDestination(AddDestinationRequest request);
 }

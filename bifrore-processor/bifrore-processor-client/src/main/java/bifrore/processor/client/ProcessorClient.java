@@ -25,4 +25,9 @@ final class ProcessorClient implements IProcessorClient {
     public CompletableFuture<UnsubscribeResponse> unsubscribe(UnsubscribeRequest request) {
         return  rpcClient.invoke(request, Collections.emptyMap(), ProcessorServiceGrpc.getUnsubscribeMethod());
     }
+
+    @Override
+    public CompletableFuture<AddDestinationResponse> addDestination(AddDestinationRequest request) {
+        return rpcClient.invoke(request, Collections.emptyMap(), ProcessorServiceGrpc.getAddDestinationMethod());
+    }
 }

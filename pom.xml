@@ -19,6 +19,7 @@
         <module>bifrore-router</module>
         <module>bifrore-common</module>
         <module>bifrore-metrics</module>
+        <module>bifrore-map-store</module>
     </modules>
 
     <properties>
@@ -126,6 +127,11 @@
             <dependency>
                 <groupId>bifrore</groupId>
                 <artifactId>bifrore-rpc</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>bifrore</groupId>
+                <artifactId>bifrore-map-store</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <!--third party-->

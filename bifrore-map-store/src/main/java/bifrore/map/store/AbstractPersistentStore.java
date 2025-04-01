@@ -1,32 +1,47 @@
-package bifrore.router.server.store;
+package bifrore.map.store;
 
 import com.hazelcast.map.MapLoader;
 import com.hazelcast.map.MapStore;
-import org.rocksdb.*;
 import io.micrometer.core.instrument.Metrics;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
+import org.rocksdb.RocksDBException;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.Statistics;
+import org.rocksdb.TickerType;
+import org.rocksdb.WriteBatch;
+import org.rocksdb.WriteOptions;
+
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
-abstract class RocksDBMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
+public abstract class AbstractPersistentStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
     private final RocksDB rocksDB;
     private final Function<K, byte[]> keySerializer;
+    private final Function<byte[], K> keyDeserializer;
     private final Function<V, byte[]> valueSerializer;
     private final Function<byte[], V> valueDeserializer;
 
-    public RocksDBMapStore(String dbPath,
+    public AbstractPersistentStore(String dbPath,
                            Function<K, byte[]> keySerializer,
+                           Function<byte[], K> keyDeserializer,
                            Function<V, byte[]> valueSerializer,
                            Function<byte[], V> valueDeserializer) throws RocksDBException {
         RocksDB.loadLibrary();
         Options options = new Options().setCreateIfMissing(true);
         Statistics stat = new Statistics();
         options.setStatistics(stat);
-        Metrics.gauge("rocksdb.block_cache_hits", stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
-        Metrics.gauge("rocksdb.block_cache_misses", stat.getTickerCount(TickerType.BLOCK_CACHE_MISS));
+        Metrics.gauge(dbPath + "." + "rocksdb.block_cache_hits",
+                stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
+        Metrics.gauge(dbPath + "." + "rocksdb.block_cache_misses",
+                stat.getTickerCount(TickerType.BLOCK_CACHE_MISS));
         this.rocksDB = RocksDB.open(options, dbPath);
         this.keySerializer = keySerializer;
+        this.keyDeserializer = keyDeserializer;
         this.valueSerializer = valueSerializer;
         this.valueDeserializer = valueDeserializer;
     }
@@ -93,6 +108,16 @@ abstract class RocksDBMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> 
 
     @Override
     public Iterable<K> loadAllKeys() {
-        return null;
+        List<K> keys = new ArrayList<>();
+        try (RocksIterator iterator = rocksDB.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                K key = keyDeserializer.apply(keyBytes);
+                keys.add(key);
+                iterator.next();
+            }
+        }
+        return keys;
     }
 }

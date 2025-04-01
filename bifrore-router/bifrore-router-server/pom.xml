@@ -29,8 +29,12 @@
             <artifactId>bifrore-processor-rpc-definition</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.rocksdb</groupId>
-            <artifactId>rocksdbjni</artifactId>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bifrore</groupId>
+            <artifactId>bifrore-map-store</artifactId>
         </dependency>
         <!-- test dependencies -->
         <dependency>
@@ -40,10 +44,6 @@
         <dependency>
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-core</artifactId>
         </dependency>
     </dependencies>
 

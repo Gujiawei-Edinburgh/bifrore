@@ -6,13 +6,14 @@ import bifrore.admin.worker.handler.AddRuleHandler;
 import bifrore.admin.worker.handler.DeleteRuleHandler;
 import bifrore.admin.worker.handler.ListRuleHandler;
 import bifrore.baserpc.*;
+import bifrore.destination.plugin.CallerCfgStore;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.server.IProcessorServer;
 import bifrore.processor.worker.IProcessorWorker;
 import bifrore.processor.worker.ProcessorWorkerBuilder;
 import bifrore.router.client.IRouterClient;
 import bifrore.router.server.IRouterServer;
-import bifrore.router.server.store.IdMapStore;
+import bifrore.router.server.IdMapStore;
 import bifrore.starter.config.StandaloneConfig;
 import bifrore.starter.config.model.ClusterConfig;
 import bifrore.starter.utils.ConfigUtil;
@@ -154,7 +155,7 @@ public class StandaloneStarter extends BaseStarter {
                 .port(config.getProcessorWorkerConfig().getBrokerPort())
                 .clientPrefix(config.getProcessorWorkerConfig().getClientPrefix())
                 .routerClient(routerClient)
-                .callerCfgs(hz.getMap("callerCfgs"))
+                .callerCfgs(hz.getMap("callerCfg"))
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
         IProcessorServer.newBuilder()
@@ -233,12 +234,20 @@ public class StandaloneStarter extends BaseStarter {
 
     private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) throws RocksDBException {
         Config config = new Config();
-        MapStoreConfig mapStoreConfig = new MapStoreConfig()
+        MapStoreConfig idMapStoreConfig = new MapStoreConfig()
                 .setImplementation(new IdMapStore("idMap"))
                 .setWriteDelaySeconds(0);
         MapConfig idMapConfig = new MapConfig("idMap")
-                .setMapStoreConfig(mapStoreConfig);
+                .setMapStoreConfig(idMapStoreConfig);
         config.addMapConfig(idMapConfig);
+
+        MapStoreConfig callerCfgStoreConfig = new MapStoreConfig()
+                .setImplementation(new CallerCfgStore("callerCfg"))
+                .setWriteDelaySeconds(0);
+        MapConfig callerCfgConfig = new MapConfig("callerCfg")
+                .setMapStoreConfig(callerCfgStoreConfig);
+        config.addMapConfig(callerCfgConfig);
+
         config.setClusterName(clusterConfig.getClusterName());
         NetworkConfig networkConfig = config.getNetworkConfig();
         networkConfig.setPort(clusterConfig.getPort())

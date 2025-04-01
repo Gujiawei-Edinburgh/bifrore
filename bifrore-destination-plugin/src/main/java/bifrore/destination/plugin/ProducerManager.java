@@ -66,9 +66,10 @@ public class ProducerManager {
         producer.initCaller(callerCfg).whenComplete((v, e) -> {
             if (e != null) {
                 future.completeExceptionally(e);
+            }else {
+                callerCfgs.put(v, serialize(callerCfg));
+                future.complete(v);
             }
-            callerCfgs.put(destinationName, serialize(callerCfg));
-            future.complete(v);
         });
         return future;
     }

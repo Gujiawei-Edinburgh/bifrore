@@ -41,8 +41,20 @@ docker run --network host -d --name bifromq bifromq/bifromq:latest
 - Start the BifroRE instance
 
 ```bash
-docker pull bifrore:latest
-docker run --network host -d --name bifrore bifrore:latest
+./bin/standalone.sh start
+```
+
+- Add a `Destination`
+```bash
+curl -X PUT http://localhost:8088/destination \
+     -H "Content-Type: application/json" \
+     -d '{
+           "destinationType": "kafka",
+           "cfg": {
+             "bootstrap.servers": "127.0.0.1:9092",
+             "acks": "all",
+           }
+         }'
 ```
 
 - Add A Rule and Test

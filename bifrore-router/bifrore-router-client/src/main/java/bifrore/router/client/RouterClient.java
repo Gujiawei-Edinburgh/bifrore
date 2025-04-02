@@ -2,7 +2,7 @@ package bifrore.router.client;
 
 import bifrore.baserpc.IRPCClient;
 import bifrore.common.parser.Parsed;
-import bifrore.common.parser.util.SerializeUtil;
+import bifrore.common.parser.util.ParsedSerializeUtil;
 import bifrore.router.rpc.proto.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -32,7 +32,7 @@ final class RouterClient implements IRouterClient {
                     .map(bytes -> {
                         try {
                             CompiledRule compiledRule = CompiledRule.parseFrom(bytes);
-                            Parsed parsed = SerializeUtil.deserializeParsed(compiledRule
+                            Parsed parsed = ParsedSerializeUtil.deserializeParsed(compiledRule
                                     .getExpressionObj().toByteArray());
                             return new Matched(parsed, compiledRule.getDestinationsList());
                         } catch (Exception e) {

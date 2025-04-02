@@ -32,10 +32,6 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
         </dependency>
-        <dependency>
-            <groupId>bifrore</groupId>
-            <artifactId>bifrore-map-store</artifactId>
-        </dependency>
         <!-- test dependencies -->
         <dependency>
             <groupId>org.mockito</groupId>

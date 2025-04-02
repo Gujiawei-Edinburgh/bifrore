@@ -15,6 +15,7 @@
     <modules>
         <module>bifrore-common-type</module>
         <module>bifrore-common-parser</module>
+        <module>bifrore-common-store</module>
     </modules>
 
 </project>

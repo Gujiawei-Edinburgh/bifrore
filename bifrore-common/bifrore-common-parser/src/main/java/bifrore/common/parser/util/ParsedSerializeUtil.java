@@ -4,7 +4,7 @@ import bifrore.common.parser.Parsed;
 
 import java.io.*;
 
-public class SerializeUtil {
+public class ParsedSerializeUtil {
     public static byte[] serializeParsed(Parsed parsed) throws IOException {
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
         ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);

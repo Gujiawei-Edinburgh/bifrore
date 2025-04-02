@@ -32,10 +32,6 @@
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
         </dependency>
-        <dependency>
-            <groupId>bifrore</groupId>
-            <artifactId>bifrore-map-store</artifactId>
-        </dependency>
     </dependencies>
 
 </project>

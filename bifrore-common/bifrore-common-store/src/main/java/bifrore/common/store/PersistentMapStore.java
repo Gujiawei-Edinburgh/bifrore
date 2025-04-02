@@ -1,4 +1,4 @@
-package bifrore.map.store;
+package bifrore.common.store;
 
 import com.hazelcast.map.MapLoader;
 import com.hazelcast.map.MapStore;
@@ -19,25 +19,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
-public abstract class AbstractPersistentStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
+public class PersistentMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
     private final RocksDB rocksDB;
     private final Function<K, byte[]> keySerializer;
     private final Function<byte[], K> keyDeserializer;
     private final Function<V, byte[]> valueSerializer;
     private final Function<byte[], V> valueDeserializer;
 
-    public AbstractPersistentStore(String dbPath,
-                           Function<K, byte[]> keySerializer,
-                           Function<byte[], K> keyDeserializer,
-                           Function<V, byte[]> valueSerializer,
-                           Function<byte[], V> valueDeserializer) throws RocksDBException {
+    public PersistentMapStore(String dbPath,
+                              String storeName,
+                              Function<K, byte[]> keySerializer,
+                              Function<byte[], K> keyDeserializer,
+                              Function<V, byte[]> valueSerializer,
+                              Function<byte[], V> valueDeserializer) throws RocksDBException {
         RocksDB.loadLibrary();
         Options options = new Options().setCreateIfMissing(true);
         Statistics stat = new Statistics();
         options.setStatistics(stat);
-        Metrics.gauge(dbPath + "." + "rocksdb.block_cache_hits",
+        Metrics.gauge(storeName + "." + "rocksdb.block_cache_hits",
                 stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
-        Metrics.gauge(dbPath + "." + "rocksdb.block_cache_misses",
+        Metrics.gauge(storeName + "." + "rocksdb.block_cache_misses",
                 stat.getTickerCount(TickerType.BLOCK_CACHE_MISS));
         this.rocksDB = RocksDB.open(options, dbPath);
         this.keySerializer = keySerializer;

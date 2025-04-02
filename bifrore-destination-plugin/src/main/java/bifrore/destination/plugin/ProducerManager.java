@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
-import static bifrore.common.type.MapMessageUtil.deserialize;
-import static bifrore.common.type.MapMessageUtil.serialize;
+import static bifrore.common.type.SerializationUtil.deserializeMap;
+import static bifrore.common.type.SerializationUtil.serializeMap;
 
 @Slf4j
 public class ProducerManager {
@@ -23,11 +23,6 @@ public class ProducerManager {
         this.destinations = pluginMgr.getExtensions(IProducer.class).stream()
                         .collect(Collectors.toMap(IProducer::getName, e -> e));
         this.callerCfgs = callerCfgs;
-        this.restoreCallers().whenComplete((v, e) -> {
-            if (e != null) {
-                log.error("Failed to restore callers", e);
-            }
-        });
         if (destinations.isEmpty()) {
             log.info("No producers registered, use DevOnly and Kafka instead");
             IProducer devOnlyProducer = new DevOnlyProducer();
@@ -35,6 +30,11 @@ public class ProducerManager {
             destinations.putIfAbsent(devOnlyProducer.getName(), new DevOnlyProducer());
             destinations.putIfAbsent(builtinKafkaProducer.getName(), new BuiltinKafkaProducer());
         }
+        this.restoreCallers().whenComplete((v, e) -> {
+            if (e != null) {
+                log.error("Failed to restore callers", e);
+            }
+        });
     }
 
     public CompletableFuture<Void> produce(List<String> destinations, Message message) {
@@ -67,7 +67,7 @@ public class ProducerManager {
             if (e != null) {
                 future.completeExceptionally(e);
             }else {
-                callerCfgs.put(v, serialize(callerCfg));
+                callerCfgs.put(v, serializeMap(callerCfg));
                 future.complete(v);
             }
         });
@@ -80,7 +80,7 @@ public class ProducerManager {
             String producerName = destinationId.split(IProducer.delimiter)[0];
             IProducer producer = destinations.get(producerName);
             try {
-                CompletableFuture<String> future = producer.initCaller(deserialize(cfg));
+                CompletableFuture<String> future = producer.initCaller(deserializeMap(cfg));
                 futures.add(future);
             }catch (Exception ex) {
                 log.error("Failed to create caller for {}", producerName, ex);

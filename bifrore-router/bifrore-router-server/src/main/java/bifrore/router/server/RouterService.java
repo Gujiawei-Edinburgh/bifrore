@@ -2,7 +2,7 @@ package bifrore.router.server;
 
 import bifrore.common.parser.ParsedRule;
 import bifrore.common.parser.util.ParsedRuleHelper;
-import bifrore.common.parser.util.SerializeUtil;
+import bifrore.common.parser.util.ParsedSerializeUtil;
 import bifrore.commontype.QoS;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.rpc.proto.SubscribeRequest;
@@ -88,7 +88,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                         builder.setFailReason(failReason);
                     }else {
                         try {
-                            byte[] serializedParsed = SerializeUtil.serializeParsed(parsedRule.getParsed());
+                            byte[] serializedParsed = ParsedSerializeUtil.serializeParsed(parsedRule.getParsed());
                             String ruleId = generateRuleId(request.getRule());
                             idMap.putIfAbsent(ruleId, RuleMeta.newBuilder()
                                     .setPlaintextRule(request.getRule())

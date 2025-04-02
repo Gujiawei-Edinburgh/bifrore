@@ -5,11 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>bifrore</groupId>
-        <artifactId>bifrore-parent</artifactId>
+        <artifactId>bifrore-common</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>bifrore-map-store</artifactId>
+    <artifactId>bifrore-common-store</artifactId>
+
     <dependencies>
         <dependency>
             <groupId>com.hazelcast</groupId>
@@ -24,4 +25,5 @@
             <artifactId>micrometer-core</artifactId>
         </dependency>
     </dependencies>
+
 </project>

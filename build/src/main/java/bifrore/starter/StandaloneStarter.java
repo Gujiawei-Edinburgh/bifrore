@@ -6,14 +6,14 @@ import bifrore.admin.worker.handler.AddRuleHandler;
 import bifrore.admin.worker.handler.DeleteRuleHandler;
 import bifrore.admin.worker.handler.ListRuleHandler;
 import bifrore.baserpc.*;
-import bifrore.destination.plugin.CallerCfgStore;
+import bifrore.common.store.PersistentMapStore;
+import bifrore.common.type.SerializationUtil;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.server.IProcessorServer;
 import bifrore.processor.worker.IProcessorWorker;
 import bifrore.processor.worker.ProcessorWorkerBuilder;
 import bifrore.router.client.IRouterClient;
 import bifrore.router.server.IRouterServer;
-import bifrore.router.server.IdMapStore;
 import bifrore.starter.config.StandaloneConfig;
 import bifrore.starter.config.model.ClusterConfig;
 import bifrore.starter.utils.ConfigUtil;
@@ -56,6 +56,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 @Slf4j
 public class StandaloneStarter extends BaseStarter {
@@ -155,7 +156,7 @@ public class StandaloneStarter extends BaseStarter {
                 .port(config.getProcessorWorkerConfig().getBrokerPort())
                 .clientPrefix(config.getProcessorWorkerConfig().getClientPrefix())
                 .routerClient(routerClient)
-                .callerCfgs(hz.getMap("callerCfg"))
+                .callerCfgs(hz.getMap("callerCfgs"))
                 .pluginManager(pluginManager);
         processorWorker = processorWorkerBuilder.build();
         IProcessorServer.newBuilder()
@@ -235,18 +236,34 @@ public class StandaloneStarter extends BaseStarter {
     private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) throws RocksDBException {
         Config config = new Config();
         MapStoreConfig idMapStoreConfig = new MapStoreConfig()
-                .setImplementation(new IdMapStore("idMap"))
+                .setImplementation(new PersistentMapStore<>("idMap", "idMap",
+                        String::getBytes, String::new, b -> b, b -> b))
                 .setWriteDelaySeconds(0);
         MapConfig idMapConfig = new MapConfig("idMap")
                 .setMapStoreConfig(idMapStoreConfig);
         config.addMapConfig(idMapConfig);
 
         MapStoreConfig callerCfgStoreConfig = new MapStoreConfig()
-                .setImplementation(new CallerCfgStore("callerCfg"))
+                .setImplementation(new PersistentMapStore<>("callerCfgs", "callerCfgs",
+                        String::getBytes, String::new, b -> b, b -> b))
                 .setWriteDelaySeconds(0);
-        MapConfig callerCfgConfig = new MapConfig("callerCfg")
+        MapConfig callerCfgConfig = new MapConfig("callerCfgs")
                 .setMapStoreConfig(callerCfgStoreConfig);
         config.addMapConfig(callerCfgConfig);
+
+        MapStoreConfig tfsStoreConfig = new MapStoreConfig()
+                .setImplementation(new PersistentMapStore<>("topicFilterMap", "topicFilterMap",
+                        String::getBytes, String::new,
+                        SerializationUtil::serializeList, bytes -> {
+                            if (bytes == null) {
+                                return null;
+                            }
+                            return SerializationUtil.deserializeList(bytes);
+                        }))
+                .setWriteDelaySeconds(0);
+        MapConfig tfsConfig = new MapConfig("topicFilterMap")
+                .setMapStoreConfig(tfsStoreConfig);
+        config.addMapConfig(tfsConfig);
 
         config.setClusterName(clusterConfig.getClusterName());
         NetworkConfig networkConfig = config.getNetworkConfig();

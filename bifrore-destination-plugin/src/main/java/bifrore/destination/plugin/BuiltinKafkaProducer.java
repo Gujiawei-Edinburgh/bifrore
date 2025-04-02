@@ -1,9 +1,13 @@
 package bifrore.destination.plugin;
 
 import bifrore.commontype.Message;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 
 import java.util.HashMap;
@@ -11,12 +15,39 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
+@Slf4j
 public class BuiltinKafkaProducer implements IProducer{
     private final Map<String, Producer<byte[], byte[]>> callers = new HashMap<>();
+    private final Executor ioExecutor;
+
+    public BuiltinKafkaProducer() {
+        this.ioExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
+                Executors.newFixedThreadPool(1), "bifrore-kafka-flush");
+    }
+
     @Override
-    public CompletableFuture<Boolean> produce(Message message, String callerId) {
-        return null;
+    public CompletableFuture<Void> produce(Message message, String callerId) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        Producer<byte[], byte[]> producer = callers.get(callerId);
+        if (producer == null) {
+            log.warn("No producer found for callerId={}, silently return", callerId);
+            future.complete(null);
+            return future;
+        }
+        ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(
+                message.getTopic(), null, message.getPayload().toByteArray());
+        producer.send(record, (metadata, exception) -> {
+            if (exception != null) {
+                log.error("Failed to send message", exception);
+                future.completeExceptionally(exception);
+            }else {
+                future.complete(null);
+            }
+        });
+        return future;
     }
 
     @Override
@@ -31,10 +62,23 @@ public class BuiltinKafkaProducer implements IProducer{
     }
 
     @Override
-    public CompletableFuture<Boolean> closeCaller(String callerId) {
+    public CompletableFuture<Void> closeCaller(String callerId) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
         Producer<byte[], byte[]> producer = callers.remove(callerId);
-        producer.close();
-        return CompletableFuture.completedFuture(true);
+        if (producer != null) {
+            CompletableFuture.runAsync(producer::flush, this.ioExecutor)
+                    .whenComplete((v, e) -> {
+                        if (e != null) {
+                            future.completeExceptionally(e);
+                        }else {
+                            future.complete(null);
+                        }
+                        producer.close();
+                    });
+        }else {
+            future.completeExceptionally(new IllegalStateException("Caller not found: " + callerId));
+        }
+        return future;
     }
 
     @Override

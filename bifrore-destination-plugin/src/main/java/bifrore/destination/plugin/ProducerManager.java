@@ -38,7 +38,7 @@ public class ProducerManager {
     }
 
     public CompletableFuture<Void> produce(List<String> destinations, Message message) {
-        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         destinations.forEach(destination -> {
             String[] info = destination.split(IProducer.delimiter);
             IProducer producer = this.destinations.get(info[0]);

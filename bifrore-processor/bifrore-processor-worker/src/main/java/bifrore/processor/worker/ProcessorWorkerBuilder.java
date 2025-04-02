@@ -4,8 +4,6 @@ import bifrore.router.client.IRouterClient;
 import com.hazelcast.map.IMap;
 import org.pf4j.PluginManager;
 
-import java.util.Map;
-
 public class ProcessorWorkerBuilder {
     String nodeId;
     int clientNum;

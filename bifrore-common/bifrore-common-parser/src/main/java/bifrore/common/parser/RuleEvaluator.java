@@ -5,18 +5,20 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
+import lombok.extern.slf4j.Slf4j;
 import org.mvel2.MVEL;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 public class RuleEvaluator {
     private final Gson gson = new Gson();
 
     public Optional<Message> evaluate(Parsed parsed, Message message) {
         Map<String, Object> contextMap = createContextFromPayload(message);
-        if (!evaluateCondition(parsed, contextMap)) {
+        if (contextMap.isEmpty() || !evaluateCondition(parsed, contextMap)) {
             return Optional.empty();
         }
         return Optional.of(evaluateExpression(parsed, message, contextMap));
@@ -49,18 +51,22 @@ public class RuleEvaluator {
 
     private Map<String, Object> createContextFromPayload(Message message) {
         Map<String, Object> context = new HashMap<>();
-        JsonObject payload = parsePayload(message);
-        payload.entrySet().forEach(entry -> {
-            if (entry.getValue().isJsonPrimitive()) {
-                if (entry.getValue().getAsJsonPrimitive().isNumber()) {
-                    context.put(entry.getKey(), entry.getValue().getAsNumber().doubleValue());
-                } else if (entry.getValue().getAsJsonPrimitive().isBoolean()) {
-                    context.put(entry.getKey(), entry.getValue().getAsBoolean());
-                } else if (entry.getValue().getAsJsonPrimitive().isString()) {
-                    context.put(entry.getKey(), entry.getValue().getAsString());
+        try {
+            JsonObject payload = parsePayload(message);
+            payload.entrySet().forEach(entry -> {
+                if (entry.getValue().isJsonPrimitive()) {
+                    if (entry.getValue().getAsJsonPrimitive().isNumber()) {
+                        context.put(entry.getKey(), entry.getValue().getAsNumber().doubleValue());
+                    } else if (entry.getValue().getAsJsonPrimitive().isBoolean()) {
+                        context.put(entry.getKey(), entry.getValue().getAsBoolean());
+                    } else if (entry.getValue().getAsJsonPrimitive().isString()) {
+                        context.put(entry.getKey(), entry.getValue().getAsString());
+                    }
                 }
-            }
-        });
+            });
+        }catch (Exception e) {
+            log.error("Error parsing payload: {}", message, e);
+        }
         return context;
     }
 

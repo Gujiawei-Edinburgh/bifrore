@@ -10,7 +10,7 @@ public class ProcessorWorkerConfig {
     private String groupName;
     private String userName;
     private String password;
-    private boolean cleanStart;
+    private boolean cleanStart = true;
     private boolean ordered;
     private long sessionExpiryInterval;
     private String brokerHost;

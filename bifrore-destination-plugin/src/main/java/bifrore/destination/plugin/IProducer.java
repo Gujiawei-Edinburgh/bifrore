@@ -10,11 +10,11 @@ public interface IProducer extends ExtensionPoint {
 
     String delimiter = "/";
 
-    CompletableFuture<Boolean> produce(Message message, String callerId);
+    CompletableFuture<Void> produce(Message message, String callerId);
 
     CompletableFuture<String> initCaller(Map<String, String> callerCfgMap);
 
-    CompletableFuture<Boolean> closeCaller(String callerId);
+    CompletableFuture<Void> closeCaller(String callerId);
 
     String getName();
 

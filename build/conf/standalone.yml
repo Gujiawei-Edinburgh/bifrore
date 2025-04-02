@@ -12,7 +12,7 @@ processorWorkerConfig:
   groupName: bifrore
   userName: dev
   password: dev
-  cleanStart: false
+  cleanStart: true
   ordered: false
   sessionExpiryInterval: 3000
   brokerHost: 127.0.0.1

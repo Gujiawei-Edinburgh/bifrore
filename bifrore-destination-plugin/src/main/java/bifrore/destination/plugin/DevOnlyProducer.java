@@ -20,13 +20,12 @@ public class DevOnlyProducer implements IProducer {
     }
 
     @Override
-    public CompletableFuture<Boolean> produce(Message message, String callerId) {
+    public CompletableFuture<Void> produce(Message message, String callerId) {
         DevOnlyCaller caller = callers.get(callerId);
         if (caller == null) {
             log.warn("Caller not found: {}", callerId);
-            return CompletableFuture.completedFuture(false);
         }
-        return caller.produce(message);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
@@ -38,9 +37,15 @@ public class DevOnlyProducer implements IProducer {
     }
 
     @Override
-    public CompletableFuture<Boolean> closeCaller(String callerId) {
+    public CompletableFuture<Void> closeCaller(String callerId) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
         DevOnlyCaller caller = callers.remove(callerId);
-        return CompletableFuture.completedFuture(caller != null);
+        if (caller == null) {
+            future.completeExceptionally(new IllegalStateException("Caller not found: " + callerId));
+        }else {
+            future.complete(null);
+        }
+        return future;
     }
 
     @Override

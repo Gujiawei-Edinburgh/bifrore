@@ -263,6 +263,7 @@ class ProcessorWorker implements IProcessorWorker {
 
     private String convertToSharedSubscription(String topicFilter) {
         return "$share/" + groupName + "/" + topicFilter;
+        // return topicFilter;
     }
 
     private CompletableFuture<Void> handleEmptyClientList() {

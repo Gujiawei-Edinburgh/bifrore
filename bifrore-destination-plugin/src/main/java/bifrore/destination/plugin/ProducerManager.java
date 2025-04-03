@@ -1,7 +1,12 @@
 package bifrore.destination.plugin;
 
+import bifrore.commontype.MapMessage;
 import bifrore.commontype.Message;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.hazelcast.core.EntryEvent;
 import com.hazelcast.map.IMap;
+import com.hazelcast.map.listener.EntryAddedListener;
+import com.hazelcast.map.listener.EntryRemovedListener;
 import lombok.extern.slf4j.Slf4j;
 import org.pf4j.PluginManager;
 
@@ -19,10 +24,32 @@ public class ProducerManager {
     private final Map<String, IProducer> destinations;
     private final IMap<String, byte[]> callerCfgs;
 
+    static class EntryListenerImpl implements EntryAddedListener<String, byte[]>, EntryRemovedListener<String, byte[]> {
+        ProducerManager manager;
+        EntryListenerImpl(ProducerManager manager) {
+            this.manager = manager;
+        }
+        @Override
+        public void entryAdded(EntryEvent<String, byte[]> event) {
+            try {
+                this.manager.syncDestinationCreation(event.getKey(),
+                        MapMessage.parseFrom(event.getValue()).getMapMessageMap());
+            } catch (InvalidProtocolBufferException e) {
+                log.error("Fail to add the entry: {}", event.getKey(), e);
+            }
+        }
+
+        @Override
+        public void entryRemoved(EntryEvent<String, byte[]> event) {
+            this.manager.deleteDestinationCaller(event.getKey());
+        }
+    }
+
     public ProducerManager(PluginManager pluginMgr, IMap<String, byte[]> callerCfgs) {
         this.destinations = pluginMgr.getExtensions(IProducer.class).stream()
                         .collect(Collectors.toMap(IProducer::getName, e -> e));
         this.callerCfgs = callerCfgs;
+        this.callerCfgs.addEntryListener(new EntryListenerImpl(this), true);
         if (destinations.isEmpty()) {
             log.info("No producers registered, use DevOnly and Kafka instead");
             IProducer devOnlyProducer = new DevOnlyProducer();
@@ -70,6 +97,39 @@ public class ProducerManager {
                 callerCfgs.put(v, serializeMap(callerCfg));
                 future.complete(v);
             }
+        });
+        return future;
+    }
+
+    private void syncDestinationCreation(String callerId, Map<String, String> callerCfg) {
+        String destinationName = callerId.split(IProducer.delimiter)[0];
+        IProducer producer = destinations.get(destinationName);
+        if (producer == null) {
+            log.error("No producer registered for {}", callerId);
+            return;
+        }
+        producer.syncCaller(callerId, callerCfg).whenComplete((v, e) -> {
+            if (e != null) {
+                log.error("Failed to sync caller: {}", callerId, e);
+            }
+        });
+    }
+
+    public CompletableFuture<Void> deleteDestinationCaller(String destinationId) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        String destinationName = destinationId.split(IProducer.delimiter)[0];
+        IProducer producer = destinations.get(destinationName);
+        if (producer == null) {
+            future.completeExceptionally(new IllegalArgumentException("No producer registered for " + destinationName));
+            return future;
+        }
+        producer.closeCaller(destinationId).whenComplete((v, e) -> {
+           if (e != null) {
+               log.error("Failed to close caller: {}", destinationId, e);
+               future.completeExceptionally(e);
+           }else {
+               future.complete(v);
+           }
         });
         return future;
     }

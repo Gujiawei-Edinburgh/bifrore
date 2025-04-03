@@ -14,6 +14,8 @@ public interface IProducer extends ExtensionPoint {
 
     CompletableFuture<String> initCaller(Map<String, String> callerCfgMap);
 
+    CompletableFuture<Void> syncCaller(String callerId, Map<String, String> callerCfgMap);
+
     CompletableFuture<Void> closeCaller(String callerId);
 
     String getName();

@@ -12,6 +12,7 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -52,13 +53,16 @@ public class BuiltinKafkaProducer implements IProducer{
 
     @Override
     public CompletableFuture<String> initCaller(Map<String, String> callerCfgMap) {
-        Properties props = new Properties();
-        props.putAll(callerCfgMap);
-        props.putIfAbsent(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        props.putIfAbsent(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        String callerId = this.getName() + IProducer.delimiter + UUID.randomUUID();
-        callers.putIfAbsent(callerId, new KafkaProducer<>(props));
+        String callerId = createProducerInstance(callerCfgMap, Optional.empty());
         return CompletableFuture.completedFuture(callerId);
+    }
+
+    @Override
+    public CompletableFuture<Void> syncCaller(String callerId, Map<String, String> callerCfgMap) {
+        if (!callers.containsKey(callerId)) {
+            createProducerInstance(callerCfgMap, Optional.of(callerId));
+        }
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
@@ -68,12 +72,12 @@ public class BuiltinKafkaProducer implements IProducer{
         if (producer != null) {
             CompletableFuture.runAsync(producer::flush, this.ioExecutor)
                     .whenComplete((v, e) -> {
+                        producer.close();
                         if (e != null) {
                             future.completeExceptionally(e);
                         }else {
                             future.complete(null);
                         }
-                        producer.close();
                     });
         }else {
             future.completeExceptionally(new IllegalStateException("Caller not found: " + callerId));
@@ -89,5 +93,15 @@ public class BuiltinKafkaProducer implements IProducer{
     @Override
     public void close() {
         callers.forEach((callerId, producer) -> producer.close());
+    }
+
+    private String createProducerInstance(Map<String, String> callerCfgMap, Optional<String> callerIdPresent) {
+        Properties props = new Properties();
+        props.putAll(callerCfgMap);
+        props.putIfAbsent(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        props.putIfAbsent(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        String callerId = callerIdPresent.orElseGet(() -> this.getName() + IProducer.delimiter + UUID.randomUUID());
+        callers.putIfAbsent(callerId, new KafkaProducer<>(props));
+        return callerId;
     }
 }

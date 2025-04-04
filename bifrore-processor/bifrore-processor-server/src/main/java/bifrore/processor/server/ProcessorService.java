@@ -88,4 +88,46 @@ public class ProcessorService extends ProcessorServiceGrpc.ProcessorServiceImplB
             return future;
         }, responseObserver);
     }
+
+    @Override
+    public void deleteDestination(DeleteDestinationRequest request,
+                                  StreamObserver<DeleteDestinationResponse> responseObserver) {
+        response(metadata -> {
+            CompletableFuture<DeleteDestinationResponse> future = new CompletableFuture<>();
+            DeleteDestinationResponse.Builder builder = DeleteDestinationResponse.newBuilder();
+            builder.setReqId(request.getReqId());
+            processorWorker.removeDestination(request.getDestinationId())
+                    .whenComplete((v, e) -> {
+                       if (e != null) {
+                           log.error("Failed to delete destination: {}", request.getDestinationId(), e);
+                           builder.setCode(DeleteDestinationResponse.Code.ERROR).setReason(e.getMessage());
+                       }else {
+                           builder.setCode(DeleteDestinationResponse.Code.OK);
+                       }
+                        future.complete(builder.build());
+                    });
+            return future;
+        }, responseObserver);
+    }
+
+    @Override
+    public void listDestinations(ListDestinationRequest request, StreamObserver<ListDestinationResponse> responseObserver) {
+        response(metadata -> {
+            CompletableFuture<ListDestinationResponse> future = new CompletableFuture<>();
+            ListDestinationResponse.Builder builder = ListDestinationResponse.newBuilder();
+            builder.setReqId(request.getReqId());
+            processorWorker.listDestinations()
+                    .whenComplete((v, e) -> {
+                       if (e != null) {
+                           log.error("Failed to list destinations", e);
+                           builder.setCode(ListDestinationResponse.Code.ERROR).setReason(e.getMessage());
+                       } else {
+                           builder.setCode(ListDestinationResponse.Code.OK);
+                           builder.addAllDestinationIds(v);
+                       }
+                       future.complete(builder.build());
+                    });
+            return future;
+        }, responseObserver);
+    }
 }

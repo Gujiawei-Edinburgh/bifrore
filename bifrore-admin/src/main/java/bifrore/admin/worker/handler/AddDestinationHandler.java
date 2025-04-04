@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hubspot.jackson.datatype.protobuf.ProtobufModule;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Handler;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,7 +46,9 @@ public class AddDestinationHandler implements Handler<RoutingContext> {
                             }else if (v.getCode() == AddDestinationResponse.Code.OK) {
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.OK.code())
-                                        .end("Add destination successful, rule id: " + v.getDestinationId());
+                                        .putHeader("Content-Type", "application/json")
+                                        .end(JsonObject.of("destinationId", v.getDestinationId()).encode()
+                                        );
                             }else {
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())

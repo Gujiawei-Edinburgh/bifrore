@@ -3,7 +3,9 @@ package bifrore.starter;
 import bifrore.admin.worker.IAdminServer;
 import bifrore.admin.worker.handler.AddDestinationHandler;
 import bifrore.admin.worker.handler.AddRuleHandler;
+import bifrore.admin.worker.handler.DeleteDestinationHandler;
 import bifrore.admin.worker.handler.DeleteRuleHandler;
+import bifrore.admin.worker.handler.ListDestinationHandler;
 import bifrore.admin.worker.handler.ListRuleHandler;
 import bifrore.baserpc.*;
 import bifrore.common.store.PersistentMapStore;
@@ -178,6 +180,8 @@ public class StandaloneStarter extends BaseStarter {
                 .addHandler(new DeleteRuleHandler(routerClient))
                 .addHandler(new ListRuleHandler(routerClient))
                 .addHandler(new AddDestinationHandler(processorClient))
+                .addHandler(new DeleteDestinationHandler(processorClient))
+                .addHandler(new ListDestinationHandler(processorClient))
                 .build();
         rpcServer = rpcServerBuilder.build();
 

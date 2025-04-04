@@ -30,4 +30,14 @@ final class ProcessorClient implements IProcessorClient {
     public CompletableFuture<AddDestinationResponse> addDestination(AddDestinationRequest request) {
         return rpcClient.invoke(request, Collections.emptyMap(), ProcessorServiceGrpc.getAddDestinationMethod());
     }
+
+    @Override
+    public CompletableFuture<DeleteDestinationResponse> deleteDestination(DeleteDestinationRequest request) {
+        return rpcClient.invoke(request, Collections.emptyMap(), ProcessorServiceGrpc.getDeleteDestinationMethod());
+    }
+
+    @Override
+    public CompletableFuture<ListDestinationResponse> listDestination(ListDestinationRequest request) {
+        return rpcClient.invoke(request, Collections.emptyMap(), ProcessorServiceGrpc.getListDestinationsMethod());
+    }
 }

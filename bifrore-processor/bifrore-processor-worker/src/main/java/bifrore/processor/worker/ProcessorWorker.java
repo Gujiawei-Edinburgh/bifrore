@@ -130,6 +130,16 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     @Override
+    public CompletableFuture<Void> removeDestination(String destinationId) {
+        return producerManager.deleteDestinationCaller(destinationId);
+    }
+
+    @Override
+    public CompletableFuture<List<String>> listDestinations() {
+        return CompletableFuture.completedFuture(producerManager.listAllDestinations());
+    }
+
+    @Override
     public void close() {
         closeClients().thenAccept(v -> {
             clients.clear();

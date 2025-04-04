@@ -13,6 +13,8 @@ service ProcessorService {
   rpc subscribe(SubscribeRequest) returns (SubscribeResponse) {}
   rpc unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse) {}
   rpc addDestination(AddDestinationRequest) returns(AddDestinationResponse) {}
+  rpc deleteDestination(DeleteDestinationRequest) returns(DeleteDestinationResponse) {}
+  rpc listDestinations(ListDestinationRequest) returns(ListDestinationResponse) {}
 }
 
 message SubscribeRequest {
@@ -60,5 +62,35 @@ message AddDestinationResponse {
   uint64 reqId = 1;
   Code code = 2;
   string destinationId = 3;
+  optional string reason = 4;
+}
+
+message DeleteDestinationRequest {
+  uint64 reqId = 1;
+  string destinationId = 2;
+}
+
+message DeleteDestinationResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint64 reqId = 1;
+  Code code = 2;
+  optional string reason = 3;
+}
+
+message ListDestinationRequest {
+  uint64 reqId = 1;
+}
+
+message ListDestinationResponse {
+  enum Code {
+    OK = 0;
+    ERROR = 1;
+  }
+  uint64 reqId = 1;
+  Code code = 2;
+  repeated string destinationIds = 3;
   optional string reason = 4;
 }

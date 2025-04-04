@@ -96,11 +96,12 @@ public class BuiltinKafkaProducer implements IProducer{
     }
 
     private String createProducerInstance(Map<String, String> callerCfgMap, Optional<String> callerIdPresent) {
+        String callerId = callerIdPresent.orElseGet(() -> this.getName() + IProducer.delimiter + UUID.randomUUID());
         Properties props = new Properties();
         props.putAll(callerCfgMap);
         props.putIfAbsent(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         props.putIfAbsent(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        String callerId = callerIdPresent.orElseGet(() -> this.getName() + IProducer.delimiter + UUID.randomUUID());
+        props.put(ProducerConfig.CLIENT_ID_CONFIG, callerId);
         callers.putIfAbsent(callerId, new KafkaProducer<>(props));
         return callerId;
     }

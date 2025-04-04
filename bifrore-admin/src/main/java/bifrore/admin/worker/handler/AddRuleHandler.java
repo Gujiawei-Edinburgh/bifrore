@@ -6,6 +6,7 @@ import bifrore.router.client.IRouterClient;
 import bifrore.router.rpc.proto.AddRuleRequest;
 import bifrore.router.rpc.proto.AddRuleResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 
@@ -40,7 +41,7 @@ public class AddRuleHandler extends AbstractHandler {
                             } else if (v.getCode() == AddRuleResponse.Code.OK) {
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.OK.code())
-                                        .end("Add rule successful, rule id: " + v.getRuleId());
+                                        .end(JsonObject.of("ruleId", v.getRuleId()).encode());
                             }else {
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())

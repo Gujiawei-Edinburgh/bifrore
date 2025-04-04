@@ -72,7 +72,7 @@ public class ProducerManager {
             if (producer != null) {
                 futures.add(producer.produce(message, destination));
             }else {
-                log.warn("No producer registered for {}", destination);
+                log.warn("No producer registered for {}, ignore it silently", destination);
             }
         });
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
@@ -101,6 +101,30 @@ public class ProducerManager {
         return future;
     }
 
+    public CompletableFuture<Void> deleteDestinationCaller(String destinationId) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        String destinationName = destinationId.split(IProducer.delimiter)[0];
+        IProducer producer = destinations.get(destinationName);
+        if (producer == null) {
+            future.completeExceptionally(new IllegalArgumentException("No producer registered for " + destinationName));
+            return future;
+        }
+        producer.closeCaller(destinationId).whenComplete((v, e) -> {
+           if (e != null) {
+               log.error("Failed to close caller: {}", destinationId, e);
+               future.completeExceptionally(e);
+           }else {
+               callerCfgs.remove(destinationId);
+               future.complete(v);
+           }
+        });
+        return future;
+    }
+
+    public List<String> listAllDestinations() {
+        return new ArrayList<>(callerCfgs.keySet());
+    }
+
     private void syncDestinationCreation(String callerId, Map<String, String> callerCfg) {
         String destinationName = callerId.split(IProducer.delimiter)[0];
         IProducer producer = destinations.get(destinationName);
@@ -115,36 +139,17 @@ public class ProducerManager {
         });
     }
 
-    public CompletableFuture<Void> deleteDestinationCaller(String destinationId) {
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        String destinationName = destinationId.split(IProducer.delimiter)[0];
-        IProducer producer = destinations.get(destinationName);
-        if (producer == null) {
-            future.completeExceptionally(new IllegalArgumentException("No producer registered for " + destinationName));
-            return future;
-        }
-        producer.closeCaller(destinationId).whenComplete((v, e) -> {
-           if (e != null) {
-               log.error("Failed to close caller: {}", destinationId, e);
-               future.completeExceptionally(e);
-           }else {
-               future.complete(v);
-           }
-        });
-        return future;
-    }
-
     private CompletableFuture<Void> restoreCallers() {
-        List<CompletableFuture<String>> futures = new ArrayList<>();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         callerCfgs.forEach((destinationId, cfg) -> {
             String producerName = destinationId.split(IProducer.delimiter)[0];
             IProducer producer = destinations.get(producerName);
             try {
-                CompletableFuture<String> future = producer.initCaller(deserializeMap(cfg));
+                CompletableFuture<Void> future = producer.syncCaller(destinationId, deserializeMap(cfg));
                 futures.add(future);
             }catch (Exception ex) {
                 log.error("Failed to create caller for {}", producerName, ex);
-                CompletableFuture<String> future = new CompletableFuture<>();
+                CompletableFuture<Void> future = new CompletableFuture<>();
                 future.completeExceptionally(ex);
                 futures.add(future);
             }

@@ -56,14 +56,21 @@ curl -X PUT http://localhost:8088/destination \
            }
          }'
 ```
+The output will be like:
+```json
+{
+  "destinationId":"kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"
+}
+```
+Currently, BifroRE adds Kafka and DevOnly (output the messages to log) as its builtin producers.
 
 - Add A Rule and Test
 
 ```bash
  # Add a basic rule
- curl -X PUT http://localhost:8088/rule -d '{"expression": "select * from a", "destinations": ["DevOnly"]}'
+ curl -X PUT http://localhost:8088/rule -d '{"expression": "select * from a", "destinations": ["kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"]}'
  # Add a filtering and mapping rule
- curl -X PUT http://localhost:8088/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["DevOnly"]}'
+ curl -X PUT http://localhost:8088/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"]}'
  # List the existing rules
  curl http://localhost:8088/rule
 ```
@@ -73,9 +80,17 @@ curl -X PUT http://localhost:8088/destination \
 You can use any MQTT client tools (such as MQTTX) to send a message on the rule's topic. The rule engine will process 
 the message based on the given rule and send the processed messages to the destinations.
 
-- Delete a Rule
+- Delete a `Destination`
+```bash
+curl -X DELETE "http://localhost:8088/destination?destinationId=$YOUR_DESTINATION_ID
+```
+
+- Delete a `Rule`
 ```bash
 curl -X DELETE "http://localhost:8088/rule?ruleId=$YOUR_RULE_ID"
 ```
 The corresponding rule will be deleted. If all the rules are deleted for a given topicFilter, the rule engine will 
 unsubscribe the topicFilter.
+
+Note: The destinationId is part of the rule, if the user deletes a destinationId, the processing for this deleted 
+destination will be ignored silently.

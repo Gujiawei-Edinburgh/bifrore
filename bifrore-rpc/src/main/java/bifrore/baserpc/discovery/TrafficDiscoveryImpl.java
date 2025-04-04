@@ -11,7 +11,7 @@ import java.util.UUID;
 
 public class TrafficDiscoveryImpl implements ITrafficDiscovery {
     private final BehaviorSubject<Set<Server>> serverListSubject = BehaviorSubject.create();
-    private final UUID listerId;
+    private final UUID listenerId;
     private final IClusterManager clusterManager;
 
     public TrafficDiscoveryImpl(IClusterManager clusterManager) {
@@ -36,7 +36,7 @@ public class TrafficDiscoveryImpl implements ITrafficDiscovery {
                 serverListSubject.onNext(servers);
             }
         };
-        this.listerId = clusterManager.addClusterMemberListener(listener);
+        this.listenerId = clusterManager.addClusterMemberListener(listener);
     }
 
     public Observable<Set<Server>> start() {
@@ -44,7 +44,7 @@ public class TrafficDiscoveryImpl implements ITrafficDiscovery {
     }
 
     public void stop() {
-        this.clusterManager.removeClusterMemberListener(this.listerId);
+        this.clusterManager.removeClusterMemberListener(this.listenerId);
         this.serverListSubject.onComplete();
     }
 }

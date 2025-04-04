@@ -63,7 +63,7 @@ public final class RPCClientBuilder {
     }
 
     public IRPCClient build() {
-        Preconditions.checkNotNull(serviceUniqueName, "serviceUniqueName must be set");
+        Preconditions.checkNotNull(serviceUniqueName, "ServiceUniqueName must be set");
         NameResolverRegistry.getDefaultRegistry().register(ServiceNameResolverProvider.INSTANCE);
         ServiceNameResolverProvider.register(serviceUniqueName, clusterManager);
         NettyChannelBuilder channelBuilder = NettyChannelBuilder

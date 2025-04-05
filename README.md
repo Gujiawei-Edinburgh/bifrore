@@ -52,7 +52,7 @@ curl -X PUT http://localhost:8088/destination \
            "destinationType": "kafka",
            "cfg": {
              "bootstrap.servers": "127.0.0.1:9092",
-             "acks": "all",
+             "acks": "all"
            }
          }'
 ```

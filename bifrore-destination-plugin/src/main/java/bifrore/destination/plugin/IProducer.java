@@ -8,7 +8,7 @@ import java.util.concurrent.CompletableFuture;
 
 public interface IProducer extends ExtensionPoint {
 
-    String delimiter = "/";
+    String DELIMITER = "/";
 
     CompletableFuture<Void> produce(Message message, String callerId);
 

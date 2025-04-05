@@ -10,19 +10,25 @@ import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.ws.rs.Path;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 class AdminServer implements IAdminServer {
     private final int port;
     private final Router router;
+    private final HttpServer server;
 
     public AdminServer(AdminServerBuilder builder) {
         Vertx vertx = builder.vertx;
         router = Router.router(builder.vertx);
         port = builder.port;
         builder.handlers.forEach(this::addToRouter);
-        HttpServer server = vertx.createHttpServer();
-        server.requestHandler(router).listen(builder.port, asyncResult -> {
+        server = vertx.createHttpServer();
+    }
+
+    @Override
+    public void start() {
+        server.requestHandler(router).listen(port, asyncResult -> {
             if (asyncResult.succeeded()) {
                 log.info("Bifrore admin worker started on: {}", port);
             } else {
@@ -55,5 +61,12 @@ class AdminServer implements IAdminServer {
         }else {
             log.warn("No http method specified for http request handler: {}", handler.getClass().getName());
         }
+    }
+
+    @Override
+    public void stop() {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        server.close().onComplete(ar -> future.complete(null));
+        future.join();
     }
 }

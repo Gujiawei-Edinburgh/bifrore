@@ -4,6 +4,7 @@ import bifrore.common.parser.ParsedRule;
 import bifrore.common.parser.util.ParsedRuleHelper;
 import bifrore.common.parser.util.ParsedSerializeUtil;
 import bifrore.commontype.QoS;
+import bifrore.monitoring.metrics.SysMeter;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.rpc.proto.SubscribeRequest;
 import bifrore.processor.rpc.proto.SubscribeResponse;
@@ -24,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static bifrore.baserpc.UnaryResponse.response;
+import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
 @Slf4j
 public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
@@ -37,6 +39,10 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
         this.idMap = idMap;
         this.topicFilterMap = topicFilterMap;
         this.processorClient = processorClient;
+    }
+
+    public void start() {
+        SysMeter.INSTANCE.startGauge(RuleNumGauge, idMap::size);
     }
 
     @Override
@@ -252,6 +258,10 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
             future.complete(builder.build());
             return future;
         }, responseObserver);
+    }
+
+    public void stop() {
+        SysMeter.INSTANCE.stopGauge(RuleNumGauge);
     }
 
     private RuleMeta parseRuleMeta(byte[] ruleMetaInBytes) throws InvalidProtocolBufferException {

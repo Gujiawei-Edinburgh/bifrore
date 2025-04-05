@@ -1,6 +1,7 @@
 package bifrore.common.parser;
 
 import bifrore.commontype.Message;
+import bifrore.monitoring.metrics.SysMeter;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -11,6 +12,8 @@ import org.mvel2.MVEL;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+
+import static bifrore.monitoring.metrics.SysMetric.MessageParseFailureCount;
 
 @Slf4j
 public class RuleEvaluator {
@@ -65,6 +68,7 @@ public class RuleEvaluator {
                 }
             });
         }catch (Exception e) {
+            SysMeter.INSTANCE.recordCount(MessageParseFailureCount);
             log.error("Error parsing payload: {}", message, e);
         }
         return context;

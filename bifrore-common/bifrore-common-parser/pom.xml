@@ -17,6 +17,10 @@
             <artifactId>bifrore-router-rpc-definition</artifactId>
         </dependency>
         <dependency>
+            <groupId>bifrore</groupId>
+            <artifactId>bifrore-metrics</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-parser</artifactId>
         </dependency>

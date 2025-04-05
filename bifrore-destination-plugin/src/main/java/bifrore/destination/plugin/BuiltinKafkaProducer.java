@@ -1,6 +1,7 @@
 package bifrore.destination.plugin;
 
 import bifrore.commontype.Message;
+import bifrore.monitoring.metrics.SysMeter;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.extern.slf4j.Slf4j;
@@ -10,7 +11,9 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
@@ -18,6 +21,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+
+import static bifrore.monitoring.metrics.SysMetric.DestinationMissCount;
 
 @Slf4j
 public class BuiltinKafkaProducer implements IProducer{
@@ -34,6 +39,7 @@ public class BuiltinKafkaProducer implements IProducer{
         CompletableFuture<Void> future = new CompletableFuture<>();
         Producer<byte[], byte[]> producer = callers.get(callerId);
         if (producer == null) {
+            SysMeter.INSTANCE.recordCount(DestinationMissCount);
             log.warn("No producer found for callerId={}, silently return", callerId);
             future.complete(null);
             return future;
@@ -92,11 +98,14 @@ public class BuiltinKafkaProducer implements IProducer{
 
     @Override
     public void close() {
-        callers.forEach((callerId, producer) -> producer.close());
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        List<String> keys = new ArrayList<>(callers.keySet());
+        keys.forEach(callerId -> futures.add(closeCaller(callerId)));
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
     }
 
     private String createProducerInstance(Map<String, String> callerCfgMap, Optional<String> callerIdPresent) {
-        String callerId = callerIdPresent.orElseGet(() -> this.getName() + IProducer.delimiter + UUID.randomUUID());
+        String callerId = callerIdPresent.orElseGet(() -> this.getName() + IProducer.DELIMITER + UUID.randomUUID());
         Properties props = new Properties();
         props.putAll(callerCfgMap);
         props.putIfAbsent(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());

@@ -7,7 +7,11 @@ import bifrore.admin.worker.handler.DeleteDestinationHandler;
 import bifrore.admin.worker.handler.DeleteRuleHandler;
 import bifrore.admin.worker.handler.ListDestinationHandler;
 import bifrore.admin.worker.handler.ListRuleHandler;
-import bifrore.baserpc.*;
+import bifrore.baserpc.IClusterManager;
+import bifrore.baserpc.IRPCClient;
+import bifrore.baserpc.IRPCServer;
+import bifrore.baserpc.RPCClientBuilder;
+import bifrore.baserpc.RPCServerBuilder;
 import bifrore.common.store.PersistentMapStore;
 import bifrore.common.type.SerializationUtil;
 import bifrore.processor.client.IProcessorClient;
@@ -58,14 +62,16 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 @Slf4j
 public class StandaloneStarter extends BaseStarter {
     private IRPCServer rpcServer;
     private PluginManager pluginManager;
-    private IProcessorWorker processorWorker;
     private Thread promExporterPortThread;
+    private HazelcastInstance hz;
+    private IAdminServer adminServer;
+    private IRouterServer routerServer;
+    private IProcessorServer processorServer;
 
     @Override
     protected void init(StandaloneConfig config) {
@@ -75,7 +81,6 @@ public class StandaloneStarter extends BaseStarter {
         pluginManager = new DefaultPluginManager();
         pluginManager.loadPlugins();
         pluginManager.startPlugins();
-        HazelcastInstance hz;
         try {
             hz = buildHazelcastInstance(config.getClusterConfig());
         }catch (RocksDBException e) {
@@ -160,20 +165,20 @@ public class StandaloneStarter extends BaseStarter {
                 .routerClient(routerClient)
                 .callerCfgs(hz.getMap("callerCfgs"))
                 .pluginManager(pluginManager);
-        processorWorker = processorWorkerBuilder.build();
-        IProcessorServer.newBuilder()
+        IProcessorWorker processorWorker = processorWorkerBuilder.build();
+        processorServer = IProcessorServer.newBuilder()
                 .processorWorker(processorWorker)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IRouterServer.newBuilder()
+        routerServer = IRouterServer.newBuilder()
                 .idMap(hz.getMap("idMap"))
                 .topicFilterMap(hz.getMap("topicFilterMap"))
                 .processorClient(processorClient)
                 .rpcServerBuilder(rpcServerBuilder)
                 .build();
 
-        IAdminServer.newBuilder()
+        adminServer = IAdminServer.newBuilder()
                 .port(config.getAdminServerPort())
                 .vertx(vertx)
                 .addHandler(new AddRuleHandler(routerClient))
@@ -218,17 +223,23 @@ public class StandaloneStarter extends BaseStarter {
 
     public void start() {
         super.start();
+        adminServer.start();
+        routerServer.start();
+        processorServer.start();
         rpcServer.start();
-        processorWorker.start();
         promExporterPortThread.start();
         log.info("Standalone rule engine started");
     }
 
     public void stop() {
         rpcServer.shutdown();
+        adminServer.stop();
+        routerServer.stop();
+        processorServer.stop();
+        hz.shutdown();
         pluginManager.stopPlugins();
-        log.info("Standalone rule engine stopped");
         super.stop();
+        log.info("Standalone rule engine stopped");
     }
 
     private void printConfig(StandaloneConfig config) {

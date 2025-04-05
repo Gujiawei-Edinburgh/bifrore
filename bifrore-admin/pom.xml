@@ -41,6 +41,10 @@
             <artifactId>bifrore-processor-client</artifactId>
         </dependency>
         <dependency>
+            <groupId>bifrore</groupId>
+            <artifactId>bifrore-metrics</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>

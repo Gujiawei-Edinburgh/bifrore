@@ -2,6 +2,7 @@ package bifrore.destination.plugin;
 
 import bifrore.commontype.MapMessage;
 import bifrore.commontype.Message;
+import bifrore.monitoring.metrics.SysMeter;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.hazelcast.core.EntryEvent;
 import com.hazelcast.map.IMap;
@@ -18,11 +19,14 @@ import java.util.stream.Collectors;
 
 import static bifrore.common.type.SerializationUtil.deserializeMap;
 import static bifrore.common.type.SerializationUtil.serializeMap;
+import static bifrore.monitoring.metrics.SysMetric.DestinationNumGauge;
+import static bifrore.monitoring.metrics.SysMetric.ProducerMissCount;
 
 @Slf4j
 public class ProducerManager {
     private final Map<String, IProducer> destinations;
     private final IMap<String, byte[]> callerCfgs;
+    private final SysMeter meter = SysMeter.INSTANCE;
 
     static class EntryListenerImpl implements EntryAddedListener<String, byte[]>, EntryRemovedListener<String, byte[]> {
         ProducerManager manager;
@@ -57,21 +61,32 @@ public class ProducerManager {
             destinations.putIfAbsent(devOnlyProducer.getName(), new DevOnlyProducer());
             destinations.putIfAbsent(builtinKafkaProducer.getName(), new BuiltinKafkaProducer());
         }
+    }
+
+    public void start() {
         this.restoreCallers().whenComplete((v, e) -> {
             if (e != null) {
                 log.error("Failed to restore callers", e);
             }
         });
+        meter.startGauge(DestinationNumGauge, callerCfgs::size);
+    }
+
+    public void stop() {
+        destinations.values().forEach(IProducer::close);
+        meter.stopGauge(DestinationNumGauge);
+        log.info("Producers closed");
     }
 
     public CompletableFuture<Void> produce(List<String> destinations, Message message) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         destinations.forEach(destination -> {
-            String[] info = destination.split(IProducer.delimiter);
+            String[] info = destination.split(IProducer.DELIMITER);
             IProducer producer = this.destinations.get(info[0]);
             if (producer != null) {
                 futures.add(producer.produce(message, destination));
             }else {
+                meter.recordCount(ProducerMissCount);
                 log.warn("No producer registered for {}, ignore it silently", destination);
             }
         });
@@ -103,7 +118,7 @@ public class ProducerManager {
 
     public CompletableFuture<Void> deleteDestinationCaller(String destinationId) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        String destinationName = destinationId.split(IProducer.delimiter)[0];
+        String destinationName = destinationId.split(IProducer.DELIMITER)[0];
         IProducer producer = destinations.get(destinationName);
         if (producer == null) {
             future.completeExceptionally(new IllegalArgumentException("No producer registered for " + destinationName));
@@ -126,7 +141,7 @@ public class ProducerManager {
     }
 
     private void syncDestinationCreation(String callerId, Map<String, String> callerCfg) {
-        String destinationName = callerId.split(IProducer.delimiter)[0];
+        String destinationName = callerId.split(IProducer.DELIMITER)[0];
         IProducer producer = destinations.get(destinationName);
         if (producer == null) {
             log.error("No producer registered for {}", callerId);
@@ -142,7 +157,7 @@ public class ProducerManager {
     private CompletableFuture<Void> restoreCallers() {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         callerCfgs.forEach((destinationId, cfg) -> {
-            String producerName = destinationId.split(IProducer.delimiter)[0];
+            String producerName = destinationId.split(IProducer.DELIMITER)[0];
             IProducer producer = destinations.get(producerName);
             try {
                 CompletableFuture<Void> future = producer.syncCaller(destinationId, deserializeMap(cfg));
@@ -155,10 +170,5 @@ public class ProducerManager {
             }
         });
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-    }
-
-    public void close() {
-        destinations.values().forEach(IProducer::close);
-        log.info("Producers closed");
     }
 }

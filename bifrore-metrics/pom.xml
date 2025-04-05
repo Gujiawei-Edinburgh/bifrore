@@ -10,5 +10,11 @@
     </parent>
 
     <artifactId>bifrore-metrics</artifactId>
+    <dependencies>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+    </dependencies>
 
 </project>

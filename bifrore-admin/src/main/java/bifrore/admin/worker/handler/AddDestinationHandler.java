@@ -2,6 +2,7 @@ package bifrore.admin.worker.handler;
 
 import bifrore.admin.worker.http.AddDestinationHttpRequest;
 import bifrore.baserpc.clock.HLC;
+import bifrore.monitoring.metrics.SysMeter;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.rpc.proto.AddDestinationRequest;
 import bifrore.processor.rpc.proto.AddDestinationResponse;
@@ -16,6 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
 
+import static bifrore.monitoring.metrics.SysMetric.HttpAddDestinationCount;
+import static bifrore.monitoring.metrics.SysMetric.HttpAddDestinationFailureCount;
+
 @Path("/destination")
 @Slf4j
 public class AddDestinationHandler implements Handler<RoutingContext> {
@@ -29,6 +33,7 @@ public class AddDestinationHandler implements Handler<RoutingContext> {
     @PUT
     @Override
     public void handle(RoutingContext ctx) {
+        SysMeter.INSTANCE.recordCount(HttpAddDestinationCount);
         ctx.request().bodyHandler(body -> {
             String bodyContent = body.toString();
             try {
@@ -40,6 +45,7 @@ public class AddDestinationHandler implements Handler<RoutingContext> {
                                 .build())
                         .whenComplete((v, e) -> {
                             if (e != null) {
+                                SysMeter.INSTANCE.recordCount(HttpAddDestinationFailureCount);
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                         .end("Add destination failed, error: " + e.getMessage());
@@ -50,6 +56,7 @@ public class AddDestinationHandler implements Handler<RoutingContext> {
                                         .end(JsonObject.of("destinationId", v.getDestinationId()).encode()
                                         );
                             }else {
+                                SysMeter.INSTANCE.recordCount(HttpAddDestinationFailureCount);
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                         .end("Add destination failed, error: " + v.getReason());

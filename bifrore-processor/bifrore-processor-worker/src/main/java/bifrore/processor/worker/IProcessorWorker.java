@@ -20,5 +20,5 @@ public interface IProcessorWorker {
 
     CompletableFuture<List<String>> listDestinations();
 
-    void close();
+    void stop();
 }

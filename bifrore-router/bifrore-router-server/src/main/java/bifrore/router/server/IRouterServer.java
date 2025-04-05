@@ -4,4 +4,8 @@ public interface IRouterServer {
     static RouterServerBuilder newBuilder() {
         return new RouterServerBuilder();
     }
+
+    void start();
+
+    void stop();
 }

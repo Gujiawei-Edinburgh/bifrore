@@ -4,6 +4,7 @@ import bifrore.common.parser.AliasExpression;
 import bifrore.common.parser.ParsedRule;
 import bifrore.common.parser.exception.TopicFilterMissingException;
 import bifrore.common.parser.exception.UnsupportedSyntaxException;
+import bifrore.monitoring.metrics.SysMeter;
 import io.trino.sql.parser.ParsingOptions;
 import io.trino.sql.parser.SqlParser;
 import io.trino.sql.tree.*;
@@ -12,6 +13,9 @@ import org.mvel2.MVEL;
 import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
+
+import static bifrore.monitoring.metrics.SysMetric.RuleSyntaxErrorCount;
+import static bifrore.monitoring.metrics.SysMetric.RuleTopicFilterMissingCount;
 
 
 public class ParsedRuleHelper {
@@ -24,6 +28,7 @@ public class ParsedRuleHelper {
         Serializable compiledCondition = null;
         Map<String, AliasExpression> compiledAliasExpressions = new HashMap<>();
         if (querySpec.getFrom().isEmpty()) {
+            SysMeter.INSTANCE.recordCount(RuleTopicFilterMissingCount);
             throw new TopicFilterMissingException();
         }
         Relation fromClause = querySpec.getFrom().get();
@@ -31,6 +36,7 @@ public class ParsedRuleHelper {
         if (fromClause instanceof Table table) {
             topicFilter = table.getName().toString();
         } else {
+            SysMeter.INSTANCE.recordCount(RuleSyntaxErrorCount);
             throw new UnsupportedSyntaxException(fromClause.toString());
         }
         if (querySpec.getWhere().isPresent()) {

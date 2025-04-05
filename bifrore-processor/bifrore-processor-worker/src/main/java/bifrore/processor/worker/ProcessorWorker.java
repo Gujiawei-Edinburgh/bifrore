@@ -64,6 +64,7 @@ class ProcessorWorker implements IProcessorWorker {
     @Override
     public void start() {
         initProcessorWorker();
+        producerManager.start();
     }
 
     @Override
@@ -140,11 +141,11 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     @Override
-    public void close() {
+    public void stop() {
         closeClients().thenAccept(v -> {
             clients.clear();
-            producerManager.close();
-        });
+            producerManager.stop();
+        }).join();
     }
 
     private void initProcessorWorker() {

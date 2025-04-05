@@ -19,6 +19,14 @@ public class ProcessorService extends ProcessorServiceGrpc.ProcessorServiceImplB
         this.processorWorker = processorWorker;
     }
 
+    public void start() {
+        processorWorker.start();
+    }
+
+    public void stop() {
+        processorWorker.stop();
+    }
+
     @Override
     public void subscribe(SubscribeRequest request, StreamObserver<SubscribeResponse> responseObserver) {
         response(metadata -> {

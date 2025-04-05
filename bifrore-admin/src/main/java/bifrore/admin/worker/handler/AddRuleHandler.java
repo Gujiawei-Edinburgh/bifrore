@@ -2,6 +2,7 @@ package bifrore.admin.worker.handler;
 
 import bifrore.admin.worker.http.AddRuleHttpRequest;
 import bifrore.baserpc.clock.HLC;
+import bifrore.monitoring.metrics.SysMeter;
 import bifrore.router.client.IRouterClient;
 import bifrore.router.rpc.proto.AddRuleRequest;
 import bifrore.router.rpc.proto.AddRuleResponse;
@@ -12,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
+
+import static bifrore.monitoring.metrics.SysMetric.HttpAddRuleCount;
+import static bifrore.monitoring.metrics.SysMetric.HttpAddRuleFailureCount;
 
 @Path("/rule")
 @Slf4j
@@ -24,6 +28,7 @@ public class AddRuleHandler extends AbstractHandler {
     @PUT
     @Override
     public void handle(RoutingContext ctx) {
+        SysMeter.INSTANCE.recordCount(HttpAddRuleCount);
         ctx.request().bodyHandler(body -> {
             String bodyContent = body.toString();
             try {
@@ -35,6 +40,7 @@ public class AddRuleHandler extends AbstractHandler {
                                 .build())
                         .whenComplete((v, e) -> {
                             if (e != null) {
+                                SysMeter.INSTANCE.recordCount(HttpAddRuleFailureCount);
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                         .end("Add rule failed, error: " + e.getMessage());
@@ -43,6 +49,7 @@ public class AddRuleHandler extends AbstractHandler {
                                         .setStatusCode(HttpResponseStatus.OK.code())
                                         .end(JsonObject.of("ruleId", v.getRuleId()).encode());
                             }else {
+                                SysMeter.INSTANCE.recordCount(HttpAddRuleFailureCount);
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                         .end("Add rule failed, error:  " + v.getFailReason());

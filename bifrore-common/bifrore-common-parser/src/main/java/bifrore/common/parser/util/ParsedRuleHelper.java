@@ -7,7 +7,15 @@ import bifrore.common.parser.exception.UnsupportedSyntaxException;
 import bifrore.monitoring.metrics.SysMeter;
 import io.trino.sql.parser.ParsingOptions;
 import io.trino.sql.parser.SqlParser;
-import io.trino.sql.tree.*;
+
+import io.trino.sql.tree.AllColumns;
+import io.trino.sql.tree.Expression;
+import io.trino.sql.tree.Query;
+import io.trino.sql.tree.QuerySpecification;
+import io.trino.sql.tree.Relation;
+import io.trino.sql.tree.SelectItem;
+import io.trino.sql.tree.SingleColumn;
+import io.trino.sql.tree.Table;
 import org.mvel2.MVEL;
 
 import java.io.Serializable;

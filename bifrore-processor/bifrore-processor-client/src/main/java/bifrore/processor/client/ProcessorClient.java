@@ -1,7 +1,18 @@
 package bifrore.processor.client;
 
 import bifrore.baserpc.IRPCClient;
-import bifrore.processor.rpc.proto.*;
+
+import bifrore.processor.rpc.proto.AddDestinationRequest;
+import bifrore.processor.rpc.proto.AddDestinationResponse;
+import bifrore.processor.rpc.proto.DeleteDestinationRequest;
+import bifrore.processor.rpc.proto.DeleteDestinationResponse;
+import bifrore.processor.rpc.proto.ListDestinationRequest;
+import bifrore.processor.rpc.proto.ListDestinationResponse;
+import bifrore.processor.rpc.proto.ProcessorServiceGrpc;
+import bifrore.processor.rpc.proto.SubscribeRequest;
+import bifrore.processor.rpc.proto.SubscribeResponse;
+import bifrore.processor.rpc.proto.UnsubscribeRequest;
+import bifrore.processor.rpc.proto.UnsubscribeResponse;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;

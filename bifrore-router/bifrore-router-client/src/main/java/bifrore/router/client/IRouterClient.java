@@ -1,6 +1,13 @@
 package bifrore.router.client;
 
-import bifrore.router.rpc.proto.*;
+import bifrore.router.rpc.proto.AddRuleRequest;
+import bifrore.router.rpc.proto.AddRuleResponse;
+import bifrore.router.rpc.proto.DeleteRuleRequest;
+import bifrore.router.rpc.proto.DeleteRuleResponse;
+import bifrore.router.rpc.proto.ListRuleRequest;
+import bifrore.router.rpc.proto.ListRuleResponse;
+import bifrore.router.rpc.proto.ListTopicFilterResponse;
+import bifrore.router.rpc.proto.MatchRequest;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;

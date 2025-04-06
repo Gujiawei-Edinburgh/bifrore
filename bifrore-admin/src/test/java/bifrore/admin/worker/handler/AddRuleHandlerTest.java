@@ -5,12 +5,14 @@ import bifrore.router.rpc.proto.AddRuleResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonObject;
 import org.testng.annotations.Test;
 
 import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class AddRuleHandlerTest extends MockableTest {
 
@@ -30,14 +32,14 @@ public class AddRuleHandlerTest extends MockableTest {
     public void testAddRuleOk() {
         AddRuleHandler handler = new AddRuleHandler(client);
         when(client.addRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
-        String jsonBody = "{\"expression\":\"test expression\",\"destinations\":[\"log\"]}";
+        String jsonBody = "{\"expression\":\"test expression\",\"destinations\":[\"log/1\"]}";
         when(request.bodyHandler(any())).thenAnswer(invocation -> {
             ((Handler<Buffer>) invocation.getArguments()[0]).handle(Buffer.buffer(jsonBody));
             return null;
         });
         handler.handle(ctx);
         verify(response).setStatusCode(HttpResponseStatus.OK.code());
-        verify(response).end("{\"ruleIe\":\"testRuleId\"}");
+        verify(response).end(JsonObject.of("ruleId", "testRuleId").encode());
     }
 
     @Test

@@ -52,9 +52,7 @@ public class AddDestinationHandler implements Handler<RoutingContext> {
                             }else if (v.getCode() == AddDestinationResponse.Code.OK) {
                                 ctx.response()
                                         .setStatusCode(HttpResponseStatus.OK.code())
-                                        .putHeader("Content-Type", "application/json")
-                                        .end(JsonObject.of("destinationId", v.getDestinationId()).encode()
-                                        );
+                                        .end(JsonObject.of("destinationId", v.getDestinationId()).encode());
                             }else {
                                 SysMeter.INSTANCE.recordCount(HttpAddDestinationFailureCount);
                                 ctx.response()

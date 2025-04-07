@@ -30,8 +30,8 @@ public class AddRuleHandlerTest extends MockableTest {
 
     @Test
     public void testAddRuleOk() {
-        AddRuleHandler handler = new AddRuleHandler(client);
-        when(client.addRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
+        AddRuleHandler handler = new AddRuleHandler(routerClient);
+        when(routerClient.addRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
         String jsonBody = "{\"expression\":\"test expression\",\"destinations\":[\"log/1\"]}";
         when(request.bodyHandler(any())).thenAnswer(invocation -> {
             ((Handler<Buffer>) invocation.getArguments()[0]).handle(Buffer.buffer(jsonBody));
@@ -44,8 +44,8 @@ public class AddRuleHandlerTest extends MockableTest {
 
     @Test
     public void testAddRuleFailed() {
-        AddRuleHandler handler = new AddRuleHandler(client);
-        when(client.addRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
+        AddRuleHandler handler = new AddRuleHandler(routerClient);
+        when(routerClient.addRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
         String jsonBody = "{\"expression\":\"test expression\",\"destinations\":[\"log\"]}";
         when(request.bodyHandler(any())).thenAnswer(invocation -> {
             ((Handler<Buffer>) invocation.getArguments()[0]).handle(Buffer.buffer(jsonBody));
@@ -58,10 +58,10 @@ public class AddRuleHandlerTest extends MockableTest {
 
     @Test
     public void testAddRuleWithException() {
-        AddRuleHandler handler = new AddRuleHandler(client);
+        AddRuleHandler handler = new AddRuleHandler(routerClient);
         CompletableFuture<AddRuleResponse> future = new CompletableFuture<>();
         future.completeExceptionally(new RuntimeException("test error"));
-        when(client.addRule(any())).thenReturn(future);
+        when(routerClient.addRule(any())).thenReturn(future);
         String jsonBody = "{\"expression\":\"test expression\",\"destinations\":[\"log\"]}";
         when(request.bodyHandler(any())).thenAnswer(invocation -> {
             ((Handler<Buffer>) invocation.getArguments()[0]).handle(Buffer.buffer(jsonBody));
@@ -74,7 +74,7 @@ public class AddRuleHandlerTest extends MockableTest {
 
     @Test
     public void testPayloadDecodeError() {
-        AddRuleHandler handler = new AddRuleHandler(client);
+        AddRuleHandler handler = new AddRuleHandler(routerClient);
         String jsonBody = "error jsonBody";
         when(request.bodyHandler(any())).thenAnswer(invocation -> {
             ((Handler<Buffer>) invocation.getArguments()[0]).handle(Buffer.buffer(jsonBody));

@@ -26,8 +26,8 @@ public class DeleteRuleHandlerTest extends MockableTest {
 
     @Test
     public void testDeleteRuleOk() {
-        DeleteRuleHandler handler = new DeleteRuleHandler(client);
-        when(client.deleteRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
+        DeleteRuleHandler handler = new DeleteRuleHandler(routerClient);
+        when(routerClient.deleteRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
         MultiMap queryParams = MultiMap.caseInsensitiveMultiMap();
         queryParams.add("ruleId", "r1");
         when(ctx.queryParams()).thenReturn(queryParams);
@@ -37,7 +37,7 @@ public class DeleteRuleHandlerTest extends MockableTest {
 
     @Test
     public void testDeleteEmptyRule() {
-        DeleteRuleHandler handler = new DeleteRuleHandler(client);
+        DeleteRuleHandler handler = new DeleteRuleHandler(routerClient);
         MultiMap queryParams = MultiMap.caseInsensitiveMultiMap();
         when(ctx.queryParams()).thenReturn(queryParams);
         handler.handle(ctx);
@@ -46,8 +46,8 @@ public class DeleteRuleHandlerTest extends MockableTest {
 
     @Test
     public void testDeleteRuleFailed() {
-        DeleteRuleHandler handler = new DeleteRuleHandler(client);
-        when(client.deleteRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
+        DeleteRuleHandler handler = new DeleteRuleHandler(routerClient);
+        when(routerClient.deleteRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
         MultiMap queryParams = MultiMap.caseInsensitiveMultiMap();
         queryParams.add("ruleId", "r1");
         when(ctx.queryParams()).thenReturn(queryParams);
@@ -57,11 +57,11 @@ public class DeleteRuleHandlerTest extends MockableTest {
 
     @Test
     public void testDeleteEmptyRuleFailed() {
-        DeleteRuleHandler handler = new DeleteRuleHandler(client);
+        DeleteRuleHandler handler = new DeleteRuleHandler(routerClient);
         MultiMap queryParams = MultiMap.caseInsensitiveMultiMap();
         CompletableFuture<DeleteRuleResponse> future = new CompletableFuture<>();
         future.completeExceptionally(new RuntimeException("testException"));
-        when(client.deleteRule(any())).thenReturn(future);
+        when(routerClient.deleteRule(any())).thenReturn(future);
         queryParams.add("ruleId", "r1");
         when(ctx.queryParams()).thenReturn(queryParams);
         handler.handle(ctx);

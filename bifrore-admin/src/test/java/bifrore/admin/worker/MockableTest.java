@@ -1,5 +1,6 @@
 package bifrore.admin.worker;
 
+import bifrore.processor.client.IProcessorClient;
 import bifrore.router.client.IRouterClient;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
@@ -18,7 +19,9 @@ import static org.mockito.Mockito.when;
 public abstract class MockableTest {
     AutoCloseable closeable;
     @Mock
-    protected IRouterClient client;
+    protected IRouterClient routerClient;
+    @Mock
+    protected IProcessorClient processorClient;
     @Mock
     protected RoutingContext ctx;
     @Mock

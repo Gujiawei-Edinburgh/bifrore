@@ -41,8 +41,8 @@ public class ListRuleHandlerTest extends MockableTest {
 
     @Test
     public void testListRuleOk() {
-        ListRuleHandler handler = new ListRuleHandler(client);
-        when(client.listRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
+        ListRuleHandler handler = new ListRuleHandler(routerClient);
+        when(routerClient.listRule(any())).thenReturn(CompletableFuture.completedFuture(ok));
         handler.handle(ctx);
         try {
             String endString = objectMapper.writeValueAsString(new ListRuleHttpResponse(ok.getRulesList()));
@@ -55,18 +55,18 @@ public class ListRuleHandlerTest extends MockableTest {
 
     @Test
     public void testListRuleFailed() {
-        ListRuleHandler handler = new ListRuleHandler(client);
-        when(client.listRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
+        ListRuleHandler handler = new ListRuleHandler(routerClient);
+        when(routerClient.listRule(any())).thenReturn(CompletableFuture.completedFuture(failed));
         handler.handle(ctx);
         verify(response).setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code());
     }
 
     @Test
     public void testListRuleWithException() {
-        ListRuleHandler handler = new ListRuleHandler(client);
+        ListRuleHandler handler = new ListRuleHandler(routerClient);
         CompletableFuture<ListRuleResponse> future = new CompletableFuture<>();
         future.completeExceptionally(new RuntimeException("testException"));
-        when(client.listRule(any())).thenReturn(future);
+        when(routerClient.listRule(any())).thenReturn(future);
         handler.handle(ctx);
         verify(response).setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code());
     }

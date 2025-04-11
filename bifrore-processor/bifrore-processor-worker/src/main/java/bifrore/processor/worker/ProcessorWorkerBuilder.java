@@ -16,6 +16,7 @@ public class ProcessorWorkerBuilder {
     String host;
     int port;
     String clientPrefix;
+    String orderedTopicFilterPrefix = "$oshare";
     PluginManager pluginManager;
     IRouterClient routerClient;
     IMap<String, byte[]> callerCfgs;
@@ -52,6 +53,11 @@ public class ProcessorWorkerBuilder {
 
     public ProcessorWorkerBuilder ordered(boolean ordered) {
         this.ordered = ordered;
+        return this;
+    }
+
+    public ProcessorWorkerBuilder orderedTopicFilterPrefix(String orderedTopicFilterPrefix) {
+        this.orderedTopicFilterPrefix = orderedTopicFilterPrefix;
         return this;
     }
 

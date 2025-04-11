@@ -39,6 +39,8 @@ class ProcessorWorker implements IProcessorWorker {
     private final String host;
     private final int port;
     private final String clientPrefix;
+    private final boolean ordered;
+    private final String orderedTopicFilterPrefix;
     private final RuleEvaluator ruleEvaluator;
     private final ProducerManager producerManager;
     private final IRouterClient routerClient;
@@ -55,6 +57,8 @@ class ProcessorWorker implements IProcessorWorker {
         host = builder.host;
         port = builder.port;
         clientPrefix = builder.clientPrefix + "/" + builder.nodeId;
+        ordered = builder.ordered;
+        orderedTopicFilterPrefix = builder.orderedTopicFilterPrefix;
         producerManager = new ProducerManager(builder.pluginManager, builder.callerCfgs);
         routerClient = builder.routerClient;
         matchedRules = Caffeine.newBuilder()
@@ -275,8 +279,11 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     private String convertToSharedSubscription(String topicFilter) {
-        return "$share/" + groupName + "/" + topicFilter;
-        // return topicFilter;
+        if (!ordered) {
+            return "$share/" + groupName + "/" + topicFilter;
+        }else {
+            return orderedTopicFilterPrefix + "/" + groupName + "/" + topicFilter;
+        }
     }
 
     private CompletableFuture<Void> handleEmptyClientList() {

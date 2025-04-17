@@ -77,6 +77,10 @@ Currently, BifroRE adds Kafka and DevOnly (output the messages to log) as its bu
 
 - Send a message on topic `a`
 
+**NOTE** the `WHERE` and `SELECT` clauses for the rule depend on the payload's fields. Therefore, the message must be 
+JSON-decoded; otherwise, it will be dropped. If you're using MQTTX, the format should be as follows:
+![payload_format](docs/figures/payload_format.png)
+
 You can use any MQTT client tools (such as MQTTX) to send a message on the rule's topic. The rule engine will process 
 the message based on the given rule and send the processed messages to the destinations.
 
@@ -94,3 +98,17 @@ unsubscribe the topicFilter.
 
 Note: The destinationId is part of the rule, if the user deletes a destinationId, the processing for this deleted 
 destination will be ignored silently.
+
+# Messaging
+
+The source message comes from the MQTT broker cluster, and the rule engine service is connected via the MQTT protocol.  
+To ensure messages are not lost, the default `QoS` level is set to `QoS = 1`, meaning the message will be delivered **at least once**.
+
+For each message, multiple rules may match the message's topic, and a rule can have multiple destinations. The rule 
+engine will send an `ACK` back to the MQTT broker cluster only after the message has been delivered to all matched destinations.
+
+**NOTE**: The rule engine uses a plugin system, which allows users to implement customized plugins for delivering 
+messages to their target destinations. Therefore, the definition of "delivery" is user-defined.
+
+Currently, the rule engine includes built-in destinations for Kafka and development environments only. For the Kafka 
+destination, "delivery" is defined as the successful sending of the message to the Kafka cluster.

@@ -45,7 +45,7 @@ class ProcessorWorker implements IProcessorWorker {
     private final ProducerManager producerManager;
     private final IRouterClient routerClient;
     private final List<Mqtt5AsyncClient> clients = new ArrayList<>();
-    private final LoadingCache<String, CompletableFuture<List<Matched>>> matchedRules;
+    private final LoadingCache<String, CompletableFuture<List<Matched>>> matchedRuleCache;
 
     ProcessorWorker(ProcessorWorkerBuilder builder) {
         clientNum = builder.clientNum;
@@ -61,7 +61,7 @@ class ProcessorWorker implements IProcessorWorker {
         orderedTopicFilterPrefix = builder.orderedTopicFilterPrefix;
         producerManager = new ProducerManager(builder.pluginManager, builder.callerCfgs);
         routerClient = builder.routerClient;
-        matchedRules = Caffeine.newBuilder()
+        matchedRuleCache = Caffeine.newBuilder()
                 .maximumSize(100)
                 .build(topic -> routerClient.match(MatchRequest.newBuilder().setTopic(topic).build()));
         ruleEvaluator = new RuleEvaluator();
@@ -239,24 +239,18 @@ class ProcessorWorker implements IProcessorWorker {
                 .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()))
                 .build();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        matchedRules.get(message.getTopic())
+        matchedRuleCache.get(message.getTopic())
                 .whenComplete((matchedList, e) -> {
-                    CompletableFuture<Void> future = new CompletableFuture<>();
-                    futures.add(future);
+                    CompletableFuture<Void> matchFuture = new CompletableFuture<>();
+                    futures.add(matchFuture);
                     if (e != null) {
                         log.error("Failed to get matched rules: {}", published);
-                        future.completeExceptionally(e);
+                        matchFuture.completeExceptionally(e);
                     }else {
+                        matchFuture.complete(null);
                         matchedList.forEach(matched -> ruleEvaluator.evaluate(matched.parsed(), message).
-                                ifPresent(value -> producerManager.produce(matched.destinations(), value)
-                                        .whenComplete((v, ex) -> {
-                                            if (ex != null) {
-                                                log.error("Failed to send message to producers: {}", published, ex);
-                                                future.completeExceptionally(ex);
-                                            }else {
-                                                future.complete(null);
-                                            }
-                                })));
+                                ifPresent(value -> futures.add(producerManager
+                                        .produce(matched.destinations(), value))));
                     }
                 });
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((v,e) -> {

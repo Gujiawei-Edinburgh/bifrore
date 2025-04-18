@@ -112,6 +112,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                             idMap.putIfAbsent(ruleId, RuleMeta.newBuilder()
                                     .setPlaintextRule(request.getRule())
                                     .setTopicFilter(topicFilter)
+                                    .addAllDestinations(request.getDestinationsList())
                                     .build().toByteArray());
                             CompiledRule compiledRule = CompiledRule.newBuilder()
                                     .setRuleId(ruleId)

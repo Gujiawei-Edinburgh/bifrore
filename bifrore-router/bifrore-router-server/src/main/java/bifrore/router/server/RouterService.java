@@ -110,6 +110,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                             byte[] serializedParsed = ParsedSerializeUtil.serializeParsed(parsedRule.getParsed());
                             String ruleId = generateRuleId(request.getRule());
                             idMap.putIfAbsent(ruleId, RuleMeta.newBuilder()
+                                    .setRuleId(ruleId)
                                     .setPlaintextRule(request.getRule())
                                     .setTopicFilter(topicFilter)
                                     .addAllDestinations(request.getDestinationsList())

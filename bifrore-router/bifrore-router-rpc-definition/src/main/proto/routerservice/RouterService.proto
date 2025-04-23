@@ -17,9 +17,10 @@ service RouterService {
 }
 
 message RuleMeta {
-  string plaintextRule = 1;
-  string topicFilter = 2;
-  repeated string destinations = 3;
+  string ruleId = 1;
+  string plaintextRule = 2;
+  string topicFilter = 3;
+  repeated string destinations = 4;
 }
 
 message CompiledRule {

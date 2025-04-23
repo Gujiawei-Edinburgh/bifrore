@@ -1,6 +1,7 @@
 package bifrore.processor.worker;
 
 import bifrore.common.parser.RuleEvaluator;
+import bifrore.commontype.MapMessage;
 import bifrore.commontype.Message;
 import bifrore.commontype.QoS;
 import bifrore.destination.plugin.ProducerManager;
@@ -142,7 +143,7 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     @Override
-    public CompletableFuture<List<String>> listDestinations() {
+    public CompletableFuture<Map<String, MapMessage>> listDestinations() {
         return CompletableFuture.completedFuture(producerManager.listAllDestinations());
     }
 

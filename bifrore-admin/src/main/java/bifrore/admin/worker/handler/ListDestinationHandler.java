@@ -1,5 +1,6 @@
 package bifrore.admin.worker.handler;
 
+import bifrore.admin.worker.http.ListDestinationHttpResponse;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.rpc.proto.ListDestinationRequest;
 import bifrore.processor.rpc.proto.ListDestinationResponse;
@@ -36,9 +37,11 @@ public class ListDestinationHandler implements Handler<RoutingContext> {
                                .setStatusCode(HttpResponseStatus.INTERNAL_SERVER_ERROR.code())
                                .end("List destination failed, error: " + v.getReason());
                    }else {
+                       ListDestinationHttpResponse response =
+                               new ListDestinationHttpResponse(v.getDestinationMetaListList());
                        ctx.response().
                                setStatusCode(HttpResponseStatus.OK.code())
-                               .end(JsonObject.of("destinationIds", v.getDestinationIdsList()).encode());
+                               .end(response.toString());
                    }
                 });
     }

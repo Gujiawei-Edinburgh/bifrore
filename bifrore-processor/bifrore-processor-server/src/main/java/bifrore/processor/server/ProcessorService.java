@@ -2,21 +2,13 @@ package bifrore.processor.server;
 
 
 
-import bifrore.processor.rpc.proto.AddDestinationRequest;
-import bifrore.processor.rpc.proto.AddDestinationResponse;
-import bifrore.processor.rpc.proto.DeleteDestinationRequest;
-import bifrore.processor.rpc.proto.DeleteDestinationResponse;
-import bifrore.processor.rpc.proto.ListDestinationRequest;
-import bifrore.processor.rpc.proto.ListDestinationResponse;
-import bifrore.processor.rpc.proto.ProcessorServiceGrpc;
-import bifrore.processor.rpc.proto.SubscribeRequest;
-import bifrore.processor.rpc.proto.SubscribeResponse;
-import bifrore.processor.rpc.proto.UnsubscribeRequest;
-import bifrore.processor.rpc.proto.UnsubscribeResponse;
+import bifrore.processor.rpc.proto.*;
 import bifrore.processor.worker.IProcessorWorker;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static bifrore.baserpc.UnaryResponse.response;
@@ -142,7 +134,14 @@ public class ProcessorService extends ProcessorServiceGrpc.ProcessorServiceImplB
                            builder.setCode(ListDestinationResponse.Code.ERROR).setReason(e.getMessage());
                        } else {
                            builder.setCode(ListDestinationResponse.Code.OK);
-                           builder.addAllDestinationIds(v);
+                           List<DestinationMeta> metaList = new ArrayList<>();
+                           v.forEach((key, value) -> {
+                               DestinationMeta.Builder metaBuilder = DestinationMeta.newBuilder();
+                               metaBuilder.setDestinationId(key);
+                               metaBuilder.putAllCfg(value.getMapMessageMap());
+                               metaList.add(metaBuilder.build());
+                           });
+                           builder.addAllDestinationMetaList(metaList);
                        }
                        future.complete(builder.build());
                     });

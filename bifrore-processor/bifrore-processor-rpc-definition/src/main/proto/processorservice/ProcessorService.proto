@@ -84,6 +84,11 @@ message ListDestinationRequest {
   uint64 reqId = 1;
 }
 
+message DestinationMeta {
+  string destinationId = 1;
+  map<string, string> cfg = 2;
+}
+
 message ListDestinationResponse {
   enum Code {
     OK = 0;
@@ -91,6 +96,6 @@ message ListDestinationResponse {
   }
   uint64 reqId = 1;
   Code code = 2;
-  repeated string destinationIds = 3;
+  repeated DestinationMeta destinationMetaList = 3;
   optional string reason = 4;
 }

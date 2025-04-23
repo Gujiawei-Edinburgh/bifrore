@@ -1,5 +1,7 @@
 package bifrore.processor.worker;
 
+import bifrore.commontype.MapMessage;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -18,7 +20,7 @@ public interface IProcessorWorker {
 
     CompletableFuture<Void> removeDestination(String destinationId);
 
-    CompletableFuture<List<String>> listDestinations();
+    CompletableFuture<Map<String, MapMessage>> listDestinations();
 
     void stop();
 }

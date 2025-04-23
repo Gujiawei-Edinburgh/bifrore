@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.pf4j.PluginManager;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -136,8 +137,17 @@ public class ProducerManager {
         return future;
     }
 
-    public List<String> listAllDestinations() {
-        return new ArrayList<>(callerCfgs.keySet());
+    public Map<String, MapMessage> listAllDestinations() {
+        Map<String, MapMessage> snapshot = new HashMap<>();
+        callerCfgs.forEach((k,v) -> {
+            try {
+                MapMessage message = MapMessage.parseFrom(v);
+                snapshot.put(k, message);
+            } catch (InvalidProtocolBufferException e) {
+                log.error("Fail to parse the map message: {}", v, e);
+            }
+        });
+        return snapshot;
     }
 
     private void syncDestinationCreation(String callerId, Map<String, String> callerCfg) {

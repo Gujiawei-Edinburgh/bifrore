@@ -28,6 +28,7 @@ import static bifrore.monitoring.metrics.SysMetric.DestinationMissCount;
 public class BuiltinKafkaProducer implements IProducer{
     private final Map<String, Producer<byte[], byte[]>> callers = new HashMap<>();
     private final Executor ioExecutor;
+    private final String kafkaDelimiter = ".";
 
     public BuiltinKafkaProducer() {
         this.ioExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
@@ -45,7 +46,7 @@ public class BuiltinKafkaProducer implements IProducer{
             return future;
         }
         ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(
-                message.getTopic(), null, message.getPayload().toByteArray());
+                message.getTopic().replace(DELIMITER, kafkaDelimiter), null, message.getPayload().toByteArray());
         producer.send(record, (metadata, exception) -> {
             if (exception != null) {
                 log.error("Failed to send message", exception);

@@ -20,13 +20,15 @@ message RuleMeta {
   string ruleId = 1;
   string plaintextRule = 2;
   string topicFilter = 3;
-  repeated string destinations = 4;
+  string aliasedTopicFilter = 4;
+  repeated string destinations = 5;
 }
 
 message CompiledRule {
   string ruleId = 1;
   bytes expressionObj = 2;
-  repeated string destinations = 3;
+  string aliasedTopicFilter = 3;
+  repeated string destinations = 4;
 }
 
 message MatchRequest {

@@ -46,7 +46,7 @@ final class RouterClient implements IRouterClient {
                             CompiledRule compiledRule = CompiledRule.parseFrom(bytes);
                             Parsed parsed = ParsedSerializeUtil.deserializeParsed(compiledRule
                                     .getExpressionObj().toByteArray());
-                            return new Matched(parsed, compiledRule.getDestinationsList());
+                            return new Matched(parsed, compiledRule.getDestinationsList(), compiledRule.getAliasedTopicFilter());
                         } catch (Exception e) {
                             return null;
                         }

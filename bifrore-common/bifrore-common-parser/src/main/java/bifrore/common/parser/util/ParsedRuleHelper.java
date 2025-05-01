@@ -8,6 +8,7 @@ import bifrore.monitoring.metrics.SysMeter;
 import io.trino.sql.parser.ParsingOptions;
 import io.trino.sql.parser.SqlParser;
 
+import io.trino.sql.tree.AliasedRelation;
 import io.trino.sql.tree.AllColumns;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.Query;
@@ -41,8 +42,13 @@ public class ParsedRuleHelper {
         }
         Relation fromClause = querySpec.getFrom().get();
         String topicFilter;
+        String aliasedTopicFilter;
         if (fromClause instanceof Table table) {
             topicFilter = table.getName().toString();
+            aliasedTopicFilter = topicFilter;
+        } else if (fromClause instanceof AliasedRelation aliasedRelation) {
+            topicFilter = ((Table) aliasedRelation.getRelation()).getName().toString();
+            aliasedTopicFilter = aliasedRelation.getAlias().toString();
         } else {
             SysMeter.INSTANCE.recordCount(RuleSyntaxErrorCount);
             throw new UnsupportedSyntaxException(fromClause.toString());
@@ -65,6 +71,6 @@ public class ParsedRuleHelper {
                 compiledAliasExpressions.put(columns.toString(), new AliasExpression(columns.toString(), null));
             }
         }
-        return new ParsedRule(compiledCondition, compiledAliasExpressions, topicFilter);
+        return new ParsedRule(compiledCondition, compiledAliasExpressions, topicFilter, aliasedTopicFilter);
     }
 }

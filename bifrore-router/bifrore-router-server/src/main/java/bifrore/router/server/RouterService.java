@@ -120,11 +120,13 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                                     .setRuleId(ruleId)
                                     .setPlaintextRule(request.getRule())
                                     .setTopicFilter(topicFilter)
+                                    .setAliasedTopicFilter(parsedRule.getAliasedTopicFilter())
                                     .addAllDestinations(request.getDestinationsList())
                                     .build().toByteArray());
                             CompiledRule compiledRule = CompiledRule.newBuilder()
                                     .setRuleId(ruleId)
                                     .setExpressionObj(ByteString.copyFrom(serializedParsed))
+                                    .setAliasedTopicFilter(parsedRule.getAliasedTopicFilter())
                                     .addAllDestinations(request.getDestinationsList())
                                     .build();
                             while (true) {

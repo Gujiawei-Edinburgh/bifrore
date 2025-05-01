@@ -234,13 +234,12 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     private void handlePublishedMsg(Mqtt5Publish published) {
-        Message message = Message.newBuilder()
+        Message.Builder messageBuilder = Message.newBuilder()
                 .setQos(QoS.forNumber(published.getQos().getCode()))
                 .setTopic(published.getTopic().toString())
-                .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()))
-                .build();
+                .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()));
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        matchedRuleCache.get(message.getTopic())
+        matchedRuleCache.get(messageBuilder.getTopic())
                 .whenComplete((matchedList, e) -> {
                     CompletableFuture<Void> matchFuture = new CompletableFuture<>();
                     futures.add(matchFuture);
@@ -249,9 +248,12 @@ class ProcessorWorker implements IProcessorWorker {
                         matchFuture.completeExceptionally(e);
                     }else {
                         matchFuture.complete(null);
-                        matchedList.forEach(matched -> ruleEvaluator.evaluate(matched.parsed(), message).
-                                ifPresent(value -> futures.add(producerManager
-                                        .produce(matched.destinations(), value))));
+                        matchedList.forEach(matched -> {
+                            messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
+                            ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
+                                    ifPresent(value -> futures.add(producerManager
+                                            .produce(matched.destinations(), value)));
+                        });
                     }
                 });
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((v,e) -> {

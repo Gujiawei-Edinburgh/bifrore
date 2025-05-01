@@ -16,5 +16,6 @@ enum QoS{
 message Message {
   QoS qos = 1;
   string topic = 2;
-  bytes payload = 3;
+  string topicFilter = 3;
+  bytes payload = 4;
 }

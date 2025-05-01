@@ -21,13 +21,14 @@ import static bifrore.monitoring.metrics.SysMetric.MessageParseFailureCount;
 public class RuleEvaluator {
     private final Gson gson = new Gson();
 
-    public Optional<Message> evaluate(Parsed parsed, Message message) {
+    public Optional<Message> evaluate(Parsed parsed, Message.Builder messageBuilder) {
         Timer.Sample sampler = Timer.start();
-        Map<String, Object> contextMap = createContextFromPayload(message);
+        Map<String, Object> contextMap = createContextFromPayload(messageBuilder.getPayload());
         if (contextMap.isEmpty() || !evaluateCondition(parsed, contextMap)) {
             return Optional.empty();
         }
-        Optional<Message> evaluated = Optional.of(evaluateExpression(parsed, message, contextMap));
+
+        Optional<Message> evaluated = Optional.of(evaluateExpression(parsed, messageBuilder, contextMap));
         sampler.stop(SysMeter.INSTANCE.timer(EvaluatedLatency));
         return evaluated;
     }
@@ -39,28 +40,23 @@ public class RuleEvaluator {
         return (Boolean) MVEL.executeExpression(parsed.getCompiledCondition(), contextMap);
     }
 
-    private Message evaluateExpression(Parsed parsed, Message message, Map<String, Object> contextMap) {
-        Message.Builder builder = Message.newBuilder();
-        builder.setQos(message.getQos());
-        builder.setTopic(message.getTopic());
-        if (parsed.getCompiledAliasExpressions().containsKey("*")) {
-            builder.setPayload(message.getPayload());
-        }else {
+    private Message evaluateExpression(Parsed parsed, Message.Builder messageBuilder, Map<String, Object> contextMap) {
+        if (!parsed.getCompiledAliasExpressions().containsKey("*")) {
             Map<String, Object> mappedFields = new HashMap<>();
             for (Map.Entry<String, AliasExpression> entry : parsed.getCompiledAliasExpressions().entrySet()) {
                 Object newValue = MVEL.executeExpression(entry.getValue().getCompiledExpression(), contextMap);
                 mappedFields.put(entry.getValue().getAlias(), newValue);
             }
             byte[] jsonBytes = gson.toJson(mappedFields).getBytes();
-            builder.setPayload(ByteString.copyFrom(jsonBytes));
+            messageBuilder.setPayload(ByteString.copyFrom(jsonBytes));
         }
-        return builder.build();
+        return messageBuilder.build();
     }
 
-    private Map<String, Object> createContextFromPayload(Message message) {
+    private Map<String, Object> createContextFromPayload(ByteString msgPayload) {
         Map<String, Object> context = new HashMap<>();
         try {
-            JsonObject payload = parsePayload(message);
+            JsonObject payload = JsonParser.parseString(msgPayload.toStringUtf8()).getAsJsonObject();
             payload.entrySet().forEach(entry -> {
                 if (entry.getValue().isJsonPrimitive()) {
                     if (entry.getValue().getAsJsonPrimitive().isNumber()) {
@@ -74,13 +70,8 @@ public class RuleEvaluator {
             });
         }catch (Exception e) {
             SysMeter.INSTANCE.recordCount(MessageParseFailureCount);
-            log.error("Error parsing payload: {}", message, e);
+            log.error("Error parsing payload: {}", msgPayload, e);
         }
         return context;
-    }
-
-    private JsonObject parsePayload(Message message) {
-        String payloadStr = message.getPayload().toStringUtf8();
-        return JsonParser.parseString(payloadStr).getAsJsonObject();
     }
 }

@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Timer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -38,6 +39,10 @@ public class SysMeter {
 
     public void recordCount(SysMetric metric) {
         ((Counter)meters.get(metric)).increment();
+    }
+
+    public Timer timer(SysMetric metric) {
+        return (Timer) meters.get(metric);
     }
 
     public void startGauge(SysMetric metric, Supplier<Number> valueSupplier) {

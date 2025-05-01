@@ -6,6 +6,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.mvel2.MVEL;
 
@@ -13,6 +14,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
+import static bifrore.monitoring.metrics.SysMetric.EvaluatedLatency;
 import static bifrore.monitoring.metrics.SysMetric.MessageParseFailureCount;
 
 @Slf4j
@@ -20,11 +22,14 @@ public class RuleEvaluator {
     private final Gson gson = new Gson();
 
     public Optional<Message> evaluate(Parsed parsed, Message message) {
+        Timer.Sample sampler = Timer.start();
         Map<String, Object> contextMap = createContextFromPayload(message);
         if (contextMap.isEmpty() || !evaluateCondition(parsed, contextMap)) {
             return Optional.empty();
         }
-        return Optional.of(evaluateExpression(parsed, message, contextMap));
+        Optional<Message> evaluated = Optional.of(evaluateExpression(parsed, message, contextMap));
+        sampler.stop(SysMeter.INSTANCE.timer(EvaluatedLatency));
+        return evaluated;
     }
 
     private boolean evaluateCondition(Parsed parsed, Map<String, Object> contextMap) {

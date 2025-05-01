@@ -5,6 +5,7 @@ import bifrore.common.parser.util.ParsedRuleHelper;
 import bifrore.common.parser.util.ParsedSerializeUtil;
 import bifrore.commontype.QoS;
 import bifrore.monitoring.metrics.SysMeter;
+import bifrore.monitoring.metrics.SysMetric;
 import bifrore.processor.client.IProcessorClient;
 import bifrore.processor.rpc.proto.SubscribeRequest;
 import bifrore.processor.rpc.proto.SubscribeResponse;
@@ -28,6 +29,7 @@ import bifrore.router.server.util.TopicFilterUtil;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.grpc.stub.StreamObserver;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -38,6 +40,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static bifrore.baserpc.UnaryResponse.response;
+import static bifrore.monitoring.metrics.SysMetric.AddRuleLatency;
+import static bifrore.monitoring.metrics.SysMetric.ParsingRuleLatency;
 import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
 @Slf4j
@@ -85,11 +89,14 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
     @Override
     public void addRule(AddRuleRequest request, StreamObserver<AddRuleResponse> responseObserver) {
         response(metadata -> {
+            Timer.Sample addRuleSampler = Timer.start();
             CompletableFuture<AddRuleResponse> future = new CompletableFuture<>();
             AddRuleResponse.Builder builder = AddRuleResponse.newBuilder();
             builder.setReqId(request.getReqId());
             try {
+                Timer.Sample parsingSampler = Timer.start();
                 ParsedRule parsedRule = ParsedRuleHelper.getInstance(request.getRule());
+                parsingSampler.stop(SysMeter.INSTANCE.timer(ParsingRuleLatency));
                 String topicFilter = parsedRule.getTopicFilter();
                 processorClient.subscribe(SubscribeRequest.newBuilder()
                         .setReqId(request.getReqId())
@@ -147,6 +154,7 @@ public class RouterService extends RouterServiceGrpc.RouterServiceImplBase {
                         }
                     }
                     future.complete(builder.build());
+                    addRuleSampler.stop(SysMeter.INSTANCE.timer(AddRuleLatency));
                 });
             } catch (Exception e) {
                 log.error("Subscribe failed", e);

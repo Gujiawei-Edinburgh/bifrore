@@ -69,6 +69,8 @@ Currently, BifroRE adds Kafka and DevOnly (output the messages to log) as its bu
 ```bash
  # Add a basic rule
  curl -X PUT http://localhost:8088/rule -d '{"expression": "select * from a", "destinations": ["kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"]}'
+ # Add a basic rule with topicFilter aliasing
+ curl -X PUT http://localhost:8088/rule -d '{"expression": "select * from a as source_a", "destinations": ["kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"]}'
  # Add a filtering and mapping rule
  curl -X PUT http://localhost:8088/rule -d '{"expression": "select 2*h as new_height, 2*w as new_width from \"a/b/c\" where temp > 25", "destinations": ["kafka/bf488e92-d26c-45ba-8915-e82bd07b66f0"]}'
  # List the existing rules

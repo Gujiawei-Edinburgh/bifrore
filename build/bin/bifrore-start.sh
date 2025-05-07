@@ -44,7 +44,12 @@ CLASSPATH=$(echo "$LIB_DIR/*")
 if [ "x$LOG_DIR" = "x" ]; then
   LOG_DIR="$BASE_DIR/logs"
 fi
-mkdir -p "$LOG_DIR"
+# Data directory to use
+if [ "x$DATA_DIR" = "x" ]; then
+  DATA_DIR="$BASE_DIR/data"
+fi
+
+mkdir -p "$LOG_DIR" "$DATA_DIR"
 
 if [ "x$DATA_DIR" = "x" ]; then
   DATA_DIR="$BASE_DIR/data"
@@ -181,6 +186,7 @@ if [ "x$FOREGROUND_MODE" = "xtrue" ]; then
   exec "$JAVA" $JVM_HEAP_OPTS $JVM_PERF_OPTS "${JVM_GC[@]}" $EXTRA_JVM_OPTS \
     -cp "$CLASSPATH" \
     -DLOG_DIR="$LOG_DIR" \
+    -DDATA_DIR="$DATA_DIR" \
     -DCONF_DIR="$CONF_DIR" \
     -DDATA_DIR="$DATA_DIR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \
@@ -192,6 +198,7 @@ else
   nohup "$JAVA" $JVM_HEAP_OPTS $JVM_PERF_OPTS "${JVM_GC[@]}" $EXTRA_JVM_OPTS \
     -cp "$CLASSPATH" \
     -DLOG_DIR="$LOG_DIR" \
+    -DDATA_DIR="$DATA_DIR" \
     -DCONF_DIR="$CONF_DIR" \
     -DDATA_DIR="$DATA_DIR" \
     -Dlogback.configurationFile="$LOG_CONF_FILE" \

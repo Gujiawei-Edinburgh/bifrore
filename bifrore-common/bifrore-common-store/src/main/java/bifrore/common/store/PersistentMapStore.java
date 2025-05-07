@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 public class PersistentMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
+    private static String dataDirPrefix = System.getProperty("DATA_DIR");
     private final RocksDB rocksDB;
     private final Function<K, byte[]> keySerializer;
     private final Function<byte[], K> keyDeserializer;
@@ -40,7 +41,7 @@ public class PersistentMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V>
                 stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
         Metrics.gauge(storeName + "." + "rocksdb.block_cache_misses",
                 stat.getTickerCount(TickerType.BLOCK_CACHE_MISS));
-        this.rocksDB = RocksDB.open(options, dbPath);
+        this.rocksDB = RocksDB.open(options, this.dataDirPrefix + "/" + dbPath);
         this.keySerializer = keySerializer;
         this.keyDeserializer = keyDeserializer;
         this.valueSerializer = valueSerializer;

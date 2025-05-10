@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 public class PersistentMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V> {
-    private static String dataDirPrefix = System.getProperty("DATA_DIR");
+    private final String dataDirPrefix = System.getProperty("DATA_DIR", ".");
     private final RocksDB rocksDB;
     private final Function<K, byte[]> keySerializer;
     private final Function<byte[], K> keyDeserializer;

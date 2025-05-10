@@ -21,7 +21,9 @@ public enum SysMetric {
     DestinationMissCount("destination.miss.count", Meter.Type.COUNTER),
     DestinationNumGauge("destination.num.gauge", Meter.Type.GAUGE),
     // Evaluator related
-    EvaluatedLatency("matched.evaluated.latency", Meter.Type.TIMER),;
+    EvaluatedLatency("matched.evaluated.latency", Meter.Type.TIMER),
+    // Processor related
+    CachedTopicGauge("cached.topic.gauge", Meter.Type.GAUGE);
 
     public final String metricName;
     public final Meter.Type meterType;

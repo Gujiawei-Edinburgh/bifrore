@@ -5,11 +5,14 @@ import bifrore.commontype.MapMessage;
 import bifrore.commontype.Message;
 import bifrore.commontype.QoS;
 import bifrore.destination.plugin.ProducerManager;
+import bifrore.monitoring.metrics.SysMeter;
 import bifrore.router.client.IRouterClient;
 import bifrore.router.client.Matched;
 import bifrore.router.rpc.proto.MatchRequest;
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
+import com.github.benmanes.caffeine.cache.Scheduler;
 import com.google.protobuf.ByteString;
 import com.hivemq.client.mqtt.MqttClientTransportConfig;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
@@ -20,14 +23,24 @@ import com.hivemq.client.mqtt.mqtt5.message.connect.connack.Mqtt5ConnAckReasonCo
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish;
 import com.hivemq.client.mqtt.mqtt5.message.subscribe.Mqtt5Subscribe;
 import com.hivemq.client.mqtt.mqtt5.message.unsubscribe.Mqtt5Unsubscribe;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static bifrore.monitoring.metrics.SysMetric.CachedTopicGauge;
+import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
 @Slf4j
 class ProcessorWorker implements IProcessorWorker {
@@ -46,7 +59,8 @@ class ProcessorWorker implements IProcessorWorker {
     private final ProducerManager producerManager;
     private final IRouterClient routerClient;
     private final List<Mqtt5AsyncClient> clients = new ArrayList<>();
-    private final LoadingCache<String, CompletableFuture<List<Matched>>> matchedRuleCache;
+    private final AsyncLoadingCache<String, List<Matched>> matchedRuleCache;
+    private final ExecutorService matchExecutor;
 
     ProcessorWorker(ProcessorWorkerBuilder builder) {
         clientNum = builder.clientNum;
@@ -62,9 +76,28 @@ class ProcessorWorker implements IProcessorWorker {
         orderedTopicFilterPrefix = builder.orderedTopicFilterPrefix;
         producerManager = new ProducerManager(builder.pluginManager, builder.callerCfgs);
         routerClient = builder.routerClient;
+        matchExecutor = ExecutorServiceMetrics.monitor(Metrics.globalRegistry,
+                new ForkJoinPool(2, new ForkJoinPool.ForkJoinWorkerThreadFactory() {
+                    final AtomicInteger index = new AtomicInteger(0);
+
+                    @Override
+                    public ForkJoinWorkerThread newThread(ForkJoinPool pool) {
+                        ForkJoinWorkerThread worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool);
+                        worker.setName(String.format("topic-matcher-%d", index.incrementAndGet()));
+                        worker.setDaemon(false);
+                        return worker;
+                    }
+                }, null, false), "topic-matcher");
         matchedRuleCache = Caffeine.newBuilder()
+                .scheduler(Scheduler.systemScheduler())
                 .maximumSize(100)
-                .build(topic -> routerClient.match(MatchRequest.newBuilder().setTopic(topic).build()));
+                .expireAfterAccess(Duration.ofSeconds(30))
+                .expireAfterWrite(Duration.ofSeconds(60))
+                .executor(matchExecutor)
+                .buildAsync((key, executor) ->
+                        routerClient.match(MatchRequest.newBuilder().setTopic(key).build())
+                );
+        SysMeter.INSTANCE.startGauge(RuleNumGauge, matchedRuleCache.synchronous()::estimatedSize);
         ruleEvaluator = new RuleEvaluator();
     }
 
@@ -153,6 +186,8 @@ class ProcessorWorker implements IProcessorWorker {
             clients.clear();
             producerManager.stop();
         }).join();
+        matchExecutor.shutdown();
+        SysMeter.INSTANCE.stopGauge(CachedTopicGauge);
     }
 
     private void initProcessorWorker() {

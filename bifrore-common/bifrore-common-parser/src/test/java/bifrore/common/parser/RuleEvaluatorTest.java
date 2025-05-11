@@ -16,11 +16,10 @@ import java.util.Optional;
 import static org.testng.AssertJUnit.fail;
 
 public class RuleEvaluatorTest {
-    private final Message inputMessage = Message.newBuilder()
+    private final Message.Builder inputMessage = Message.newBuilder()
             .setQos(QoS.AT_LEAST_ONCE)
             .setTopic("testTopic")
-            .setPayload(ByteString.copyFrom("{\"height\": 5, \"pressure\": 10, \"temp\": 31}".getBytes()))
-            .build();
+            .setPayload(ByteString.copyFrom("{\"height\": 5, \"pressure\": 10, \"temp\": 31}".getBytes()));
     private final RuleEvaluator evaluator = new RuleEvaluator();
 
     private JsonObject getJsonObjectFromMessage(Message message) {

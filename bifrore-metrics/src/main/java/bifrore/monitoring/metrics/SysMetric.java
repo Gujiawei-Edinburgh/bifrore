@@ -24,6 +24,9 @@ public enum SysMetric {
     // Evaluator related
     EvaluatedLatency("matched.evaluated.latency", Meter.Type.TIMER),
     // Processor related
+    ProcessorInboundCount("processor.inbound.count", Meter.Type.COUNTER),
+    MatchRuleLatency("match.rule.latency", Meter.Type.TIMER),
+    HandleMessageLatency("handle.message.latency", Meter.Type.TIMER),
     CachedTopicGauge("cached.topic.gauge", Meter.Type.GAUGE);
 
     public final String metricName;

@@ -11,7 +11,6 @@ import bifrore.router.client.Matched;
 import bifrore.router.rpc.proto.MatchRequest;
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.google.protobuf.ByteString;
 import com.hivemq.client.mqtt.MqttClientTransportConfig;
@@ -24,6 +23,7 @@ import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish;
 import com.hivemq.client.mqtt.mqtt5.message.subscribe.Mqtt5Subscribe;
 import com.hivemq.client.mqtt.mqtt5.message.unsubscribe.Mqtt5Unsubscribe;
 import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.extern.slf4j.Slf4j;
 
@@ -40,6 +40,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static bifrore.monitoring.metrics.SysMetric.CachedTopicGauge;
+import static bifrore.monitoring.metrics.SysMetric.HandleMessageLatency;
+import static bifrore.monitoring.metrics.SysMetric.MatchRuleLatency;
+import static bifrore.monitoring.metrics.SysMetric.ProcessorInboundCount;
 import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
 @Slf4j
@@ -269,13 +272,17 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     private void handlePublishedMsg(Mqtt5Publish published) {
+        SysMeter.INSTANCE.recordCount(ProcessorInboundCount);
+        Timer.Sample handleSampler = Timer.start();
         Message.Builder messageBuilder = Message.newBuilder()
                 .setQos(QoS.forNumber(published.getQos().getCode()))
                 .setTopic(published.getTopic().toString())
                 .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()));
         List<CompletableFuture<Void>> futures = new ArrayList<>();
+        Timer.Sample matchSampler = Timer.start();
         matchedRuleCache.get(messageBuilder.getTopic())
                 .whenComplete((matchedList, e) -> {
+                    matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
                     CompletableFuture<Void> matchFuture = new CompletableFuture<>();
                     futures.add(matchFuture);
                     if (e != null) {
@@ -292,6 +299,7 @@ class ProcessorWorker implements IProcessorWorker {
                     }
                 });
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((v,e) -> {
+            handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
             if (e != null) {
                 log.error("Failed to handle published message: {}", published);
             }else {

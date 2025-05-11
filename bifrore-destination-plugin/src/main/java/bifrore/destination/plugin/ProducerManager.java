@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 import static bifrore.common.type.SerializationUtil.deserializeMap;
 import static bifrore.common.type.SerializationUtil.serializeMap;
 import static bifrore.monitoring.metrics.SysMetric.DestinationNumGauge;
+import static bifrore.monitoring.metrics.SysMetric.ProducerInboundCount;
 import static bifrore.monitoring.metrics.SysMetric.ProducerMissCount;
 
 @Slf4j
@@ -85,6 +86,7 @@ public class ProducerManager {
             String[] info = destination.split(IProducer.DELIMITER);
             IProducer producer = this.destinations.get(info[0]);
             if (producer != null) {
+                meter.recordCount(ProducerInboundCount);
                 futures.add(producer.produce(message, destination));
             }else {
                 meter.recordCount(ProducerMissCount);

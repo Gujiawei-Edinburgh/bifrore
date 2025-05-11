@@ -17,6 +17,7 @@ public enum SysMetric {
     MessageParseFailureCount("message.parse.failure.count", Meter.Type.COUNTER),
     ParsingRuleLatency("parsing.rule.latency", Meter.Type.TIMER),
     // Producer Related
+    ProducerInboundCount("producer.inbound.count", Meter.Type.COUNTER),
     ProducerMissCount("producer.miss.count", Meter.Type.COUNTER),
     DestinationMissCount("destination.miss.count", Meter.Type.COUNTER),
     DestinationNumGauge("destination.num.gauge", Meter.Type.GAUGE),

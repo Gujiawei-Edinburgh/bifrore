@@ -64,6 +64,9 @@ class ProcessorWorker implements IProcessorWorker {
     private final List<Mqtt5AsyncClient> clients = new ArrayList<>();
     private final AsyncLoadingCache<String, List<Matched>> matchedRuleCache;
     private final ExecutorService matchExecutor;
+    private final List<Mqtt5Publish> inboundQueue;
+    private final List<Boolean> rob;
+    private final Map<Mqtt5Publish, Integer> futureIndecies;
 
     ProcessorWorker(ProcessorWorkerBuilder builder) {
         clientNum = builder.clientNum;
@@ -274,15 +277,17 @@ class ProcessorWorker implements IProcessorWorker {
     private void handlePublishedMsg(Mqtt5Publish published) {
         SysMeter.INSTANCE.recordCount(ProcessorInboundCount);
         Timer.Sample handleSampler = Timer.start();
-        Message.Builder messageBuilder = Message.newBuilder()
-                .setQos(QoS.forNumber(published.getQos().getCode()))
-                .setTopic(published.getTopic().toString())
-                .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()));
+	this.inboundQueue.add(published);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        Timer.Sample matchSampler = Timer.start();
-        matchedRuleCache.get(messageBuilder.getTopic())
+	while (!inboundQueue.isEmpty()) {
+	    Mqtt5Publish queuedMsg = inboundQueue.poll();
+	    this.rob.add(false);
+            Message.Builder messageBuilder = Message.newBuilder()
+                .setQos(QoS.forNumber(queuedMsg.getQos().getCode()))
+                .setTopic(queuedMsg.getTopic().toString())
+                .setPayload(ByteString.copyFrom(queuedMsg.getPayloadAsBytes()));
+	    matchedRuleCache.get(messageBuilder.getTopic())
                 .whenComplete((matchedList, e) -> {
-                    matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
                     CompletableFuture<Void> matchFuture = new CompletableFuture<>();
                     futures.add(matchFuture);
                     if (e != null) {
@@ -290,14 +295,24 @@ class ProcessorWorker implements IProcessorWorker {
                         matchFuture.completeExceptionally(e);
                     }else {
                         matchFuture.complete(null);
-                        matchedList.forEach(matched -> {
-                            messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
-                            ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
-                                    ifPresent(value -> futures.add(producerManager
-                                            .produce(matched.destinations(), value)));
-                        });
                     }
+		    int idx = this.futureIndecies.get(queuedMsg);
+		    rob[idx] = true;
+		    rob.remove(idx);
+		    if (idx == 0) {
+			Iterator<Integer> itr = this.rob.iterator();
+			while (itr.hasNext()) {
+			    boolean isDone = itr.next();
+			    if (isDone) {
+			    	// fire matched list
+				fireMatchedList(matchedList, published, futures);
+			    } else {
+			    	break;
+			    }
+			}
+		    }
                 });
+	}
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((v,e) -> {
             handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
             if (e != null) {
@@ -305,6 +320,18 @@ class ProcessorWorker implements IProcessorWorker {
             }else {
                 published.acknowledge();
             }
+        });
+    }
+
+    private CompletableFuture<Void> fireMatchedList(List<Matched> matchedList, Mqtt5Publish message, List<CompletableFuture<Void>> futures) {
+            Message.Builder messageBuilder = Message.newBuilder()
+                .setQos(QoS.forNumber(message.getQos().getCode()))
+                .setTopic(message.getTopic().toString())
+                .setPayload(ByteString.copyFrom(message.getPayloadAsBytes()));
+	matchedList.forEach(matched -> {
+	       	messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
+                ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
+			ifPresent(value -> futures.add(producerManager.produce(matched.destinations(), value)));
         });
     }
 

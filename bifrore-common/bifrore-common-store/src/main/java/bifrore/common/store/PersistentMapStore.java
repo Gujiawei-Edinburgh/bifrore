@@ -34,9 +34,8 @@ public class PersistentMapStore<K, V> implements MapStore<K, V>, MapLoader<K, V>
                               Function<V, byte[]> valueSerializer,
                               Function<byte[], V> valueDeserializer) throws RocksDBException {
         RocksDB.loadLibrary();
-        Options options = new Options().setCreateIfMissing(true);
         Statistics stat = new Statistics();
-        options.setStatistics(stat);
+        Options options = new Options().setCreateIfMissing(true).setAllowMmapReads(true).setStatistics(stat);
         Metrics.gauge(storeName + "." + "rocksdb.block_cache_hits",
                 stat.getTickerCount(TickerType.BLOCK_CACHE_HIT));
         Metrics.gauge(storeName + "." + "rocksdb.block_cache_misses",

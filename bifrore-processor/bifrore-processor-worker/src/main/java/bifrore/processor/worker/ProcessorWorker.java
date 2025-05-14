@@ -13,6 +13,7 @@ import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.google.protobuf.ByteString;
+import com.hivemq.client.mqtt.MqttClientExecutorConfig;
 import com.hivemq.client.mqtt.MqttClientTransportConfig;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5Client;
@@ -25,23 +26,29 @@ import com.hivemq.client.mqtt.mqtt5.message.unsubscribe.Mqtt5Unsubscribe;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
+import io.reactivex.schedulers.Schedulers;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static bifrore.monitoring.metrics.SysMetric.CachedTopicGauge;
 import static bifrore.monitoring.metrics.SysMetric.HandleMessageLatency;
-import static bifrore.monitoring.metrics.SysMetric.MatchRuleLatency;
 import static bifrore.monitoring.metrics.SysMetric.ProcessorInboundCount;
 import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
@@ -64,6 +71,69 @@ class ProcessorWorker implements IProcessorWorker {
     private final List<Mqtt5AsyncClient> clients = new ArrayList<>();
     private final AsyncLoadingCache<String, List<Matched>> matchedRuleCache;
     private final ExecutorService matchExecutor;
+    private final TaskTracker taskTracker = new TaskTracker();
+
+    class PublishMessageConsumer implements Consumer<Mqtt5Publish> {
+        private final Queue<Mqtt5Publish> inboundQueue;
+        private final List<Optional<List<Matched>>> rob;
+        private final Map<Mqtt5Publish, Integer> robEntryIndex;
+
+        public PublishMessageConsumer() {
+            this.inboundQueue = new LinkedList<>();
+            this.rob = new LinkedList<>();
+            this.robEntryIndex = new HashMap<>();
+        }
+
+        @Override
+        public void accept(Mqtt5Publish published) {
+            SysMeter.INSTANCE.recordCount(ProcessorInboundCount);
+            Timer.Sample handleSampler = Timer.start();
+            this.inboundQueue.add(published);
+            this.rob.add(Optional.empty());
+            robEntryIndex.put(published, rob.size() - 1);
+            taskTracker.track(published);
+            while (!inboundQueue.isEmpty()) {
+                Mqtt5Publish queuedMsg = inboundQueue.poll();
+                matchedRuleCache.get(queuedMsg.getTopic().toString())
+                        .whenComplete((matchedList, e) -> {
+                            CompletableFuture<Void> matchFuture = taskTracker.getFutures(queuedMsg).get(0);
+                            if (e != null) {
+                                log.error("Failed to get matched rules: {}", published);
+                                matchFuture.completeExceptionally(e);
+                                matchedList = List.of();
+                            }else {
+                                matchFuture.complete(null);
+                            }
+                            int idx = this.robEntryIndex.get(queuedMsg);
+                            rob.set(idx, Optional.of(matchedList));
+                            if (idx == 0) {
+                                rob.remove(0);
+                                robEntryIndex.remove(queuedMsg);
+                                fireMatchedList(matchedList, published);
+                                Iterator<Optional<List<Matched>>> itr = this.rob.iterator();
+                                while (itr.hasNext()) {
+                                    Optional<List<Matched>> robResult = itr.next();
+                                    if (robResult.isPresent()) {
+                                        fireMatchedList(robResult.get(), published);
+                                        itr.remove();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+            }
+            CompletableFuture.allOf(taskTracker.getFutures(published).toArray(new CompletableFuture[0]))
+                    .whenComplete((v,e) -> {
+                handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
+                if (e != null) {
+                    log.error("Failed to handle published message: {}", published);
+                }else {
+                    published.acknowledge();
+                }
+            });
+        }
+    }
 
     ProcessorWorker(ProcessorWorkerBuilder builder) {
         clientNum = builder.clientNum;
@@ -123,7 +193,7 @@ class ProcessorWorker implements IProcessorWorker {
                     .topicFilter(convertToSharedSubscription(topicFilter))
                     .noLocal(false)
                     .build();
-            asyncClient.subscribe(mqtt5Subscribe, this::handlePublishedMsg, true)
+            asyncClient.subscribe(mqtt5Subscribe, new PublishMessageConsumer(), true)
                     .whenComplete(((mqtt5SubAck, error) -> {
                         if (error != null) {
                             future.completeExceptionally(error);
@@ -207,6 +277,9 @@ class ProcessorWorker implements IProcessorWorker {
                                 .mqttConnectTimeout(10, TimeUnit.SECONDS)
                                 .socketConnectTimeout(10, TimeUnit.SECONDS)
                                 .build())
+                        .executorConfig(MqttClientExecutorConfig.builder()
+                                .applicationScheduler(Schedulers.single())
+                                .build())
                         .buildAsync();
                 CompletableFuture<Void> future = new CompletableFuture<>();
                 futures.add(future);
@@ -236,7 +309,7 @@ class ProcessorWorker implements IProcessorWorker {
                                     .topicFilter(convertToSharedSubscription(topicFilter))
                                     .noLocal(false)
                                     .build();
-                            asyncClient.subscribe(mqtt5Subscribe, this::handlePublishedMsg)
+                            asyncClient.subscribe(mqtt5Subscribe, new PublishMessageConsumer(), true)
                                     .whenComplete(((mqtt5SubAck, error) -> {
                                         if (error != null) {
                                             log.error("Failed to subscribe: {}", mqtt5Subscribe);
@@ -271,40 +344,15 @@ class ProcessorWorker implements IProcessorWorker {
         });
     }
 
-    private void handlePublishedMsg(Mqtt5Publish published) {
-        SysMeter.INSTANCE.recordCount(ProcessorInboundCount);
-        Timer.Sample handleSampler = Timer.start();
+    private void fireMatchedList(List<Matched> matchedList, Mqtt5Publish message) {
         Message.Builder messageBuilder = Message.newBuilder()
-                .setQos(QoS.forNumber(published.getQos().getCode()))
-                .setTopic(published.getTopic().toString())
-                .setPayload(ByteString.copyFrom(published.getPayloadAsBytes()));
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        Timer.Sample matchSampler = Timer.start();
-        matchedRuleCache.get(messageBuilder.getTopic())
-                .whenComplete((matchedList, e) -> {
-                    matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
-                    CompletableFuture<Void> matchFuture = new CompletableFuture<>();
-                    futures.add(matchFuture);
-                    if (e != null) {
-                        log.error("Failed to get matched rules: {}", published);
-                        matchFuture.completeExceptionally(e);
-                    }else {
-                        matchFuture.complete(null);
-                        matchedList.forEach(matched -> {
-                            messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
-                            ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
-                                    ifPresent(value -> futures.add(producerManager
-                                            .produce(matched.destinations(), value)));
-                        });
-                    }
-                });
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((v,e) -> {
-            handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
-            if (e != null) {
-                log.error("Failed to handle published message: {}", published);
-            }else {
-                published.acknowledge();
-            }
+                .setQos(QoS.forNumber(message.getQos().getCode()))
+                .setTopic(message.getTopic().toString())
+                .setPayload(ByteString.copyFrom(message.getPayloadAsBytes()));
+        matchedList.forEach(matched -> {
+	       	messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
+                ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
+			ifPresent(value -> taskTracker.track(message, producerManager.produce(matched.destinations(), value)));
         });
     }
 

@@ -49,6 +49,7 @@ import java.util.function.Consumer;
 
 import static bifrore.monitoring.metrics.SysMetric.CachedTopicGauge;
 import static bifrore.monitoring.metrics.SysMetric.HandleMessageLatency;
+import static bifrore.monitoring.metrics.SysMetric.MatchRuleLatency;
 import static bifrore.monitoring.metrics.SysMetric.ProcessorInboundCount;
 import static bifrore.monitoring.metrics.SysMetric.RuleNumGauge;
 
@@ -78,7 +79,7 @@ class ProcessorWorker implements IProcessorWorker {
         private final List<Optional<List<Matched>>> rob;
         private final Map<Mqtt5Publish, Integer> robEntryIndex;
 
-        public PublishMessageConsumer() {
+        PublishMessageConsumer() {
             this.inboundQueue = new LinkedList<>();
             this.rob = new LinkedList<>();
             this.robEntryIndex = new HashMap<>();
@@ -94,8 +95,10 @@ class ProcessorWorker implements IProcessorWorker {
             taskTracker.track(published);
             while (!inboundQueue.isEmpty()) {
                 Mqtt5Publish queuedMsg = inboundQueue.poll();
+                Timer.Sample matchSampler = Timer.start();
                 matchedRuleCache.get(queuedMsg.getTopic().toString())
                         .whenComplete((matchedList, e) -> {
+                            matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
                             CompletableFuture<Void> matchFuture = taskTracker.getFutures(queuedMsg).get(0);
                             if (e != null) {
                                 log.error("Failed to get matched rules: {}", published);
@@ -349,11 +352,25 @@ class ProcessorWorker implements IProcessorWorker {
                 .setQos(QoS.forNumber(message.getQos().getCode()))
                 .setTopic(message.getTopic().toString())
                 .setPayload(ByteString.copyFrom(message.getPayloadAsBytes()));
+        CompletableFuture<Void> produceFuture = taskTracker.getFutures(message).get(1);
+        if (matchedList == null || matchedList.isEmpty()) {
+            produceFuture.complete(null);
+        }
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         matchedList.forEach(matched -> {
 	       	messageBuilder.setTopicFilter(matched.aliasedTopicFilter());
                 ruleEvaluator.evaluate(matched.parsed(), messageBuilder).
-			ifPresent(value -> taskTracker.track(message, producerManager.produce(matched.destinations(), value)));
+			ifPresent(value -> futures.add( producerManager.produce(matched.destinations(), value)));
         });
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .whenComplete((v, e) -> {
+                   if (e != null) {
+                       log.error("Failed to produce published message: {}", message, e);
+                       produceFuture.completeExceptionally(e);
+                   } else {
+                       produceFuture.complete(null);
+                   }
+                });
     }
 
     private CompletableFuture<Void> closeClients() {

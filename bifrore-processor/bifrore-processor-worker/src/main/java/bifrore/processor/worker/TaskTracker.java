@@ -12,15 +12,8 @@ public class TaskTracker {
     private Map<Mqtt5Publish, List<CompletableFuture<Void>>> futureMap = new HashMap<>();
 
     public void track(Mqtt5Publish publish) {
-        CompletableFuture<Void> matchFuture = new CompletableFuture<>();
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        futures.add(matchFuture);
+        List<CompletableFuture<Void>> futures = List.of(new CompletableFuture<>(), new CompletableFuture<>());
         futureMap.put(publish, futures);
-    }
-
-    public void track(Mqtt5Publish publish, CompletableFuture<Void> future) {
-        List<CompletableFuture<Void>> futures = futureMap.get(publish);
-        futures.add(future);
     }
 
     public List<CompletableFuture<Void>> getFutures(Mqtt5Publish publish) {

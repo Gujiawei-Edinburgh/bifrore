@@ -2,10 +2,6 @@ ARG BASE_IMAGE=openjdk:17-slim
 
 FROM ${BASE_IMAGE} AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl net-tools lsof netcat procps less \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY bifrore-*-standalone.tar.gz /
 RUN mkdir /bifrore && tar -zxvf /bifrore-*-standalone.tar.gz --strip-components 1 -C /bifrore \
     && rm -rf /bifrore-*-standalone.tar.gz

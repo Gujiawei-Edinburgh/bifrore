@@ -232,10 +232,10 @@ public class StandaloneStarter extends BaseStarter {
     }
 
     public void stop() {
+	processorServer.stop();
         rpcServer.shutdown();
         adminServer.stop();
         routerServer.stop();
-        processorServer.stop();
         hz.shutdown();
         pluginManager.stopPlugins();
         super.stop();

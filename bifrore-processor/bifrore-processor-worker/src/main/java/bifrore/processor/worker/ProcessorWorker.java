@@ -38,7 +38,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
@@ -75,12 +74,10 @@ class ProcessorWorker implements IProcessorWorker {
     private final TaskTracker taskTracker = new TaskTracker();
 
     class PublishMessageConsumer implements Consumer<Mqtt5Publish> {
-        private final Queue<Mqtt5Publish> inboundQueue;
         private final List<Optional<List<Matched>>> rob;
         private final Map<Mqtt5Publish, Integer> robEntryIndex;
 
         PublishMessageConsumer() {
-            this.inboundQueue = new LinkedList<>();
             this.rob = new LinkedList<>();
             this.robEntryIndex = new HashMap<>();
         }
@@ -89,52 +86,48 @@ class ProcessorWorker implements IProcessorWorker {
         public void accept(Mqtt5Publish published) {
             SysMeter.INSTANCE.recordCount(ProcessorInboundCount);
             Timer.Sample handleSampler = Timer.start();
-            this.inboundQueue.add(published);
             this.rob.add(Optional.empty());
             robEntryIndex.put(published, rob.size() - 1);
             taskTracker.track(published);
-            while (!inboundQueue.isEmpty()) {
-                Mqtt5Publish queuedMsg = inboundQueue.poll();
-                Timer.Sample matchSampler = Timer.start();
-                matchedRuleCache.get(queuedMsg.getTopic().toString())
-                        .whenComplete((matchedList, e) -> {
-                            matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
-                            CompletableFuture<Void> matchFuture = taskTracker.getFutures(queuedMsg).get(0);
-                            if (e != null) {
-                                log.error("Failed to get matched rules: {}", published);
-                                matchFuture.completeExceptionally(e);
-                                matchedList = List.of();
-                            }else {
-                                matchFuture.complete(null);
-                            }
-                            int idx = this.robEntryIndex.get(queuedMsg);
-                            rob.set(idx, Optional.of(matchedList));
-                            if (idx == 0) {
-                                rob.remove(0);
-                                robEntryIndex.remove(queuedMsg);
-                                fireMatchedList(matchedList, published);
-                                Iterator<Optional<List<Matched>>> itr = this.rob.iterator();
-                                while (itr.hasNext()) {
-                                    Optional<List<Matched>> robResult = itr.next();
-                                    if (robResult.isPresent()) {
-                                        fireMatchedList(robResult.get(), published);
-                                        itr.remove();
-                                    } else {
-                                        break;
-                                    }
+            Timer.Sample matchSampler = Timer.start();
+            matchedRuleCache.get(published.getTopic().toString())
+                    .whenComplete((matchedList, e) -> {
+                        matchSampler.stop(SysMeter.INSTANCE.timer(MatchRuleLatency));
+                        CompletableFuture<Void> matchFuture = taskTracker.getFutures(published).get(0);
+                        if (e != null) {
+                            log.error("Failed to get matched rules: {}", published);
+                            matchFuture.completeExceptionally(e);
+                            matchedList = List.of();
+                        }else {
+                            matchFuture.complete(null);
+                        }
+                        int idx = this.robEntryIndex.get(published);
+                        rob.set(idx, Optional.of(matchedList));
+                        if (idx == 0) {
+                            rob.remove(0);
+                            robEntryIndex.remove(published);
+                            fireMatchedList(matchedList, published);
+                            Iterator<Optional<List<Matched>>> itr = this.rob.iterator();
+                            while (itr.hasNext()) {
+                                Optional<List<Matched>> robResult = itr.next();
+                                if (robResult.isPresent()) {
+                                    fireMatchedList(robResult.get(), published);
+                                    itr.remove();
+                                } else {
+                                    break;
                                 }
                             }
-                        });
-            }
+                        }
+                    });
             CompletableFuture.allOf(taskTracker.getFutures(published).toArray(new CompletableFuture[0]))
                     .whenComplete((v,e) -> {
-                handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
-                if (e != null) {
-                    log.error("Failed to handle published message: {}", published);
-                }else {
-                    published.acknowledge();
-                }
-            });
+                        handleSampler.stop(SysMeter.INSTANCE.timer(HandleMessageLatency));
+                        if (e != null) {
+                            log.error("Failed to handle published message: {}", published);
+                        }else {
+                            published.acknowledge();
+                        }
+                    });
         }
     }
 
@@ -268,82 +261,86 @@ class ProcessorWorker implements IProcessorWorker {
 
     private void initProcessorWorker() {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        routerClient.listTopicFilter().thenAccept(listTopicFilterResponse -> {
-            for (int idx = 0; idx < clientNum; idx++) {
-                String identifier = clientPrefix + "/" + idx;
-                log.info("init client, host: {}, port: {}", host, port);
-                Mqtt5AsyncClient asyncClient = Mqtt5Client.builder()
-                        .identifier(identifier)
-                        .transportConfig(MqttClientTransportConfig.builder()
-                                .serverHost(host)
-                                .serverPort(port)
-                                .mqttConnectTimeout(10, TimeUnit.SECONDS)
-                                .socketConnectTimeout(10, TimeUnit.SECONDS)
-                                .build())
-                        .executorConfig(MqttClientExecutorConfig.builder()
-                                .applicationScheduler(Schedulers.single())
-                                .build())
-                        .buildAsync();
-                CompletableFuture<Void> future = new CompletableFuture<>();
-                futures.add(future);
-                Mqtt5Connect mqtt5Connect = Mqtt5Connect.builder()
-                        .simpleAuth(Mqtt5SimpleAuth.builder()
-                                .username(userName)
-                                .password(password.getBytes(StandardCharsets.UTF_8))
-                                .build())
-                        .cleanStart(cleanStart)
-                        .sessionExpiryInterval(sessionExpiryInterval)
-                        .build();
-                asyncClient.connect(mqtt5Connect).whenComplete((mqtt5ConnAck, conErr) -> {
-                    if (conErr != null) {
-                        log.error("ClientId: {} connect to broker failed, ", identifier, conErr);
-                        future.completeExceptionally(conErr);
-                    } else if (mqtt5ConnAck.getReasonCode() != Mqtt5ConnAckReasonCode.SUCCESS) {
-                        log.error("ClientId: {} connect to broker failed: {}", identifier,
-                                mqtt5ConnAck.getReasonCode());
-                        future.completeExceptionally(new RuntimeException(mqtt5ConnAck.getReasonCode().toString()));
-                    } else {
-                        clients.add(asyncClient);
-                        List<CompletableFuture<Void>> subscribeFutures = new ArrayList<>();
-                        listTopicFilterResponse.getTopicFiltersList().forEach(topicFilter -> {
-                            CompletableFuture<Void> subscribeFuture = new CompletableFuture<>();
-                            subscribeFutures.add(subscribeFuture);
-                            Mqtt5Subscribe mqtt5Subscribe = Mqtt5Subscribe.builder()
-                                    .topicFilter(convertToSharedSubscription(topicFilter))
-                                    .noLocal(false)
-                                    .build();
-                            asyncClient.subscribe(mqtt5Subscribe, new PublishMessageConsumer(), true)
-                                    .whenComplete(((mqtt5SubAck, error) -> {
-                                        if (error != null) {
-                                            log.error("Failed to subscribe: {}", mqtt5Subscribe);
-                                            subscribeFuture.completeExceptionally(
-                                                    new RuntimeException("Init client during subscription", error)
-                                            );
-                                            clients.remove(asyncClient);
+        routerClient.listTopicFilter().whenComplete((listTopicFilterResponse, throwable) -> {
+            if (throwable != null) {
+                log.error("Failed to list topicFilter", throwable);
+            } else {
+                for (int idx = 0; idx < clientNum; idx++) {
+                    String identifier = clientPrefix + "/" + idx;
+                    log.info("init client, host: {}, port: {}", host, port);
+                    Mqtt5AsyncClient asyncClient = Mqtt5Client.builder()
+                            .identifier(identifier)
+                            .transportConfig(MqttClientTransportConfig.builder()
+                                    .serverHost(host)
+                                    .serverPort(port)
+                                    .mqttConnectTimeout(10, TimeUnit.SECONDS)
+                                    .socketConnectTimeout(10, TimeUnit.SECONDS)
+                                    .build())
+                            .executorConfig(MqttClientExecutorConfig.builder()
+                                    .applicationScheduler(Schedulers.single())
+                                    .build())
+                            .buildAsync();
+                    CompletableFuture<Void> future = new CompletableFuture<>();
+                    futures.add(future);
+                    Mqtt5Connect mqtt5Connect = Mqtt5Connect.builder()
+                            .simpleAuth(Mqtt5SimpleAuth.builder()
+                                    .username(userName)
+                                    .password(password.getBytes(StandardCharsets.UTF_8))
+                                    .build())
+                            .cleanStart(cleanStart)
+                            .sessionExpiryInterval(sessionExpiryInterval)
+                            .build();
+                    asyncClient.connect(mqtt5Connect).whenComplete((mqtt5ConnAck, conErr) -> {
+                        if (conErr != null) {
+                            log.error("ClientId: {} connect to broker failed, ", identifier, conErr);
+                            future.completeExceptionally(conErr);
+                        } else if (mqtt5ConnAck.getReasonCode() != Mqtt5ConnAckReasonCode.SUCCESS) {
+                            log.error("ClientId: {} connect to broker failed: {}", identifier,
+                                    mqtt5ConnAck.getReasonCode());
+                            future.completeExceptionally(new RuntimeException(mqtt5ConnAck.getReasonCode().toString()));
+                        } else {
+                            clients.add(asyncClient);
+                            List<CompletableFuture<Void>> subscribeFutures = new ArrayList<>();
+                            listTopicFilterResponse.getTopicFiltersList().forEach(topicFilter -> {
+                                CompletableFuture<Void> subscribeFuture = new CompletableFuture<>();
+                                subscribeFutures.add(subscribeFuture);
+                                Mqtt5Subscribe mqtt5Subscribe = Mqtt5Subscribe.builder()
+                                        .topicFilter(convertToSharedSubscription(topicFilter))
+                                        .noLocal(false)
+                                        .build();
+                                asyncClient.subscribe(mqtt5Subscribe, new PublishMessageConsumer(), true)
+                                        .whenComplete(((mqtt5SubAck, error) -> {
+                                            if (error != null) {
+                                                log.error("Failed to subscribe: {}", mqtt5Subscribe);
+                                                subscribeFuture.completeExceptionally(
+                                                        new RuntimeException("Init client during subscription", error)
+                                                );
+                                                clients.remove(asyncClient);
+                                            }else {
+                                                subscribeFuture.complete(null);
+                                            }
+                                        }));
+                            });
+                            CompletableFuture.allOf(subscribeFutures.toArray(new CompletableFuture[0]))
+                                    .whenComplete((v, e) -> {
+                                        if (e != null) {
+                                            future.completeExceptionally(e);
                                         }else {
-                                            subscribeFuture.complete(null);
+                                            future.complete(null);
                                         }
-                                    }));
-                        });
-                        CompletableFuture.allOf(subscribeFutures.toArray(new CompletableFuture[0]))
-                                .whenComplete((v, e) -> {
-                                    if (e != null) {
-                                        future.completeExceptionally(e);
-                                    }else {
-                                        future.complete(null);
-                                    }
-                                });
-                    }
-                });
-            }
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .whenComplete((v,e) -> {
-                        if (e != null) {
-                            log.error("Failed to init processor worker: ", e);
-                        }else {
-                            log.info("Init processor worker ok, clientNum: {}", clientNum);
+                                    });
                         }
                     });
+                }
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .whenComplete((v,e) -> {
+                            if (e != null) {
+                                log.error("Failed to init processor worker: ", e);
+                            }else {
+                                log.info("Init processor worker ok, clientNum: {}", clientNum);
+                            }
+                        });
+            }
         });
     }
 
@@ -374,13 +371,41 @@ class ProcessorWorker implements IProcessorWorker {
     }
 
     private CompletableFuture<Void> closeClients() {
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        clients.forEach(client -> {
-            CompletableFuture<Void> future = new CompletableFuture<>();
-            futures.add(future);
-            client.disconnect().thenAccept(v -> future.complete(null));
+        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+        routerClient.listTopicFilter().whenComplete((response, e) -> {
+            if (e != null) {
+                log.error("Failed to list topic filter", e);
+                closeFuture.completeExceptionally(e);
+            }else {
+                List<CompletableFuture<Void>> futures = new ArrayList<>();
+                for (Mqtt5AsyncClient client : clients) {
+                    for (String topicFilter: response.getTopicFiltersList()) {
+                        CompletableFuture<Void> future = new CompletableFuture<>();
+                        futures.add(future);
+                        client.unsubscribe(Mqtt5Unsubscribe.builder()
+                                .topicFilter(convertToSharedSubscription(topicFilter))
+                                .build())
+                                .whenComplete(((mqtt5UnsubAck, error) -> {
+                                    if (error != null) {
+                                        future.completeExceptionally(error);
+                                    }else {
+                                        future.complete(null);
+                                    }
+                                }));
+                    }
+                }
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .whenComplete((v, ex) -> {
+                            if (ex != null) {
+                                log.error("Failed to unsubscribe topicFilters", ex);
+                                closeFuture.completeExceptionally(ex);
+                            }else {
+                                closeFuture.complete(null);
+                            }
+                        });
+            }
         });
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        return closeFuture;
     }
 
     private String convertToSharedSubscription(String topicFilter) {

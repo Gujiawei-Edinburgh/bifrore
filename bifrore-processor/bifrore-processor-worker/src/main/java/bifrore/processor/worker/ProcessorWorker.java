@@ -378,8 +378,8 @@ class ProcessorWorker implements IProcessorWorker {
         clients.forEach(client -> {
             CompletableFuture<Void> future = new CompletableFuture<>();
             futures.add(future);
-            client.disconnect().thenAccept(v -> future.complete(null));
-        });
+	    client.unsubscribe(null).thenApply(client.disconnect().thenAccept(future.complete(null)));
+       	});
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     }
 

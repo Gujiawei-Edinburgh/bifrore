@@ -276,6 +276,7 @@ class ProcessorWorker implements IProcessorWorker {
                                     .mqttConnectTimeout(10, TimeUnit.SECONDS)
                                     .socketConnectTimeout(10, TimeUnit.SECONDS)
                                     .build())
+                            .automaticReconnectWithDefaultConfig()
                             .executorConfig(MqttClientExecutorConfig.builder()
                                     .applicationScheduler(Schedulers.single())
                                     .build())

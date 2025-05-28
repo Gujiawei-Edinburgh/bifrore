@@ -233,9 +233,9 @@ public class StandaloneStarter extends BaseStarter {
 
     public void stop() {
         processorServer.stop();
-        rpcServer.shutdown();
         adminServer.stop();
         routerServer.stop();
+        rpcServer.shutdown();
         hz.shutdown();
         pluginManager.stopPlugins();
         super.stop();
@@ -250,6 +250,7 @@ public class StandaloneStarter extends BaseStarter {
 
     private HazelcastInstance buildHazelcastInstance(ClusterConfig clusterConfig) throws RocksDBException {
         Config config = new Config();
+        config.setProperty("hazelcast.shutdownhook.enabled", "false");
         MapStoreConfig idMapStoreConfig = new MapStoreConfig()
                 .setImplementation(new PersistentMapStore<>("idMap", "idMap",
                         String::getBytes, String::new, b -> b, b -> b))

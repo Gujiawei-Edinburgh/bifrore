@@ -2,5 +2,6 @@
 resolver = "2"
 members = [
   "bifrore-embed-core",
+  "bifrore-embed-coordinator",
   "bifrore-embed-ffi",
 ]

@@ -47,8 +47,7 @@ int bre_start_mqtt(
     const char *group_name,
     jboolean ordered,
     const char *ordered_prefix,
-    uint16_t keep_alive_secs,
-    jboolean multi_nci) {
+    uint16_t keep_alive_secs) {
     (void)engine;
     (void)host;
     (void)port;
@@ -62,7 +61,6 @@ int bre_start_mqtt(
     (void)ordered;
     (void)ordered_prefix;
     (void)keep_alive_secs;
-    (void)multi_nci;
     return 0;
 }
 

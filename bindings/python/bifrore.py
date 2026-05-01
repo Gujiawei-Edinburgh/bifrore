@@ -95,7 +95,6 @@ class BifroRE:
         ordered=False,
         ordered_prefix="",
         keep_alive_secs=30,
-        multi_nci=False,
         payload_format=PAYLOAD_JSON,
         client_ids_path="./client_ids",
         protobuf_descriptor_set_path=None,
@@ -132,7 +131,6 @@ class BifroRE:
             "ordered": ordered,
             "ordered_prefix": ordered_prefix,
             "keep_alive_secs": keep_alive_secs,
-            "multi_nci": multi_nci,
         }
         self._rule_metadata = self._load_rule_metadata()
 
@@ -178,7 +176,6 @@ class BifroRE:
             c_bool,
             c_char_p,
             c_uint16,
-            c_bool,
         ]
         self.lib.bre_start_mqtt.restype = c_int
         self.lib.bre_get_notify_fd.argtypes = [c_void_p]
@@ -331,7 +328,6 @@ class BifroRE:
             cfg["ordered"],
             cfg["ordered_prefix"].encode("utf-8"),
             cfg["keep_alive_secs"],
-            cfg["multi_nci"],
         )
 
     def _attach_notify_reader(self):

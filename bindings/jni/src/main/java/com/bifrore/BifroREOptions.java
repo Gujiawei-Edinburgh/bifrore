@@ -27,7 +27,6 @@ public final class BifroREOptions {
         int port = 1883;
         String nodeId;
         int clientCount = 1;
-        boolean multiNci = false;
         String username;
         String password;
         boolean cleanStart = true;
@@ -53,11 +52,6 @@ public final class BifroREOptions {
 
         public MqttOptions clientCount(int clientCount) {
             this.clientCount = clientCount;
-            return this;
-        }
-
-        public MqttOptions multiNci(boolean multiNci) {
-            this.multiNci = multiNci;
             return this;
         }
 

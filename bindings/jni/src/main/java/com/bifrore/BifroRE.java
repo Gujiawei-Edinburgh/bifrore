@@ -296,7 +296,6 @@ public final class BifroRE implements AutoCloseable {
     private final int port;
     private final String nodeId;
     private final int clientCount;
-    private final boolean multiNci;
     private final String username;
     private final String password;
     private final String clientIdsPath;
@@ -336,7 +335,6 @@ public final class BifroRE implements AutoCloseable {
             Objects.requireNonNull(options.ffi.ruleJsonPath, "ruleJsonPath"),
             options.mqtt.nodeId,
             options.mqtt.clientCount,
-            options.mqtt.multiNci,
             options.mqtt.username,
             options.mqtt.password,
             options.ffi.payloadFormat,
@@ -359,7 +357,6 @@ public final class BifroRE implements AutoCloseable {
         String ruleJsonPath,
         String nodeId,
         int clientCount,
-        boolean multiNci,
         String username,
         String password,
         int payloadFormat,
@@ -382,7 +379,6 @@ public final class BifroRE implements AutoCloseable {
         this.port = requirePort(port);
         this.nodeId = nodeId;
         this.clientCount = requireClientCount(clientCount);
-        this.multiNci = multiNci;
         this.username = username;
         this.password = password;
         this.callbackQueueCapacity = Math.max(1, callbackQueueCapacity);
@@ -498,8 +494,7 @@ public final class BifroRE implements AutoCloseable {
             groupName,
             false,
             "",
-            30,
-            multiNci
+            30
         );
         if (rc == BRE_OK) {
             mqttStarted = true;
@@ -1093,8 +1088,7 @@ public final class BifroRE implements AutoCloseable {
         String groupName,
         boolean ordered,
         String orderedPrefix,
-        int keepAliveSecs,
-        boolean multiNci
+        int keepAliveSecs
     );
     private static native PollResult nativePollResultsBatch(long handle, int timeoutMillis);
     private static native int nativePollResultsBatchDirect(

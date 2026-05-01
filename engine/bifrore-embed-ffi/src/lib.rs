@@ -889,7 +889,6 @@ pub extern "C" fn bre_start_mqtt(
     ordered: bool,
     ordered_prefix: *const c_char,
     keep_alive_secs: u16,
-    multi_nci: bool,
 ) -> c_int {
     if engine.is_null() || host.is_null() || group_name.is_null() || ordered_prefix.is_null() {
         return BRE_ERR_INVALID_ARGUMENT;
@@ -975,7 +974,6 @@ pub extern "C" fn bre_start_mqtt(
         ordered,
         ordered_prefix,
         keep_alive_secs,
-        multi_nci,
     };
     engine_ref.active_client_ids = client_ids;
     if let Err(err) = engine_ref

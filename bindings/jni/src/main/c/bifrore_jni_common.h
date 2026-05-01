@@ -80,8 +80,7 @@ extern int bre_start_mqtt(
     const char *group_name,
     jboolean ordered,
     const char *ordered_prefix,
-    uint16_t keep_alive_secs,
-    jboolean multi_nci);
+    uint16_t keep_alive_secs);
 extern int bre_poll_eval_results_packed(
     void *engine,
     uint32_t timeout_millis,

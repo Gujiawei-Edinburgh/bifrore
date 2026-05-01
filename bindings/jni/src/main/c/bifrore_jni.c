@@ -215,8 +215,7 @@ JNIEXPORT jint JNICALL Java_com_bifrore_BifroRE_nativeStartMqtt(
     jstring group_name,
     jboolean ordered,
     jstring ordered_prefix,
-    jint keep_alive_secs,
-    jboolean multi_nci) {
+    jint keep_alive_secs) {
     (void)cls;
     if (handle == 0 || host == NULL || group_name == NULL || ordered_prefix == NULL) {
         return BRE_ERR_INVALID_ARGUMENT;
@@ -252,8 +251,7 @@ JNIEXPORT jint JNICALL Java_com_bifrore_BifroRE_nativeStartMqtt(
         group_name_str,
         ordered,
         ordered_prefix_str,
-        (uint16_t)keep_alive_secs,
-        multi_nci);
+        (uint16_t)keep_alive_secs);
 
     (*env)->ReleaseStringUTFChars(env, host, host_str);
     (*env)->ReleaseStringUTFChars(env, group_name, group_name_str);

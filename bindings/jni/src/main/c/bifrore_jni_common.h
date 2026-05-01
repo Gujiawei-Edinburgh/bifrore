@@ -65,6 +65,15 @@ extern void *bre_create_engine(
     const char *client_ids_path,
     int notify_mode,
     const char *protobuf_descriptor_set_path);
+extern void *bre_create_engine_from_rules(
+    const unsigned char *rule_json,
+    size_t rule_json_len,
+    int payload_format,
+    const unsigned char *client_ids,
+    size_t client_ids_len,
+    const char *client_ids_flush_path,
+    int notify_mode,
+    const char *protobuf_descriptor_set_path);
 extern void bre_destroy(void *engine);
 extern int bre_disconnect(void *engine);
 extern int bre_start_mqtt(

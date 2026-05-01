@@ -15,8 +15,6 @@ use crate::rule::{
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 const DEFAULT_TOPIC_CACHE_CAPACITY: usize = 4096;
@@ -325,10 +323,9 @@ impl RuleEngine {
             .collect()
     }
 
-    pub fn load_rules_from_json<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, RuleError> {
-        let content = fs::read_to_string(path).map_err(|e| RuleError::SqlParse(e.to_string()))?;
+    pub fn load_rules_from_json_bytes(&mut self, bytes: &[u8]) -> Result<usize, RuleError> {
         let parsed: RuleFile =
-            serde_json::from_str(&content).map_err(|e| RuleError::SqlParse(e.to_string()))?;
+            serde_json::from_slice(bytes).map_err(|e| RuleError::SqlParse(e.to_string()))?;
         let mut count = 0;
         for rule in parsed.rules {
             self.add_rule(rule)?;
@@ -892,18 +889,16 @@ mod tests {
     }
 
     #[test]
-    fn load_rules_from_json() {
+    fn load_rules_from_json_bytes() {
         let json = r#"{
             "rules": [
                 { "expression": "select * from data", "destinations": ["dest1"] }
             ]
         }"#;
-        let temp = tempfile::NamedTempFile::new().expect("tempfile");
-        fs::write(temp.path(), json).expect("write");
 
         let mut engine = RuleEngine::default();
         let count = engine
-            .load_rules_from_json(temp.path())
+            .load_rules_from_json_bytes(json.as_bytes())
             .expect("load rules");
         assert_eq!(count, 1);
         assert_eq!(engine.rules.len(), 1);

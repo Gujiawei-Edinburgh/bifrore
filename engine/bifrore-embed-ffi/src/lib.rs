@@ -198,8 +198,95 @@ fn normalize_client_count(client_count: u16) -> usize {
     client_count.max(1) as usize
 }
 
-fn load_client_ids(path: &str) -> Option<Vec<String>> {
-    let content = fs::read_to_string(path).ok()?;
+trait ClientIdStore: Send + Sync {
+    fn load(&self) -> Option<Vec<String>>;
+
+    fn persist(&self, client_ids: &[String]) -> Result<(), String>;
+
+    fn label(&self) -> &str;
+}
+
+#[derive(Debug)]
+struct FileClientIdStore {
+    path: String,
+}
+
+impl FileClientIdStore {
+    fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
+impl ClientIdStore for FileClientIdStore {
+    fn load(&self) -> Option<Vec<String>> {
+        let content = fs::read_to_string(&self.path).ok()?;
+        parse_client_ids(content.as_bytes())
+    }
+
+    fn persist(&self, client_ids: &[String]) -> Result<(), String> {
+        if client_ids.is_empty() {
+            return Ok(());
+        }
+        let path_ref = Path::new(&self.path);
+        if let Some(parent) = path_ref.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+        }
+        fs::write(path_ref, format!("{}\n", client_ids.join("\n")))
+            .map_err(|err| err.to_string())
+    }
+
+    fn label(&self) -> &str {
+        &self.path
+    }
+}
+
+#[derive(Debug)]
+struct SeededClientIdStore {
+    initial_client_ids: Vec<String>,
+    flush_store: Option<FileClientIdStore>,
+    label: String,
+}
+
+impl SeededClientIdStore {
+    fn new(initial_client_ids: Vec<String>, flush_path: Option<String>) -> Self {
+        let label = flush_path
+            .as_ref()
+            .map(|path| format!("memory+file:{path}"))
+            .unwrap_or_else(|| "memory".to_string());
+        Self {
+            initial_client_ids,
+            flush_store: flush_path.map(FileClientIdStore::new),
+            label,
+        }
+    }
+}
+
+impl ClientIdStore for SeededClientIdStore {
+    fn load(&self) -> Option<Vec<String>> {
+        if self.initial_client_ids.is_empty() {
+            None
+        } else {
+            Some(self.initial_client_ids.clone())
+        }
+    }
+
+    fn persist(&self, client_ids: &[String]) -> Result<(), String> {
+        if let Some(store) = &self.flush_store {
+            store.persist(client_ids)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+fn parse_client_ids(bytes: &[u8]) -> Option<Vec<String>> {
+    let content = std::str::from_utf8(bytes).ok()?;
     let values = content
         .lines()
         .map(|value| value.trim())
@@ -213,21 +300,8 @@ fn load_client_ids(path: &str) -> Option<Vec<String>> {
     }
 }
 
-fn persist_client_ids(path: &str, client_ids: &[String]) -> Result<(), String> {
-    if client_ids.is_empty() {
-        return Ok(());
-    }
-    let path_ref = Path::new(path);
-    if let Some(parent) = path_ref.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-    }
-    fs::write(path_ref, format!("{}\n", client_ids.join("\n"))).map_err(|err| err.to_string())
-}
-
-fn resolve_client_ids(path: &str, node_id: &str, client_count: u16) -> Vec<String> {
-    if let Some(values) = load_client_ids(path) {
+fn resolve_client_ids(store: &dyn ClientIdStore, node_id: &str, client_count: u16) -> Vec<String> {
+    if let Some(values) = store.load() {
         return values;
     }
     (0..normalize_client_count(client_count))
@@ -305,7 +379,7 @@ pub struct BifroRE {
     notify_pending: AtomicBool,
     poll_batch_limit: usize,
     detailed_latency_metrics: bool,
-    client_ids_path: String,
+    client_id_store: Box<dyn ClientIdStore>,
     active_client_ids: Vec<String>,
     ffi_metrics: FfiMetrics,
 }
@@ -632,46 +706,40 @@ fn free_rule_metadata_inner(metadata_ref: &mut BifroRuleMetadata) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn bre_create_engine(
-    config_path: *const c_char,
-    payload_format: c_int,
-    client_ids_path: *const c_char,
-    notify_mode: c_int,
+fn parse_notify_mode(notify_mode: c_int) -> Option<BifroRENotifyMode> {
+    match notify_mode {
+        0 => Some(BifroRENotifyMode::Poll),
+        1 => Some(BifroRENotifyMode::PushNotify),
+        _ => None,
+    }
+}
+
+fn optional_trimmed_c_string(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+unsafe fn bytes_from_raw<'a>(ptr: *const u8, len: size_t) -> Option<&'a [u8]> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    Some(std::slice::from_raw_parts(ptr, len))
+}
+
+fn create_engine_from_rule_bytes(
+    rule_json: &[u8],
+    rule_source_label: &str,
+    payload_format: PayloadFormat,
+    client_id_store: Box<dyn ClientIdStore>,
+    notify_mode: BifroRENotifyMode,
     protobuf_descriptor_set_path: *const c_char,
 ) -> *mut BifroRE {
-    ensure_logger_initialized();
-    if config_path.is_null() {
-        return ptr::null_mut();
-    }
-    let Some(payload_format) = PayloadFormat::from_ffi_code(payload_format) else {
-        return ptr::null_mut();
-    };
-    let notify_mode = match notify_mode {
-        0 => BifroRENotifyMode::Poll,
-        1 => BifroRENotifyMode::PushNotify,
-        _ => return ptr::null_mut(),
-    };
-
-    let config_path = unsafe { CStr::from_ptr(config_path) };
-    let Ok(config_path) = config_path.to_str() else {
-        return ptr::null_mut();
-    };
-    let client_ids_path = if client_ids_path.is_null() {
-        DEFAULT_CLIENT_IDS_PATH.to_string()
-    } else {
-        let parsed = unsafe { CStr::from_ptr(client_ids_path) }
-            .to_str()
-            .ok()
-            .map(|value| value.trim().to_string())
-            .unwrap_or_default();
-        if parsed.is_empty() {
-            DEFAULT_CLIENT_IDS_PATH.to_string()
-        } else {
-            parsed
-        }
-    };
-
     let mut rule_engine = if payload_format == PayloadFormat::Protobuf {
         if protobuf_descriptor_set_path.is_null() {
             log::warn!("protobuf payload format requires descriptor_set_path");
@@ -696,7 +764,7 @@ pub extern "C" fn bre_create_engine(
     } else {
         RuleEngine::default()
     };
-    if rule_engine.load_rules_from_json(config_path).is_err() {
+    if rule_engine.load_rules_from_json_bytes(rule_json).is_err() {
         return ptr::null_mut();
     }
     let metrics = rule_engine.metrics_handle();
@@ -722,17 +790,91 @@ pub extern "C" fn bre_create_engine(
         notify_pending: AtomicBool::new(false),
         poll_batch_limit: DEFAULT_POLL_BATCH_SIZE,
         detailed_latency_metrics: false,
-        client_ids_path,
+        client_id_store,
         active_client_ids: Vec::new(),
         ffi_metrics: FfiMetrics::default(),
     };
     log::info!(
-        "BifroRE created with config path={} payload_format={:?} notify_mode={:?}",
-        config_path,
+        "BifroRE created with rule_source={} payload_format={:?} notify_mode={:?}",
+        rule_source_label,
         payload_format,
         notify_mode
     );
     Box::into_raw(Box::new(engine))
+}
+
+#[no_mangle]
+pub extern "C" fn bre_create_engine(
+    config_path: *const c_char,
+    payload_format: c_int,
+    client_ids_path: *const c_char,
+    notify_mode: c_int,
+    protobuf_descriptor_set_path: *const c_char,
+) -> *mut BifroRE {
+    ensure_logger_initialized();
+    if config_path.is_null() {
+        return ptr::null_mut();
+    }
+    let Some(payload_format) = PayloadFormat::from_ffi_code(payload_format) else {
+        return ptr::null_mut();
+    };
+    let Some(notify_mode) = parse_notify_mode(notify_mode) else {
+        return ptr::null_mut();
+    };
+
+    let config_path = unsafe { CStr::from_ptr(config_path) };
+    let Ok(config_path) = config_path.to_str() else {
+        return ptr::null_mut();
+    };
+    let client_ids_path =
+        optional_trimmed_c_string(client_ids_path).unwrap_or_else(|| DEFAULT_CLIENT_IDS_PATH.to_string());
+    let Ok(rule_json) = fs::read(config_path) else {
+        return ptr::null_mut();
+    };
+
+    create_engine_from_rule_bytes(
+        &rule_json,
+        config_path,
+        payload_format,
+        Box::new(FileClientIdStore::new(client_ids_path)),
+        notify_mode,
+        protobuf_descriptor_set_path,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn bre_create_engine_from_rules(
+    rule_json: *const u8,
+    rule_json_len: size_t,
+    payload_format: c_int,
+    client_ids: *const u8,
+    client_ids_len: size_t,
+    client_ids_flush_path: *const c_char,
+    notify_mode: c_int,
+    protobuf_descriptor_set_path: *const c_char,
+) -> *mut BifroRE {
+    ensure_logger_initialized();
+    let Some(payload_format) = PayloadFormat::from_ffi_code(payload_format) else {
+        return ptr::null_mut();
+    };
+    let Some(notify_mode) = parse_notify_mode(notify_mode) else {
+        return ptr::null_mut();
+    };
+    let Some(rule_json) = (unsafe { bytes_from_raw(rule_json, rule_json_len) }) else {
+        return ptr::null_mut();
+    };
+    let client_ids = unsafe { bytes_from_raw(client_ids, client_ids_len) }
+        .and_then(parse_client_ids)
+        .unwrap_or_default();
+    let flush_path = optional_trimmed_c_string(client_ids_flush_path);
+    create_engine_from_rule_bytes(
+        rule_json,
+        "memory",
+        payload_format,
+        Box::new(SeededClientIdStore::new(client_ids, flush_path)),
+        notify_mode,
+        protobuf_descriptor_set_path,
+    )
 }
 
 #[no_mangle]
@@ -961,7 +1103,7 @@ pub extern "C" fn bre_start_mqtt(
     };
     let requested_client_count = client_count.max(1);
     let client_ids = resolve_client_ids(
-        &engine_ref.client_ids_path,
+        engine_ref.client_id_store.as_ref(),
         &node_id,
         requested_client_count,
     );
@@ -994,11 +1136,10 @@ pub extern "C" fn bre_start_mqtt(
         multi_nci,
     };
     engine_ref.active_client_ids = client_ids;
-    if let Err(err) = persist_client_ids(&engine_ref.client_ids_path, &engine_ref.active_client_ids)
-    {
+    if let Err(err) = engine_ref.client_id_store.persist(&engine_ref.active_client_ids) {
         log::warn!(
-            "failed to persist client ids at start path={} error={}",
-            engine_ref.client_ids_path,
+            "failed to persist client ids at start store={} error={}",
+            engine_ref.client_id_store.label(),
             err
         );
     }
@@ -1259,14 +1400,16 @@ mod tests {
     fn resolve_client_ids_uses_file_when_present() {
         let path = "/tmp/bifrore-test-client-ids";
         let _ = fs::write(path, "cid-a\ncid-b\n");
-        let ids = resolve_client_ids(path, "node-1", 2);
+        let store = FileClientIdStore::new(path.to_string());
+        let ids = resolve_client_ids(&store, "node-1", 2);
         assert_eq!(ids, vec!["cid-a".to_string(), "cid-b".to_string()]);
         let _ = fs::remove_file(path);
     }
 
     #[test]
     fn resolve_client_ids_generates_plain_defaults_when_missing() {
-        let ids = resolve_client_ids("/tmp/bifrore-test-client-ids-missing", "node-1", 3);
+        let store = FileClientIdStore::new("/tmp/bifrore-test-client-ids-missing".to_string());
+        let ids = resolve_client_ids(&store, "node-1", 3);
         assert_eq!(
             ids,
             vec![
@@ -1275,5 +1418,13 @@ mod tests {
                 "node-1_2".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn resolve_client_ids_uses_seeded_bytes_when_present() {
+        let ids = parse_client_ids(b"cid-a\ncid-b\n").unwrap();
+        let store = SeededClientIdStore::new(ids, None);
+        let ids = resolve_client_ids(&store, "node-1", 2);
+        assert_eq!(ids, vec!["cid-a".to_string(), "cid-b".to_string()]);
     }
 }

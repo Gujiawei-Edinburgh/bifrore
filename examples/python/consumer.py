@@ -1,10 +1,10 @@
 import asyncio
 
-from bifrore import BifroRE
+from metre import Metre
 
 
 async def main():
-    async with BifroRE(
+    async with Metre(
         "./rule.json",
         host="127.0.0.1",
         port=1883,

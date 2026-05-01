@@ -1,11 +1,11 @@
 # JNI Notes
 
-`BifroRE` is a JVM-wide singleton in the Java binding.
+`Metre` is a JVM-wide singleton in the Java binding.
 
 ## Singleton contract
 
-- Only one `com.bifrore.BifroRE` instance is allowed in the same JVM.
-- Construction is guarded in `BifroRE.java`.
+- Only one `com.metre.Metre` instance is allowed in the same JVM.
+- Construction is guarded in `Metre.java`.
 - The singleton is released when `close()` completes.
 
 ## Why this exists

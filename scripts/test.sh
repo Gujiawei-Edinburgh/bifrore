@@ -17,7 +17,7 @@ TARGET="$1"
 
 run_core_tests() {
   echo "Running Rust core tests..."
-  (cd "$RUST_DIR" && cargo test -p bifrore-embed-core --features mqtt -- --nocapture)
+  (cd "$RUST_DIR" && cargo test -p metre-core --features mqtt -- --nocapture)
 }
 
 run_jni_tests() {
@@ -31,7 +31,7 @@ run_java_integration_tests() {
   build_jni
   build_java_jar
   install_java_jar_to_local_maven "$maven_repo_local"
-  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dbifrore.java.version="$BIFRORE_VERSION" -f bindings/jni/test/pom.xml test)
+  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dmetre.java.version="$METRE_VERSION" -f bindings/jni/test/pom.xml test)
 }
 
 case "$TARGET" in

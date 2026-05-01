@@ -1,0 +1,20 @@
+[package]
+name = "metre-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "metre_embed"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+metre-core = { path = "../metre-core" }
+metre-coordinator = { path = "../metre-coordinator" }
+libc = "0.2"
+serde_json = "1.0"
+log = "0.4"
+flume = "0.11"
+
+[features]
+mqtt = ["metre-core/mqtt"]
+simd-json = ["metre-core/simd-json"]

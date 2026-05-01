@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 RUST_DIR="$ROOT_DIR/engine"
-BIFRORE_VERSION="${BIFRORE_VERSION:-0.1.0}"
+METRE_VERSION="${METRE_VERSION:-0.1.0}"
 
 OS_NAME="$(uname -s)"
 case "$OS_NAME" in
@@ -41,8 +41,8 @@ ensure_java_home() {
 }
 
 platform_tag() {
-  if [[ -n "${BIFRORE_WHEEL_PLATFORM_TAG:-}" ]]; then
-    echo "$BIFRORE_WHEEL_PLATFORM_TAG"
+  if [[ -n "${METRE_WHEEL_PLATFORM_TAG:-}" ]]; then
+    echo "$METRE_WHEEL_PLATFORM_TAG"
     return
   fi
   case "$OS_NAME" in
@@ -91,7 +91,7 @@ java_jar_name() {
     echo "unsupported"
     return
   fi
-  echo "bifrore-${BIFRORE_VERSION}-${platform}.jar"
+  echo "metre-${METRE_VERSION}-${platform}.jar"
 }
 
 java_jar_path() {
@@ -106,8 +106,8 @@ java_jar_path() {
 
 build_rust() {
   echo "Building Rust cdylib..."
-  (cd "$RUST_DIR" && cargo build --release -p bifrore-embed-ffi --features mqtt)
-  cp "$RUST_DIR/target/release/libbifrore_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
+  (cd "$RUST_DIR" && cargo build --release -p metre-ffi --features mqtt)
+  cp "$RUST_DIR/target/release/libmetre_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
 }
 
 build_jni() {
@@ -124,11 +124,11 @@ build_jni() {
 
   cc $JNI_CFLAGS \
     -I"$jni_include" -I"$jni_platform_include" \
-    -o "$BUILD_DIR/libbifrore_jni.$JNI_LIB_EXT" \
-    "$ROOT_DIR/bindings/jni/src/main/c/bifrore_jni.c" \
-    "$ROOT_DIR/bindings/jni/src/main/c/bifrore_jni_heap_poll.c" \
-    "$ROOT_DIR/bindings/jni/src/main/c/bifrore_jni_direct_poll.c" \
-    -L"$BUILD_DIR" -lbifrore_embed \
+    -o "$BUILD_DIR/libmetre_jni.$JNI_LIB_EXT" \
+    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni.c" \
+    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni_heap_poll.c" \
+    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni_direct_poll.c" \
+    -L"$BUILD_DIR" -lmetre_embed \
     $JNI_LDFLAGS
 }
 
@@ -146,10 +146,10 @@ build_jni_test() {
 
   cc $JNI_CFLAGS -pthread \
     -I"$jni_include" -I"$jni_platform_include" \
-    -o "$BUILD_DIR/bifrore-jni-direct-test" \
-    "$ROOT_DIR/bindings/jni/test/c/bifrore_jni_direct_test.c"
+    -o "$BUILD_DIR/metre-jni-direct-test" \
+    "$ROOT_DIR/bindings/jni/test/c/metre_jni_direct_test.c"
 
-  "$BUILD_DIR/bifrore-jni-direct-test"
+  "$BUILD_DIR/metre-jni-direct-test"
 }
 
 build_java_jar() {
@@ -165,12 +165,12 @@ build_java_jar() {
   resources_root="$BUILD_DIR/java-stage/resources"
   resources_dir="$resources_root/natives"
   jar_path="$(java_jar_path)"
-  rm -f "$BUILD_DIR"/bifrore-*.jar
+  rm -f "$BUILD_DIR"/metre-*.jar
   rm -rf "$BUILD_DIR/java-stage"
   mkdir -p "$native_dir" "$classes_dir" "$resources_dir"
 
-  cp "$BUILD_DIR/libbifrore_embed.$RUST_LIB_EXT" "$native_dir/"
-  cp "$BUILD_DIR/libbifrore_jni.$JNI_LIB_EXT" "$native_dir/"
+  cp "$BUILD_DIR/libmetre_embed.$RUST_LIB_EXT" "$native_dir/"
+  cp "$BUILD_DIR/libmetre_jni.$JNI_LIB_EXT" "$native_dir/"
 
   find "$ROOT_DIR/bindings/jni/src/main/java" -name '*.java' -print0 | \
     xargs -0 javac --release 17 -d "$classes_dir"
@@ -190,15 +190,15 @@ build_python() {
     exit 5
   fi
   wheel_stage="$BUILD_DIR/python-wheel-stage"
-  package_dir="$wheel_stage/bifrore"
+  package_dir="$wheel_stage/metre"
   native_dir="$package_dir"
   dist_dir="$BUILD_DIR"
-  rm -f "$BUILD_DIR"/bifrore-*.whl
+  rm -f "$BUILD_DIR"/metre-*.whl
   rm -rf "$wheel_stage"
   mkdir -p "$package_dir"
 
-  cp "$ROOT_DIR/bindings/python/bifrore.py" "$package_dir/__init__.py"
-  cp "$BUILD_DIR/libbifrore_embed.$RUST_LIB_EXT" "$native_dir/"
+  cp "$ROOT_DIR/bindings/python/metre.py" "$package_dir/__init__.py"
+  cp "$BUILD_DIR/libmetre_embed.$RUST_LIB_EXT" "$native_dir/"
 
   cat > "$wheel_stage/setup.py" <<EOF
 from setuptools import Distribution, setup
@@ -210,11 +210,11 @@ class BinaryDistribution(Distribution):
 
 
 setup(
-    name="bifrore",
-    version="${BIFRORE_VERSION}",
-    description="BifroRE Python bindings",
-    packages=["bifrore"],
-    package_data={"bifrore": ["libbifrore_embed.*"]},
+    name="metre",
+    version="${METRE_VERSION}",
+    description="Metre Python bindings",
+    packages=["metre"],
+    package_data={"metre": ["libmetre_embed.*"]},
     include_package_data=True,
     distclass=BinaryDistribution,
 )
@@ -235,9 +235,9 @@ install_java_jar_to_local_maven() {
   mvn -q org.apache.maven.plugins:maven-install-plugin:3.1.2:install-file \
     -Dmaven.repo.local="$maven_repo_local" \
     -Dfile="$jar_path" \
-    -DgroupId=com.bifrore \
-    -DartifactId=bifrore-java \
-    -Dversion="$BIFRORE_VERSION" \
+    -DgroupId=com.metre \
+    -DartifactId=metre-java \
+    -Dversion="$METRE_VERSION" \
     -Dpackaging=jar \
     -DgeneratePom=true
 }
@@ -247,8 +247,8 @@ run_java_jmh() {
   local classpath_file="$BUILD_DIR/java-bench-classpath.txt"
   local test_classes_dir="$ROOT_DIR/bindings/jni/test/target/test-classes"
   install_java_jar_to_local_maven "$maven_repo_local"
-  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dbifrore.java.version="$BIFRORE_VERSION" -f bindings/jni/test/pom.xml -DskipTests test-compile)
-  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dbifrore.java.version="$BIFRORE_VERSION" -f bindings/jni/test/pom.xml \
+  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dmetre.java.version="$METRE_VERSION" -f bindings/jni/test/pom.xml -DskipTests test-compile)
+  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dmetre.java.version="$METRE_VERSION" -f bindings/jni/test/pom.xml \
     org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath \
     -Dmdep.outputFile="$classpath_file" \
     -DincludeScope=test)

@@ -1,24 +1,0 @@
-
-ª
-bifrore_test.protobifrore.test"3
-EvalPayload
-temp (Rtemp
-hum (Rhum"Y
-TypedRuntimePayload
-temp (Rtemp
-device (	Rdevice
-online (Ronline"I
-TypedMetric
-value (Rvalue
-ok (Rok
-label (	Rlabel"n
-TypedDeepNode1
-child (2.bifrore.test.TypedDeepNodeRchild
-value (Rvalue
-label (	Rlabel"²
-TypedPayload
-temp (Rtemp
-hum (Rhum/
-deep (2.bifrore.test.TypedDeepNodeRdeep3
-metrics (2.bifrore.test.TypedMetricRmetrics
-device (	Rdevicebproto3

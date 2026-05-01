@@ -15,9 +15,9 @@ shift || true
 run_rust_bench() {
   echo "Running Rust benchmarks..."
   if [[ $# -gt 0 ]]; then
-    (cd "$RUST_DIR" && cargo bench -p bifrore-embed-core -- "$1")
+    (cd "$RUST_DIR" && cargo bench -p metre-core -- "$1")
   else
-    (cd "$RUST_DIR" && cargo bench -p bifrore-embed-core)
+    (cd "$RUST_DIR" && cargo bench -p metre-core)
   fi
 }
 

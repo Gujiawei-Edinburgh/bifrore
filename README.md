@@ -1,6 +1,6 @@
-# BifroRE (Embedded MQTT Rule Engine)
+# METRE (MQTT Event Transform Rule Engine)
 
-BifroRE is now an embedded MQTT rule engine delivered as a Rust library with a C ABI.
+METRE is an embedded MQTT rule engine delivered as a Rust library with a C ABI.
 It connects to an MQTT broker via shared subscriptions, evaluates SQL-like rules in memory,
 and returns evaluation results to the host application via callbacks (JNI / Python / C).
 
@@ -37,15 +37,14 @@ flowchart LR
 
 ```
 
-## Key Differences (Old vs New)
+## Background
 
 - Old: standalone Java services (router/processor/admin). New: embedded Rust library with C ABI.
 - Old: rule matching done in Java router. New: in-memory trie matcher in Rust.
 - Old: SQL rules parsed by Trino + MVEL. New: SQL subset parser in Rust with MQTT-native extensions.
 - Old: downstream delivery handled by built-in plugins. New: host application handles destinations.
 
-The original Java standalone implementation is preserved in the
-[`java-standalone`](https://github.com/bifromqio/bifrore/tree/java-standalone) branch.
+The original Java standalone implementation is preserved in the `java-standalone` branch.
 
 ## Rule DSL (SQL + MQTT extensions)
 
@@ -70,8 +69,7 @@ Supported (current):
 - Global payload decode mode at engine init: `JSON` or `Protobuf`.
 - Protobuf support for typed payloads (schema-based, `prost` generated messages).
 - Compiled expression plan with constant folding at rule compile time.
-- Fast predicate path for common comparisons and adaptive predicate reordering.
-- Automatic fast-path downgrade when runtime miss ratio is persistently high.
+- Internal coordinator boundary for OSS file-based rule/client-id sources and future control-plane sources.
 
 ## Build
 
@@ -96,61 +94,52 @@ Optional feature flags (manual cargo usage):
 
 ```bash
 # core with SIMD JSON parser
-cargo build -p bifrore-embed-core --features simd-json
+cargo build -p metre-core --features simd-json
 
 # ffi with mqtt + SIMD JSON parser
-cargo build -p bifrore-embed-ffi --features "mqtt simd-json"
+cargo build -p metre-ffi --features "mqtt simd-json"
 ```
 
 Note: `simd-json` is workload and platform dependent; it is not guaranteed to be faster than
 `serde_json` in every case.
 
 Artifacts are placed under `build/`:
-- `libbifrore_embed.(so|dylib)`
-- `libbifrore_jni.(so|dylib)` (JNI)
-- `bifrore-<version>-<platform>.jar`
-- `bifrore-0.1.0-*.whl`
+- `libmetre_embed.(so|dylib)`
+- `libmetre_jni.(so|dylib)` (JNI)
+- `metre-<version>-<platform>.jar`
+- `metre-0.1.0-*.whl`
 
 Java jar filenames include the native platform, for example
-`bifrore-0.1.0-linux-x86_64.jar` or `bifrore-0.1.0-darwin-aarch64.jar`.
+`metre-0.1.0-linux-x86_64.jar` or `metre-0.1.0-darwin-aarch64.jar`.
 The wheel keeps the standard Python platform tag.
 
 ## Client ID Provisioning
 
-MQTT persistent sessions are stateful on the broker side. In BifroRE, the client-id file is the
+MQTT persistent sessions are stateful on the broker side. In METRE, the client-id file is the
 source of truth for those sessions.
 
 Runtime behavior:
-- If the client-id file exists, BifroRE loads and uses those IDs as-is.
-- If the file does not exist, BifroRE generates plain defaults: `nodeId_index`.
-- If the client-id file count does not match the requested `client_count`, BifroRE aligns to the
+- If the client-id file exists, METRE loads and uses those IDs as-is.
+- If the file does not exist, METRE generates plain defaults: `nodeId_index`.
+- If the client-id file count does not match the requested `client_count`, METRE aligns to the
   file count instead of the requested count.
 
 This is intentional: persistent MQTT sessions are mapped to client IDs, so session continuity is
 more important than treating `client_count` as a stateless scaling knob.
 
-If you need broker-specific client-id placement, provision the file before starting BifroRE.
+If you need broker-specific client-id placement, provision the file before starting METRE.
 That control-plane logic is intentionally kept out of this open-source tree. The runtime remains
 broker-neutral and simply consumes a client-id file when provided.
 
-with:
-
-```text
-inboxId = userId + "/" + clientId
-```
-
-The generated client IDs are written to the target file and can then be consumed by BifroRE at
-startup.
-
-This CLI is not a generic requirement for all MQTT brokers. Other brokers may not care about
-client-id patterns at all, or may require a different pattern. BifroRE runtime behavior remains
-clear and neutral:
+This file-based policy is not a generic requirement for all MQTT brokers. Other brokers may not
+care about client-id patterns at all, or may require a different pattern. METRE runtime behavior
+remains clear and neutral:
 - load client IDs from file if present
 - otherwise generate plain `nodeId_index` defaults
 - treat the client-id file as authoritative for persistent-session continuity
 
 If your broker needs a different provisioning policy, generate the client-id file with your own
-tooling and let BifroRE consume it unchanged.
+tooling and let METRE consume it unchanged.
 
 ## Examples
 
@@ -169,8 +158,8 @@ The release contract is:
 Rust embed usage:
 
 ```rust
-use bifrore_embed_core::payload::dynamic_protobuf_registry_from_descriptor_set_file;
-use bifrore_embed_core::runtime::RuleEngine;
+use metre_core::payload::dynamic_protobuf_registry_from_descriptor_set_file;
+use metre_core::runtime::RuleEngine;
 
 let decoder = dynamic_protobuf_registry_from_descriptor_set_file("/path/to/schema.desc")?;
 let engine = RuleEngine::new(decoder);
@@ -185,7 +174,7 @@ When you publish Release assets (Linux/macOS, x86_64/arm64), users can run witho
 1) Download the correct tarball from GitHub Releases and extract it:
 
 ```bash
-tar -xzf bifrore-embed-<os>-<arch>.tar.gz
+tar -xzf metre-embed-<os>-<arch>.tar.gz
 ```
 
 2) Use the extracted libraries.
@@ -193,12 +182,18 @@ tar -xzf bifrore-embed-<os>-<arch>.tar.gz
 Java (JNI):
 
 ```java
-BifroRE re = new BifroRE("127.0.0.1", 1883);
-re.onMessage((ruleId, payload, destinationsJson) -> {
-    // handle evaluated payload + destinations
+import com.metre.Metre;
+import com.metre.MetreOptions;
+
+Metre engine = new Metre(
+    new MetreOptions()
+        .mqtt(mqtt -> mqtt.host("127.0.0.1").port(1883))
+        .ffi(ffi -> ffi.ruleJsonPath("/path/to/rule.json"))
+);
+engine.onNext((ruleIndex, payload, offset, length, metadata) -> {
+    // handle evaluated payload slice + destinations
 });
-re.loadRules("/path/to/rule.json");
-re.start();
+engine.start();
 ```
 
 Run with library path pointing to the extracted folder:
@@ -210,12 +205,11 @@ java -Djava.library.path=/path/to/extracted/libs YourApp
 Python (ctypes):
 
 ```python
-from bindings.python.bifrore import BifroRE
+from metre import Metre
 
-engine = BifroRE("/path/to/extracted/libs/libbifrore_embed.dylib")
-engine.on_message(lambda rule_id, payload, destinations: print(rule_id, destinations))
-engine.load_rules("/path/to/rule.json")
-engine.start_mqtt("127.0.0.1", 1883, "client-1", "bifrore-group")
+async with Metre("/path/to/extracted/libs/libmetre_embed.dylib", "/path/to/rule.json") as engine:
+    async for rule_index, payload, destinations in engine:
+        print(rule_index, destinations, payload)
 ```
 
 ## Rule File Format
@@ -234,7 +228,10 @@ engine.start_mqtt("127.0.0.1", 1883, "client-1", "bifrore-group")
 ## Benchmarks
 
 A Criterion benchmark is provided at:
-- `engine/bifrore-embed-core/benches/runtime_bench.rs`
+- `engine/metre-core/benches/bench_e2e.rs`
+- `engine/metre-core/benches/bench_parse.rs`
+- `engine/metre-core/benches/bench_pipeline.rs`
+- `engine/metre-core/benches/benchmark_pipeline_single_rule.rs`
 
 Current benchmark scenarios:
 - `rule_eval_100_all_match_json`

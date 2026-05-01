@@ -1,0 +1,11 @@
+use libc::c_int;
+
+pub const METRE_OK: c_int = 0;
+pub const METRE_POLL_RESULT_READY: c_int = 1;
+pub const METRE_ERR_INVALID_ARGUMENT: c_int = -1;
+pub const METRE_ERR_INVALID_STATE: c_int = -2;
+pub const METRE_ERR_INVALID_PARAMETER: c_int = -3;
+pub const METRE_ERR_START_FAILED: c_int = -4;
+pub const METRE_ERR_ALREADY_STARTED: c_int = -5;
+pub const METRE_ERR_WORKER_UNAVAILABLE: c_int = -6;
+pub const METRE_ERR_INTERNAL_QUEUE_ERROR: c_int = -7;

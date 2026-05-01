@@ -1,7 +1,7 @@
 package com.example;
 
-import com.bifrore.BifroRE;
-import com.bifrore.BifroREOptions;
+import com.metre.Metre;
+import com.metre.MetreOptions;
 import com.example.proto.TelemetryProto;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
@@ -35,8 +35,8 @@ public final class AppDirectKafka {
             .toByteArray();
         System.out.println("protobuf sample payload bytes=" + samplePayload.length);
 
-        BifroRE engine = new BifroRE(
-            new BifroREOptions()
+        Metre engine = new Metre(
+            new MetreOptions()
                 .mqtt(mqtt -> mqtt
                     .host("127.0.0.1")
                     .port(1883)
@@ -44,7 +44,7 @@ public final class AppDirectKafka {
                     .password("dev")
                 )
                 .ffi(ffi -> ffi
-                    .payloadFormat(BifroRE.PAYLOAD_PROTOBUF)
+                    .payloadFormat(Metre.PAYLOAD_PROTOBUF)
                     .ruleJsonPath(ExampleSupport.extractProtobufRuleResource())
                     .protobufDescriptorSetPath(ExampleSupport.extractProtobufDescriptorResource())
                 )
@@ -76,7 +76,7 @@ public final class AppDirectKafka {
             );
 
             CompletableFuture<Void> future = new CompletableFuture<>();
-            ProducerRecord<String, byte[]> record = new ProducerRecord<>("bifrore-output", retainedPayload);
+            ProducerRecord<String, byte[]> record = new ProducerRecord<>("metre-output", retainedPayload);
             producer.send(record, (metadataRecord, error) -> {
                 if (error != null) {
                     future.completeExceptionally(error);

@@ -13,7 +13,7 @@ jobs:
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64
     env:
-      BIFRORE_WHEEL_PLATFORM_TAG: manylinux_2_28_x86_64
+      METRE_WHEEL_PLATFORM_TAG: manylinux_2_28_x86_64
 
     steps:
       - name: Check out repository
@@ -43,21 +43,21 @@ jobs:
       - name: Build Linux jar and wheel
         run: |
           chmod +x build.sh
-          export BIFRORE_VERSION="${GITHUB_REF_NAME#v}"
+          export METRE_VERSION="${GITHUB_REF_NAME#v}"
           ./build.sh java
           ./build.sh python
 
       - name: Verify build outputs
         run: |
-          ls -1 build/bifrore-*.jar
+          ls -1 build/metre-*.jar
           ls -1 build/*.whl
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: bifrore-linux-release-artifacts
+          name: metre-linux-release-artifacts
           path: |
-            build/bifrore-*.jar
+            build/metre-*.jar
             build/*.whl
           if-no-files-found: error
 
@@ -65,5 +65,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/bifrore-*.jar
+            build/metre-*.jar
             build/*.whl

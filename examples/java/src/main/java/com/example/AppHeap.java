@@ -1,15 +1,15 @@
 package com.example;
 
-import com.bifrore.BifroRE;
-import com.bifrore.BifroREOptions;
+import com.metre.Metre;
+import com.metre.MetreOptions;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 
 public final class AppHeap {
     public static void main(String[] args) throws Exception {
-        BifroRE engine = new BifroRE(
-            new BifroREOptions()
+        Metre engine = new Metre(
+            new MetreOptions()
                 .mqtt(mqtt -> mqtt
                     .host("127.0.0.1")
                     .port(1883)

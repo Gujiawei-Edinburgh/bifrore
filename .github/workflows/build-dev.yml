@@ -1,4 +1,4 @@
-name: Test BifroRE
+name: Test Metre
 
 on:
   push:
@@ -54,8 +54,8 @@ jobs:
       - name: Wait for broker readiness
         run: |
           for i in $(seq 1 60); do
-            if mosquitto_pub -V mqttv5 -h 127.0.0.1 -p 1883 -i bifrore-ci-probe -q 0 \
-              -t bifrore/ci/probe -m ready >/dev/null 2>&1; then
+            if mosquitto_pub -V mqttv5 -h 127.0.0.1 -p 1883 -i metre-ci-probe -q 0 \
+              -t metre/ci/probe -m ready >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2

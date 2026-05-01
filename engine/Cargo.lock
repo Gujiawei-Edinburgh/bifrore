@@ -60,46 +60,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bifrore-embed-coordinator"
-version = "0.1.0"
-
-[[package]]
-name = "bifrore-embed-core"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "flume",
- "fxhash",
- "log",
- "pretty_assertions",
- "prost",
- "prost-reflect",
- "prost-types",
- "rayon",
- "regex",
- "rumqttc",
- "serde",
- "serde_json",
- "simd-json",
- "sqlparser",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "bifrore-embed-ffi"
-version = "0.1.0"
-dependencies = [
- "bifrore-embed-coordinator",
- "bifrore-embed-core",
- "flume",
- "libc",
- "log",
- "serde_json",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +463,46 @@ name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
+
+[[package]]
+name = "metre-coordinator"
+version = "0.1.0"
+
+[[package]]
+name = "metre-core"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "flume",
+ "fxhash",
+ "log",
+ "pretty_assertions",
+ "prost",
+ "prost-reflect",
+ "prost-types",
+ "rayon",
+ "regex",
+ "rumqttc",
+ "serde",
+ "serde_json",
+ "simd-json",
+ "sqlparser",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "metre-ffi"
+version = "0.1.0"
+dependencies = [
+ "flume",
+ "libc",
+ "log",
+ "metre-coordinator",
+ "metre-core",
+ "serde_json",
+]
 
 [[package]]
 name = "mio"

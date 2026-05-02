@@ -21,7 +21,7 @@ jobs:
 
       - name: Install system build tools
         run: |
-          dnf install -y gcc gcc-c++ make findutils which tar gzip zip
+          dnf install -y gcc gcc-c++ make cmake findutils which tar gzip zip
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

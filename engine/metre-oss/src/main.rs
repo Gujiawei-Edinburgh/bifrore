@@ -64,11 +64,7 @@ fn run() -> Result<(), String> {
         ordered_prefix: config.mqtt.ordered_prefix,
         keep_alive_secs: config.mqtt.keep_alive_secs,
     };
-    let dispatcher = Arc::new(Dispatcher::new(
-        config.sinks.log_enabled,
-        config.sinks.kafka_enabled,
-        rule_metadata,
-    ));
+    let dispatcher = Arc::new(Dispatcher::new(config.sinks, rule_metadata)?);
     let engine = Arc::new(Mutex::new(rule_engine));
     let handler = build_handler(Arc::clone(&engine), dispatcher);
 

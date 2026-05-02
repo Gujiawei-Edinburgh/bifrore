@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct OssConfig {
@@ -51,10 +52,19 @@ pub struct MqttOssConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct SinkConfig {
-    #[serde(default = "default_true")]
-    pub log_enabled: bool,
-    #[serde(default = "default_true")]
-    pub kafka_enabled: bool,
+    pub log: Option<LogSinkConfig>,
+    pub kafka: Option<KafkaSinkConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogSinkConfig {}
+
+#[derive(Debug, Deserialize)]
+pub struct KafkaSinkConfig {
+    pub bootstrap_servers: Vec<String>,
+    pub topic: String,
+    #[serde(default)]
+    pub properties: HashMap<String, String>,
 }
 
 impl Default for PayloadConfig {
@@ -90,8 +100,8 @@ impl Default for MqttOssConfig {
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
-            log_enabled: true,
-            kafka_enabled: true,
+            log: None,
+            kafka: None,
         }
     }
 }
@@ -138,8 +148,4 @@ fn default_io_threads() -> u16 {
 
 fn default_queue_capacity() -> u16 {
     4096
-}
-
-fn default_true() -> bool {
-    true
 }

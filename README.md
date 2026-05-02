@@ -135,7 +135,7 @@ The OSS binary currently provides:
 - MQTT input using the same rule engine core.
 - File-based rule and client-id loading through the OSS coordinator.
 - Built-in log sink for evaluated messages.
-- Kafka sink scaffold with hardcoded placeholder settings for the first binary artifact.
+- Kafka sink backed by an asynchronous Kafka producer and `sinks.kafka` config.
 
 Minimal config:
 
@@ -151,8 +151,17 @@ Minimal config:
     "password": "dev"
   },
   "sinks": {
-    "log_enabled": true,
-    "kafka_enabled": true
+    "log": {},
+    "kafka": {
+      "bootstrap_servers": ["127.0.0.1:9092"],
+      "topic": "metre-output",
+      "properties": {
+        "queue.buffering.max.messages": "100000",
+        "batch.num.messages": "1000",
+        "linger.ms": "5",
+        "acks": "1"
+      }
+    }
   }
 }
 ```

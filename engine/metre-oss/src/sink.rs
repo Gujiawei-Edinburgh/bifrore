@@ -1,6 +1,12 @@
+use crate::config::{KafkaSinkConfig, SinkConfig};
 use metre_core::message::Message;
 use metre_core::runtime::RuleMetadata;
+use rdkafka::config::ClientConfig;
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use rdkafka::producer::{BaseRecord, DefaultProducerContext, Producer, ThreadedProducer};
+use rdkafka::util::Timeout;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub struct Dispatcher {
     log_sink: Option<LogSink>,
@@ -9,19 +15,15 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn new(
-        log_enabled: bool,
-        kafka_enabled: bool,
-        rule_metadata: Vec<RuleMetadata>,
-    ) -> Self {
-        Self {
-            log_sink: log_enabled.then_some(LogSink),
-            kafka_sink: kafka_enabled.then_some(KafkaSink::default()),
+    pub fn new(sinks: SinkConfig, rule_metadata: Vec<RuleMetadata>) -> Result<Self, String> {
+        Ok(Self {
+            log_sink: sinks.log.map(|_| LogSink),
+            kafka_sink: sinks.kafka.map(KafkaSink::new).transpose()?,
             metadata_by_rule_index: rule_metadata
                 .into_iter()
                 .map(|metadata| (metadata.rule_index, metadata))
                 .collect(),
-        }
+        })
     }
 
     pub fn dispatch(&self, rule_index: usize, message: &Message) {
@@ -64,28 +66,73 @@ impl LogSink {
 }
 
 struct KafkaSink {
-    bootstrap_servers: &'static str,
-    topic: &'static str,
+    bootstrap_servers: Vec<String>,
+    topic: String,
+    properties: HashMap<String, String>,
+    producer: ThreadedProducer<DefaultProducerContext>,
 }
 
-impl Default for KafkaSink {
-    fn default() -> Self {
-        Self {
-            bootstrap_servers: "127.0.0.1:9092",
-            topic: "metre-output",
+impl KafkaSink {
+    fn new(config: KafkaSinkConfig) -> Result<Self, String> {
+        if config.bootstrap_servers.is_empty() {
+            return Err("sinks.kafka.bootstrap_servers must not be empty".to_string());
+        }
+        if config.topic.is_empty() {
+            return Err("sinks.kafka.topic must not be empty".to_string());
+        }
+        let mut client_config = ClientConfig::new();
+        client_config.set("bootstrap.servers", config.bootstrap_servers.join(","));
+        for (key, value) in &config.properties {
+            client_config.set(key, value);
+        }
+        let producer = client_config
+            .create()
+            .map_err(|err| format!("failed to create kafka producer: {err}"))?;
+        Ok(Self {
+            bootstrap_servers: config.bootstrap_servers,
+            topic: config.topic,
+            properties: config.properties,
+            producer,
+        })
+    }
+
+    fn send(&self, rule_index: usize, message: &Message, metadata: &RuleMetadata) {
+        let record = BaseRecord::to(&self.topic)
+            .key(&message.topic)
+            .payload(&message.payload);
+        if let Err((err, _record)) = self.producer.send(record) {
+            match err {
+                KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) => {
+                    log::warn!(
+                        "kafka producer queue full topic={} rule_index={} destinations={:?} payload_bytes={}",
+                        self.topic,
+                        rule_index,
+                        metadata.destinations,
+                        message.payload.len()
+                    );
+                }
+                other => {
+                    log::error!(
+                        "kafka producer enqueue failed topic={} rule_index={} destinations={:?} error={}",
+                        self.topic,
+                        rule_index,
+                        metadata.destinations,
+                        other
+                    );
+                }
+            }
         }
     }
 }
 
-impl KafkaSink {
-    fn send(&self, rule_index: usize, message: &Message, metadata: &RuleMetadata) {
+impl Drop for KafkaSink {
+    fn drop(&mut self) {
         log::info!(
-            "kafka sink scaffold bootstrap_servers={} topic={} rule_index={} destinations={:?} payload_bytes={}",
-            self.bootstrap_servers,
+            "flushing kafka producer bootstrap_servers={} topic={} properties={}",
+            self.bootstrap_servers.join(","),
             self.topic,
-            rule_index,
-            metadata.destinations,
-            message.payload.len()
+            self.properties.len()
         );
+        let _ = self.producer.flush(Timeout::After(Duration::from_secs(5)));
     }
 }

@@ -13,7 +13,16 @@
     "group_name": "metre-oss"
   },
   "sinks": {
-    "log_enabled": true,
-    "kafka_enabled": true
+    "log": {},
+    "kafka": {
+      "bootstrap_servers": ["127.0.0.1:9092"],
+      "topic": "metre-output",
+      "properties": {
+        "queue.buffering.max.messages": "100000",
+        "batch.num.messages": "1000",
+        "linger.ms": "5",
+        "acks": "1"
+      }
+    }
   }
 }

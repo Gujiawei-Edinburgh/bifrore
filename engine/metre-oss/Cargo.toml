@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 metre-core = { path = "../metre-core", features = ["mqtt"] }
 metre-coordinator = { path = "../metre-coordinator" }
+flume = "0.11"
 log = "0.4"
 rdkafka = { version = "0.36", default-features = false, features = ["cmake-build"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -11,8 +11,9 @@ use metre_core::runtime::RuleEngine;
 use sink::Dispatcher;
 use std::env;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn main() {
@@ -45,6 +46,7 @@ fn run() -> Result<(), String> {
     let requested_client_count = config.mqtt.client_count.max(1);
     let client_ids = coordinator.resolve_client_ids(&node_id, requested_client_count);
     coordinator.persist_client_ids(&client_ids)?;
+    let eval_queue_capacity = config.mqtt.queue_capacity.max(1) as usize;
 
     let mqtt_config = MqttConfig {
         host: config.mqtt.host,
@@ -65,8 +67,7 @@ fn run() -> Result<(), String> {
         keep_alive_secs: config.mqtt.keep_alive_secs,
     };
     let dispatcher = Arc::new(Dispatcher::new(config.sinks, rule_metadata)?);
-    let engine = Arc::new(Mutex::new(rule_engine));
-    let handler = build_handler(Arc::clone(&engine), dispatcher);
+    let (handler, eval_worker) = build_handler(rule_engine, dispatcher, eval_queue_capacity);
 
     log::info!(
         "starting metre-oss config={} rules={} topics={} clients={}",
@@ -80,6 +81,7 @@ fn run() -> Result<(), String> {
     loop {
         thread::sleep(Duration::from_secs(3600));
         let _ = &adapter;
+        let _ = &eval_worker;
     }
 }
 
@@ -127,22 +129,38 @@ fn build_rule_engine(config: &OssConfig) -> Result<RuleEngine, String> {
     }
 }
 
-fn build_handler(engine: Arc<Mutex<RuleEngine>>, dispatcher: Arc<Dispatcher>) -> MessageHandler {
-    Arc::new(move |delivery: IncomingDelivery| {
-        let message = delivery.message.clone();
-        let results = match engine.lock() {
-            Ok(mut engine) => engine.evaluate(&message),
-            Err(err) => {
-                log::error!("rule engine lock poisoned: {err}");
+fn build_handler(
+    mut engine: RuleEngine,
+    dispatcher: Arc<Dispatcher>,
+    queue_capacity: usize,
+) -> (MessageHandler, JoinHandle<()>) {
+    let (eval_tx, eval_rx) = flume::bounded::<IncomingDelivery>(queue_capacity);
+    let eval_worker = thread::Builder::new()
+        .name("metre-oss-eval".to_string())
+        .spawn(move || {
+            while let Ok(delivery) = eval_rx.recv() {
+                let message = delivery.message.clone();
+                let results = engine.evaluate(&message);
                 delivery.ack();
-                return;
+                for result in results {
+                    dispatcher.dispatch(result.rule_index, &result.message);
+                }
             }
-        };
-        delivery.ack();
-        for result in results {
-            dispatcher.dispatch(result.rule_index, &result.message);
+        })
+        .expect("failed to spawn metre-oss eval worker");
+
+    let handler = Arc::new(move |delivery: IncomingDelivery| {
+        match eval_tx.try_send(delivery) {
+            Ok(()) => {}
+            Err(flume::TrySendError::Full(_)) => {
+                log::warn!("dropping incoming message because eval queue is full");
+            }
+            Err(flume::TrySendError::Disconnected(_)) => {
+                log::warn!("dropping incoming message because eval queue is closed");
+            }
         }
-    })
+    });
+    (handler, eval_worker)
 }
 
 fn generate_default_node_id() -> String {

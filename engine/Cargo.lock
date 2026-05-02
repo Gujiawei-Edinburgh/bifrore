@@ -505,6 +505,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "metre-oss"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "metre-coordinator",
+ "metre-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mio"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

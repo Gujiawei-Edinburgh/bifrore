@@ -1,0 +1,15 @@
+[package]
+name = "metre-oss"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "metre-oss"
+path = "src/main.rs"
+
+[dependencies]
+metre-core = { path = "../metre-core", features = ["mqtt"] }
+metre-coordinator = { path = "../metre-coordinator" }
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

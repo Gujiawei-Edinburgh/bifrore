@@ -4,4 +4,5 @@ members = [
   "metre-core",
   "metre-coordinator",
   "metre-ffi",
+  "metre-oss",
 ]

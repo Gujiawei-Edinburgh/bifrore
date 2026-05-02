@@ -104,10 +104,33 @@ java_jar_path() {
   echo "$BUILD_DIR/$jar_name"
 }
 
+oss_binary_name() {
+  local platform
+  platform="$(native_platform_dir)"
+  if [[ "$platform" == "unsupported" ]]; then
+    echo "unsupported"
+    return
+  fi
+  echo "metre-oss-${METRE_VERSION}-${platform}"
+}
+
 build_rust() {
   echo "Building Rust cdylib..."
   (cd "$RUST_DIR" && cargo build --release -p metre-ffi --features mqtt)
   cp "$RUST_DIR/target/release/libmetre_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
+}
+
+build_oss_binary() {
+  echo "Building metre-oss binary..."
+  local binary_name
+  binary_name="$(oss_binary_name)"
+  if [[ "$binary_name" == "unsupported" ]]; then
+    echo "Unsupported platform for metre-oss binary: $OS_NAME/$(uname -m)"
+    exit 7
+  fi
+  (cd "$RUST_DIR" && cargo build --release -p metre-oss)
+  cp "$RUST_DIR/target/release/metre-oss" "$BUILD_DIR/$binary_name"
+  echo "metre-oss binary: $BUILD_DIR/$binary_name"
 }
 
 build_jni() {

@@ -1,0 +1,19 @@
+{
+  "rule_json_path": "examples/metre-oss/rule.json",
+  "client_ids_path": "examples/metre-oss/client_ids",
+  "payload": {
+    "format": "json"
+  },
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 1883,
+    "client_count": 1,
+    "username": "dev",
+    "password": "dev",
+    "group_name": "metre-oss"
+  },
+  "sinks": {
+    "log_enabled": true,
+    "kafka_enabled": true
+  }
+}

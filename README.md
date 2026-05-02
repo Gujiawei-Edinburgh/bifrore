@@ -1,8 +1,9 @@
 # METRE (MQTT Event Transform Rule Engine)
 
-METRE is an embedded MQTT rule engine delivered as a Rust library with a C ABI.
+METRE is an MQTT rule engine delivered as an embedded Rust library with a C ABI
+and as a standalone OSS binary.
 It connects to an MQTT broker via shared subscriptions, evaluates SQL-like rules in memory,
-and returns evaluation results to the host application via callbacks (JNI / Python / C).
+and emits evaluation results either to the host application (JNI / Python / C) or built-in sinks.
 
 ## Architecture
 
@@ -82,7 +83,8 @@ Build the artifacts:
 ```bash
 ./build.sh java    # platform jar with bundled native libraries
 ./build.sh python  # platform wheel with bundled native library
-./build.sh all     # java + python
+./build.sh oss     # standalone metre-oss binary
+./build.sh all     # java + python + oss
 ./scripts/test.sh core        # engine core tests
 ./scripts/test.sh jni               # JNI related test cases
 ./scripts/test.sh java-integration  # Java integration test cases
@@ -108,10 +110,52 @@ Artifacts are placed under `build/`:
 - `libmetre_jni.(so|dylib)` (JNI)
 - `metre-<version>-<platform>.jar`
 - `metre-0.1.0-*.whl`
+- `metre-oss-<version>-<platform>`
 
 Java jar filenames include the native platform, for example
 `metre-0.1.0-linux-x86_64.jar` or `metre-0.1.0-darwin-aarch64.jar`.
 The wheel keeps the standard Python platform tag.
+
+## Standalone OSS Binary
+
+For quick trials, build and run the standalone process:
+
+```bash
+./build.sh oss
+./build/metre-oss-0.1.0-darwin-aarch64 -c examples/metre-oss/config.json
+```
+
+On Linux release artifacts, use:
+
+```bash
+./metre-oss-0.1.0-linux-x86_64 -c config.json
+```
+
+The OSS binary currently provides:
+- MQTT input using the same rule engine core.
+- File-based rule and client-id loading through the OSS coordinator.
+- Built-in log sink for evaluated messages.
+- Kafka sink scaffold with hardcoded placeholder settings for the first binary artifact.
+
+Minimal config:
+
+```json
+{
+  "rule_json_path": "examples/metre-oss/rule.json",
+  "client_ids_path": "examples/metre-oss/client_ids",
+  "payload": { "format": "json" },
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 1883,
+    "username": "dev",
+    "password": "dev"
+  },
+  "sinks": {
+    "log_enabled": true,
+    "kafka_enabled": true
+  }
+}
+```
 
 ## Client ID Provisioning
 

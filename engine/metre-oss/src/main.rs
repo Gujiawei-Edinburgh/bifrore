@@ -16,7 +16,7 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 fn main() {
     if let Err(err) = run() {
@@ -94,12 +94,11 @@ fn run() -> Result<(), String> {
     );
     let adapter = start_mqtt(mqtt_config, topic_filters, handler).map_err(|err| format!("{err:?}"))?;
     log::info!("metre-oss started; press Ctrl+C to stop");
-    loop {
-        thread::sleep(Duration::from_secs(3600));
-        let _ = &adapter;
-        let _ = &eval_worker;
-        let _ = &metrics_worker;
-    }
+    let _adapter = adapter;
+    let _eval_worker = eval_worker;
+    metrics_worker
+        .join()
+        .map_err(|_| "metrics endpoint thread panicked".to_string())
 }
 
 fn parse_config_path(args: Vec<String>) -> Result<String, String> {

@@ -8,12 +8,106 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-artifacts:
-    runs-on: ubuntu-latest
-    container:
-      image: quay.io/pypa/manylinux_2_28_x86_64
+  test-linux:
+    name: Test Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     env:
-      METRE_WHEEL_PLATFORM_TAG: manylinux_2_28_x86_64
+      MAVEN_REPO_LOCAL: ${{ github.workspace }}/.m2-ci
+      BIFROMQ_LOG_DIR: ${{ github.workspace }}/.bifromq-logs
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install MQTT probe client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mosquitto-clients
+
+      - name: Run Rust core tests
+        run: ./scripts/test.sh core
+
+      - name: Run JNI helper tests
+        run: ./scripts/test.sh jni
+
+      - name: Start BifroMQ broker
+        run: |
+          rm -rf "$BIFROMQ_LOG_DIR"
+          mkdir -p "$BIFROMQ_LOG_DIR"
+          chmod 0777 "$BIFROMQ_LOG_DIR"
+          docker run -d \
+            --name bifromq \
+            -m 1g \
+            -e MEM_LIMIT=1073741824 \
+            -v "$BIFROMQ_LOG_DIR:/home/bifromq/logs" \
+            -p 1883:1883 \
+            apache/bifromq:4.0.0-incubating
+
+      - name: Wait for broker readiness
+        run: |
+          for i in $(seq 1 60); do
+            if mosquitto_pub -V mqttv5 -h 127.0.0.1 -p 1883 -i metre-ci-probe -q 0 \
+              -t metre/ci/probe -m ready >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bifromq || true
+          cat "$BIFROMQ_LOG_DIR/info.log" || true
+          cat "$BIFROMQ_LOG_DIR/error.log" || true
+          exit 1
+
+      - name: Run Java JNI integration tests
+        run: ./scripts/test.sh java-integration
+
+      - name: Dump broker logs on failure
+        if: failure()
+        run: |
+          docker logs bifromq || true
+          cat "$BIFROMQ_LOG_DIR/error.log" || true
+
+      - name: Stop broker
+        if: always()
+        run: docker rm -f bifromq
+
+  build-linux-artifacts:
+    name: Build Linux ${{ matrix.arch }} Artifacts
+    needs: test-linux
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            image: quay.io/pypa/manylinux_2_28_x86_64
+            wheel_tag: manylinux_2_28_x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+            wheel_tag: manylinux_2_28_aarch64
+    env:
+      METRE_WHEEL_PLATFORM_TAG: ${{ matrix.wheel_tag }}
 
     steps:
       - name: Check out repository
@@ -40,7 +134,7 @@ jobs:
       - name: Install Python packaging dependencies
         run: python -m pip install --upgrade pip setuptools wheel
 
-      - name: Build Linux jar, wheels, and binary
+      - name: Build Linux ${{ matrix.arch }} jar, wheels, and binary
         run: |
           chmod +x build.sh
           export METRE_VERSION="${GITHUB_REF_NAME#v}"
@@ -53,17 +147,17 @@ jobs:
           ls -1 build/metre-oss-*
           ls -1 build/metre_oss-*.whl
           ls -1 build/metre-*.jar
-          ls -1 build/*.whl
+          ls -1 build/metre-*.whl
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: metre-linux-release-artifacts
+          name: metre-linux-${{ matrix.arch }}-release-artifacts
           path: |
             build/metre-oss-*
             build/metre_oss-*.whl
             build/metre-*.jar
-            build/*.whl
+            build/metre-*.whl
           if-no-files-found: error
 
       - name: Upload assets to GitHub release
@@ -73,4 +167,4 @@ jobs:
             build/metre-oss-*
             build/metre_oss-*.whl
             build/metre-*.jar
-            build/*.whl
+            build/metre-*.whl

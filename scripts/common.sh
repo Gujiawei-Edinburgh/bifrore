@@ -278,12 +278,17 @@ build_python() {
   cp "$BUILD_DIR/libmetre_embed.$RUST_LIB_EXT" "$native_dir/"
 
   cat > "$wheel_stage/setup.py" <<EOF
-from setuptools import Distribution, setup
+from setuptools import setup
+from wheel.bdist_wheel import bdist_wheel
 
 
-class BinaryDistribution(Distribution):
-    def has_ext_modules(self):
-        return True
+class PlatformWheel(bdist_wheel):
+    def finalize_options(self):
+        super().finalize_options()
+        self.root_is_pure = False
+
+    def get_tag(self):
+        return "py3", "none", self.plat_name
 
 
 setup(
@@ -293,11 +298,12 @@ setup(
     packages=["metre"],
     package_data={"metre": ["libmetre_embed.*"]},
     include_package_data=True,
-    distclass=BinaryDistribution,
+    zip_safe=False,
+    cmdclass={"bdist_wheel": PlatformWheel},
 )
 EOF
 
-  (cd "$wheel_stage" && python3 setup.py bdist_wheel --plat-name "$platform" --dist-dir "$dist_dir")
+  (cd "$wheel_stage" && python3 setup.py bdist_wheel --python-tag py3 --plat-name "$platform" --dist-dir "$dist_dir")
 }
 
 install_java_jar_to_local_maven() {

@@ -1,4 +1,12 @@
-# METRE (MQTT Event Transform Rule Engine)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/metre-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/metre-logo-light.png">
+    <img src="assets/metre-logo-light.png" alt="METRE" width="520">
+  </picture>
+</p>
+
+# MQTT Event Transform Rule Engine (metre)
 
 METRE is an MQTT rule engine delivered as an embedded Rust library with a C ABI
 and as a standalone OSS binary.

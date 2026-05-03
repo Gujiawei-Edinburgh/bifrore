@@ -12,6 +12,8 @@ pub struct OssConfig {
     pub mqtt: MqttOssConfig,
     #[serde(default)]
     pub sinks: SinkConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +69,12 @@ pub struct KafkaSinkConfig {
     pub properties: HashMap<String, String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default)]
+    pub detailed_latency: bool,
+}
+
 impl Default for PayloadConfig {
     fn default() -> Self {
         Self {
@@ -102,6 +110,14 @@ impl Default for SinkConfig {
         Self {
             log: None,
             kafka: None,
+        }
+    }
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            detailed_latency: false,
         }
     }
 }

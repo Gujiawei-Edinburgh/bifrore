@@ -1,4 +1,5 @@
 use crate::config::{KafkaSinkConfig, SinkConfig};
+use crate::metrics::OssMetrics;
 use metre_core::message::Message;
 use metre_core::runtime::RuleMetadata;
 use rdkafka::config::ClientConfig;
@@ -6,23 +7,33 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::producer::{BaseRecord, DefaultProducerContext, Producer, ThreadedProducer};
 use rdkafka::util::Timeout;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Dispatcher {
     log_sink: Option<LogSink>,
     kafka_sink: Option<KafkaSink>,
     metadata_by_rule_index: HashMap<usize, RuleMetadata>,
+    metrics: Arc<OssMetrics>,
 }
 
 impl Dispatcher {
-    pub fn new(sinks: SinkConfig, rule_metadata: Vec<RuleMetadata>) -> Result<Self, String> {
+    pub fn new(
+        sinks: SinkConfig,
+        rule_metadata: Vec<RuleMetadata>,
+        metrics: Arc<OssMetrics>,
+    ) -> Result<Self, String> {
         Ok(Self {
             log_sink: sinks.log.map(|_| LogSink),
-            kafka_sink: sinks.kafka.map(KafkaSink::new).transpose()?,
+            kafka_sink: sinks
+                .kafka
+                .map(|config| KafkaSink::new(config, Arc::clone(&metrics)))
+                .transpose()?,
             metadata_by_rule_index: rule_metadata
                 .into_iter()
                 .map(|metadata| (metadata.rule_index, metadata))
                 .collect(),
+            metrics,
         })
     }
 
@@ -44,6 +55,7 @@ impl Dispatcher {
                     }
                 }
                 other => {
+                    self.metrics.record_sink_unsupported_destination();
                     log::warn!("unsupported destination={other} rule_index={rule_index}");
                 }
             }
@@ -70,10 +82,11 @@ struct KafkaSink {
     topic: String,
     properties: HashMap<String, String>,
     producer: ThreadedProducer<DefaultProducerContext>,
+    metrics: Arc<OssMetrics>,
 }
 
 impl KafkaSink {
-    fn new(config: KafkaSinkConfig) -> Result<Self, String> {
+    fn new(config: KafkaSinkConfig, metrics: Arc<OssMetrics>) -> Result<Self, String> {
         if config.bootstrap_servers.is_empty() {
             return Err("sinks.kafka.bootstrap_servers must not be empty".to_string());
         }
@@ -93,6 +106,7 @@ impl KafkaSink {
             topic: config.topic,
             properties: config.properties,
             producer,
+            metrics,
         })
     }
 
@@ -100,9 +114,11 @@ impl KafkaSink {
         let record = BaseRecord::to(&self.topic)
             .key(&message.topic)
             .payload(&message.payload);
-        if let Err((err, _record)) = self.producer.send(record) {
-            match err {
+        match self.producer.send(record) {
+            Ok(()) => self.metrics.record_kafka_enqueue(),
+            Err((err, _record)) => match err {
                 KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) => {
+                    self.metrics.record_kafka_queue_full();
                     log::warn!(
                         "kafka producer queue full topic={} rule_index={} destinations={:?} payload_bytes={}",
                         self.topic,
@@ -112,6 +128,7 @@ impl KafkaSink {
                     );
                 }
                 other => {
+                    self.metrics.record_kafka_enqueue_error();
                     log::error!(
                         "kafka producer enqueue failed topic={} rule_index={} destinations={:?} error={}",
                         self.topic,
@@ -120,7 +137,7 @@ impl KafkaSink {
                         other
                     );
                 }
-            }
+            },
         }
     }
 }

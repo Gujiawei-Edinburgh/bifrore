@@ -162,6 +162,9 @@ Minimal config:
         "acks": "1"
       }
     }
+  },
+  "metrics": {
+    "detailed_latency": false
   }
 }
 ```

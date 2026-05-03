@@ -1,7 +1,9 @@
 mod config;
+mod metrics;
 mod sink;
 
 use config::OssConfig;
+use metrics::{start_metrics_server, OssMetrics};
 use metre_coordinator::EngineCoordinator;
 use metre_core::mqtt::{start_mqtt, IncomingDelivery, MessageHandler, MqttConfig};
 use metre_core::payload::{
@@ -14,7 +16,7 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn main() {
     if let Err(err) = run() {
@@ -32,10 +34,14 @@ fn run() -> Result<(), String> {
         config.client_ids_path.clone(),
     );
     let rule_bytes = coordinator.load_rule_bytes()?;
+    let metrics_config = config.metrics.clone();
     let mut rule_engine = build_rule_engine(&config)?;
+    rule_engine.set_detailed_latency_metrics(metrics_config.detailed_latency);
     let rule_count = rule_engine
         .load_rules_from_json_bytes(&rule_bytes)
         .map_err(|err| err.to_string())?;
+    let eval_metrics = rule_engine.metrics_handle();
+    let oss_metrics = Arc::new(OssMetrics::default());
     let topic_filters = rule_engine.topic_filters();
     let rule_metadata = rule_engine.rule_metadata();
     let node_id = config
@@ -66,8 +72,18 @@ fn run() -> Result<(), String> {
         ordered_prefix: config.mqtt.ordered_prefix,
         keep_alive_secs: config.mqtt.keep_alive_secs,
     };
-    let dispatcher = Arc::new(Dispatcher::new(config.sinks, rule_metadata)?);
-    let (handler, eval_worker) = build_handler(rule_engine, dispatcher, eval_queue_capacity);
+    let metrics_worker = start_metrics_server(metrics_config, Arc::clone(&eval_metrics))?;
+    let dispatcher = Arc::new(Dispatcher::new(
+        config.sinks,
+        rule_metadata,
+        Arc::clone(&oss_metrics),
+    )?);
+    let (handler, eval_worker) = build_handler(
+        rule_engine,
+        dispatcher,
+        eval_queue_capacity,
+        Arc::clone(&oss_metrics),
+    );
 
     log::info!(
         "starting metre-oss config={} rules={} topics={} clients={}",
@@ -82,6 +98,7 @@ fn run() -> Result<(), String> {
         thread::sleep(Duration::from_secs(3600));
         let _ = &adapter;
         let _ = &eval_worker;
+        let _ = &metrics_worker;
     }
 }
 
@@ -133,29 +150,39 @@ fn build_handler(
     mut engine: RuleEngine,
     dispatcher: Arc<Dispatcher>,
     queue_capacity: usize,
+    metrics: Arc<OssMetrics>,
 ) -> (MessageHandler, JoinHandle<()>) {
     let (eval_tx, eval_rx) = flume::bounded::<IncomingDelivery>(queue_capacity);
+    let worker_metrics = Arc::clone(&metrics);
     let eval_worker = thread::Builder::new()
         .name("metre-oss-eval".to_string())
         .spawn(move || {
             while let Ok(delivery) = eval_rx.recv() {
+                let pipeline_start = Instant::now();
+                worker_metrics.record_eval_queue_dequeued();
                 let message = delivery.message.clone();
+                let core_eval_start = Instant::now();
                 let results = engine.evaluate(&message);
+                worker_metrics.record_core_eval(core_eval_start.elapsed().as_nanos() as u64);
                 delivery.ack();
                 for result in results {
                     dispatcher.dispatch(result.rule_index, &result.message);
                 }
+                worker_metrics.record_worker_pipeline(pipeline_start.elapsed().as_nanos() as u64);
             }
         })
         .expect("failed to spawn metre-oss eval worker");
 
     let handler = Arc::new(move |delivery: IncomingDelivery| {
+        metrics.record_ingress();
         match eval_tx.try_send(delivery) {
-            Ok(()) => {}
+            Ok(()) => metrics.record_eval_queue_enqueued(),
             Err(flume::TrySendError::Full(_)) => {
+                metrics.record_eval_queue_drop();
                 log::warn!("dropping incoming message because eval queue is full");
             }
             Err(flume::TrySendError::Disconnected(_)) => {
+                metrics.record_eval_queue_drop();
                 log::warn!("dropping incoming message because eval queue is closed");
             }
         }

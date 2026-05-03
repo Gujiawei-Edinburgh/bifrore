@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/scripts/common.sh"
 
 usage() {
-  echo "Usage: ./build.sh [java|python|oss|all]"
+  echo "Usage: ./build.sh [java|python|metre-oss|metre-oss-pypi|all]"
   exit 1
 }
 
@@ -25,12 +25,15 @@ case "$TARGET" in
     build_rust
     build_python
     ;;
-  oss)
-    build_oss_binary
+  metre-oss|oss)
+    build_metre_oss_binary
+    ;;
+  metre-oss-pypi)
+    build_metre_oss_pypi
     ;;
   all)
     build_rust
-    build_oss_binary
+    build_metre_oss_pypi
     build_jni
     build_java_jar
     build_python

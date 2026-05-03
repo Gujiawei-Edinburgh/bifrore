@@ -83,8 +83,9 @@ Build the artifacts:
 ```bash
 ./build.sh java    # platform jar with bundled native libraries
 ./build.sh python  # platform wheel with bundled native library
-./build.sh oss     # standalone metre-oss binary
-./build.sh all     # java + python + oss
+./build.sh metre-oss       # standalone metre-oss binary
+./build.sh metre-oss-pypi  # PyPI wheel that installs the metre-oss command
+./build.sh all     # java + python + metre-oss + metre-oss-pypi
 ./scripts/test.sh core        # engine core tests
 ./scripts/test.sh jni               # JNI related test cases
 ./scripts/test.sh java-integration  # Java integration test cases

@@ -54,7 +54,8 @@ platform_tag() {
       ;;
     Linux)
       case "$(uname -m)" in
-        x86_64|amd64) echo "manylinux2014_x86_64" ;;
+        x86_64|amd64) echo "manylinux_2_28_x86_64" ;;
+        arm64|aarch64) echo "manylinux_2_28_aarch64" ;;
         *) echo "unsupported" ;;
       esac
       ;;
@@ -75,6 +76,7 @@ native_platform_dir() {
     Linux)
       case "$(uname -m)" in
         x86_64|amd64) echo "linux-x86_64" ;;
+        arm64|aarch64) echo "linux-aarch64" ;;
         *) echo "unsupported" ;;
       esac
       ;;
@@ -120,7 +122,7 @@ build_rust() {
   cp "$RUST_DIR/target/release/libmetre_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
 }
 
-build_oss_binary() {
+build_metre_oss_binary() {
   echo "Building metre-oss binary..."
   local binary_name
   binary_name="$(oss_binary_name)"
@@ -131,6 +133,58 @@ build_oss_binary() {
   (cd "$RUST_DIR" && cargo build --release -p metre-oss)
   cp "$RUST_DIR/target/release/metre-oss" "$BUILD_DIR/$binary_name"
   echo "metre-oss binary: $BUILD_DIR/$binary_name"
+}
+
+build_metre_oss_pypi() {
+  echo "Building metre-oss PyPI wheel..."
+  local platform binary_name wheel_stage package_dir
+  platform="$(platform_tag)"
+  if [[ "$platform" == "unsupported" ]]; then
+    echo "Unsupported platform for metre-oss PyPI wheel: $OS_NAME/$(uname -m)"
+    exit 8
+  fi
+
+  build_metre_oss_binary
+  binary_name="$(oss_binary_name)"
+  wheel_stage="$BUILD_DIR/metre-oss-pypi-stage"
+  package_dir="$wheel_stage/metre_oss"
+  rm -f "$BUILD_DIR"/metre_oss-*.whl
+  rm -rf "$wheel_stage"
+  mkdir -p "$package_dir/bin"
+
+  cp "$ROOT_DIR/scripts/metre-oss-pypi/metre_oss/__init__.py" "$package_dir/__init__.py"
+  cp "$ROOT_DIR/scripts/metre-oss-pypi/metre_oss/cli.py" "$package_dir/cli.py"
+  cp "$BUILD_DIR/$binary_name" "$package_dir/bin/metre-oss"
+  chmod 755 "$package_dir/bin/metre-oss"
+
+  cat > "$wheel_stage/setup.py" <<EOF
+from setuptools import setup
+from wheel.bdist_wheel import bdist_wheel
+
+
+class PlatformWheel(bdist_wheel):
+    def finalize_options(self):
+        super().finalize_options()
+        self.root_is_pure = False
+
+    def get_tag(self):
+        return "py3", "none", self.plat_name
+
+
+setup(
+    name="metre-oss",
+    version="${METRE_VERSION}",
+    description="METRE standalone OSS executable",
+    packages=["metre_oss"],
+    package_data={"metre_oss": ["bin/metre-oss"]},
+    entry_points={"console_scripts": ["metre-oss=metre_oss.cli:main"]},
+    include_package_data=True,
+    zip_safe=False,
+    cmdclass={"bdist_wheel": PlatformWheel},
+)
+EOF
+
+  (cd "$wheel_stage" && python3 setup.py bdist_wheel --python-tag py3 --plat-name "$platform" --dist-dir "$BUILD_DIR")
 }
 
 build_jni() {

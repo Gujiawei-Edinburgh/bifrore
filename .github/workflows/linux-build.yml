@@ -40,17 +40,18 @@ jobs:
       - name: Install Python packaging dependencies
         run: python -m pip install --upgrade pip setuptools wheel
 
-      - name: Build Linux jar, wheel, and binary
+      - name: Build Linux jar, wheels, and binary
         run: |
           chmod +x build.sh
           export METRE_VERSION="${GITHUB_REF_NAME#v}"
-          ./build.sh oss
+          ./build.sh metre-oss-pypi
           ./build.sh java
           ./build.sh python
 
       - name: Verify build outputs
         run: |
           ls -1 build/metre-oss-*
+          ls -1 build/metre_oss-*.whl
           ls -1 build/metre-*.jar
           ls -1 build/*.whl
 
@@ -60,6 +61,7 @@ jobs:
           name: metre-linux-release-artifacts
           path: |
             build/metre-oss-*
+            build/metre_oss-*.whl
             build/metre-*.jar
             build/*.whl
           if-no-files-found: error
@@ -69,5 +71,6 @@ jobs:
         with:
           files: |
             build/metre-oss-*
+            build/metre_oss-*.whl
             build/metre-*.jar
             build/*.whl

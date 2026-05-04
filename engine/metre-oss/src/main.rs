@@ -1,4 +1,5 @@
 mod config;
+mod logger;
 mod metrics;
 mod sink;
 
@@ -26,7 +27,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    SimpleLogger::init();
+    let _log_guard = logger::init()?;
     let config_path = parse_config_path(env::args().collect())?;
     let config = load_config(&config_path)?;
     let coordinator = EngineCoordinator::from_oss_files(
@@ -92,7 +93,8 @@ fn run() -> Result<(), String> {
         topic_filters.len(),
         mqtt_config.client_count
     );
-    let adapter = start_mqtt(mqtt_config, topic_filters, handler).map_err(|err| format!("{err:?}"))?;
+    let adapter = start_mqtt(mqtt_config, topic_filters, handler)
+        .map_err(|err| format!("{err:?}"))?;
     log::info!("metre-oss started; press Ctrl+C to stop");
     let _adapter = adapter;
     let _eval_worker = eval_worker;
@@ -198,29 +200,4 @@ fn generate_default_node_id() -> String {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
     format!("metre_oss_{}_{}", pid, millis)
-}
-
-struct SimpleLogger;
-
-impl SimpleLogger {
-    fn init() {
-        static LOGGER: SimpleLogger = SimpleLogger;
-        if log::set_logger(&LOGGER).is_ok() {
-            log::set_max_level(log::LevelFilter::Info);
-        }
-    }
-}
-
-impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            eprintln!("[{}][{}] {}", record.level(), record.target(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
 }

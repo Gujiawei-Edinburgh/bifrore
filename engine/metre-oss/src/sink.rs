@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Dispatcher {
+    noop_sink: Option<NoopSink>,
     log_sink: Option<LogSink>,
     kafka_sink: Option<KafkaSink>,
     metadata_by_rule_index: HashMap<usize, RuleMetadata>,
@@ -24,6 +25,9 @@ impl Dispatcher {
         metrics: Arc<OssMetrics>,
     ) -> Result<Self, String> {
         Ok(Self {
+            noop_sink: sinks.noop.map(|_| NoopSink {
+                metrics: Arc::clone(&metrics),
+            }),
             log_sink: sinks.log.map(|_| LogSink),
             kafka_sink: sinks
                 .kafka
@@ -44,6 +48,11 @@ impl Dispatcher {
         };
         for destination in &metadata.destinations {
             match destination.as_str() {
+                "noop" => {
+                    if let Some(sink) = &self.noop_sink {
+                        sink.send();
+                    }
+                }
                 "log" => {
                     if let Some(sink) = &self.log_sink {
                         sink.send(rule_index, message, metadata);
@@ -60,6 +69,16 @@ impl Dispatcher {
                 }
             }
         }
+    }
+}
+
+struct NoopSink {
+    metrics: Arc<OssMetrics>,
+}
+
+impl NoopSink {
+    fn send(&self) {
+        self.metrics.record_noop_sink_message();
     }
 }
 

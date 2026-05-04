@@ -54,6 +54,10 @@ impl OssMetrics {
         ::metrics::counter!("metre_oss_kafka_enqueue_errors_total").increment(1);
     }
 
+    pub fn record_noop_sink_message(&self) {
+        ::metrics::counter!("metre_oss_noop_sink_messages_total").increment(1);
+    }
+
     pub fn record_sink_unsupported_destination(&self) {
         ::metrics::counter!("metre_oss_sink_unsupported_destinations_total").increment(1);
     }

@@ -146,6 +146,7 @@ On Linux release artifacts, use:
 The OSS binary currently provides:
 - MQTT input using the same rule engine core.
 - File-based rule and client-id loading through the OSS coordinator.
+- Noop sink for load testing without sink I/O.
 - Built-in log sink for evaluated messages.
 - Kafka sink backed by an asynchronous Kafka producer and `sinks.kafka` config.
 
@@ -162,6 +163,7 @@ Minimal config:
     "password": "dev"
   },
   "sinks": {
+    "noop": {},
     "log": {},
     "kafka": {
       "bootstrap_servers": ["127.0.0.1:9092"],
@@ -179,6 +181,8 @@ Minimal config:
   }
 }
 ```
+
+For load testing, enable only `sinks.noop` and route rules to the `noop` destination.
 
 ## Client ID Provisioning
 

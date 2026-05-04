@@ -12,6 +12,7 @@
     "group_name": "metre-oss"
   },
   "sinks": {
+    "noop": {},
     "log": {},
     "kafka": {
       "bootstrap_servers": ["127.0.0.1:9092"],

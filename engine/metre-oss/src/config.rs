@@ -54,9 +54,13 @@ pub struct MqttOssConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct SinkConfig {
+    pub noop: Option<NoopSinkConfig>,
     pub log: Option<LogSinkConfig>,
     pub kafka: Option<KafkaSinkConfig>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct NoopSinkConfig {}
 
 #[derive(Debug, Deserialize)]
 pub struct LogSinkConfig {}
@@ -108,6 +112,7 @@ impl Default for MqttOssConfig {
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
+            noop: None,
             log: None,
             kafka: None,
         }

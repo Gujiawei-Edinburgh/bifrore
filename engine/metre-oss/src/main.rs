@@ -1,6 +1,7 @@
 mod config;
 mod logger;
 mod metrics;
+mod paths;
 mod sink;
 
 use config::OssConfig;
@@ -14,6 +15,7 @@ use metre_core::runtime::RuleEngine;
 use sink::Dispatcher;
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
@@ -104,6 +106,11 @@ fn run() -> Result<(), String> {
 }
 
 fn parse_config_path(args: Vec<String>) -> Result<String, String> {
+    let default_path = paths::config_path()?;
+    parse_config_path_with_default(args, &default_path)
+}
+
+fn parse_config_path_with_default(args: Vec<String>, default_path: &Path) -> Result<String, String> {
     let index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -120,11 +127,21 @@ fn parse_config_path(args: Vec<String>) -> Result<String, String> {
             value => return Err(format!("unknown argument: {value}")),
         }
     }
-    Err("missing required -c <config.json>".to_string())
+
+    if default_path.is_file() {
+        return Ok(default_path.to_string_lossy().to_string());
+    }
+
+    print_usage(&args[0]);
+    Err(format!(
+        "missing config: pass -c <config.json> or create {}",
+        default_path.display()
+    ))
 }
 
 fn print_usage(program: &str) {
-    println!("Usage: {program} -c config.json");
+    println!("Usage: {program} [-c config.json]");
+    println!("Default config: $METRE_HOME/config.json");
 }
 
 fn load_config(path: &str) -> Result<OssConfig, String> {
@@ -200,4 +217,45 @@ fn generate_default_node_id() -> String {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
     format!("metre_oss_{}_{}", pid, millis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_config_arg_wins_over_default() {
+        let default_path = Path::new("/tmp/metre-oss-default-config-arg-wins.json");
+        let path = parse_config_path_with_default(
+            vec![
+                "metre-oss".to_string(),
+                "-c".to_string(),
+                "custom.json".to_string(),
+            ],
+            default_path,
+        )
+        .unwrap();
+
+        assert_eq!(path, "custom.json");
+    }
+
+    #[test]
+    fn uses_default_config_when_present() {
+        let default_path = Path::new("/tmp/metre-oss-default-config-present.json");
+        let _ = fs::write(default_path, "{}");
+        let path = parse_config_path_with_default(vec!["metre-oss".to_string()], default_path).unwrap();
+
+        assert_eq!(path, default_path.to_string_lossy());
+        let _ = fs::remove_file(default_path);
+    }
+
+    #[test]
+    fn errors_when_no_explicit_or_default_config() {
+        let default_path = Path::new("/tmp/metre-oss-default-config-missing.json");
+        let _ = fs::remove_file(default_path);
+        let err = parse_config_path_with_default(vec!["metre-oss".to_string()], default_path)
+            .unwrap_err();
+
+        assert!(err.contains("missing config"));
+    }
 }

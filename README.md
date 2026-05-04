@@ -134,6 +134,9 @@ For quick trials, build and run the standalone process:
 ./build/metre-oss-0.1.0-darwin-aarch64 -c examples/metre-oss/config.json
 ```
 
+If `-c` is omitted, `metre-oss` uses `$METRE_HOME/config.json` when that file exists.
+If `METRE_HOME` is unset or the config file does not exist, it prints usage.
+
 On Linux release artifacts, use:
 
 ```bash

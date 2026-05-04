@@ -1,6 +1,5 @@
-use std::env;
+use crate::paths;
 use std::fs;
-use std::path::PathBuf;
 use tracing_appender::non_blocking::WorkerGuard;
 
 pub struct LoggerGuard {
@@ -8,7 +7,7 @@ pub struct LoggerGuard {
 }
 
 pub fn init() -> Result<LoggerGuard, String> {
-    let log_dir = log_dir()?;
+    let log_dir = paths::log_dir()?;
     fs::create_dir_all(&log_dir)
         .map_err(|err| format!("failed to create log dir {}: {err}", log_dir.display()))?;
 
@@ -28,10 +27,4 @@ pub fn init() -> Result<LoggerGuard, String> {
     Ok(LoggerGuard {
         _worker_guard: worker_guard,
     })
-}
-
-fn log_dir() -> Result<PathBuf, String> {
-    let home = env::var_os("METRE_HOME")
-        .ok_or_else(|| "METRE_HOME is not set; cannot resolve ~/.metre/log".to_string())?;
-    Ok(PathBuf::from(home).join(".metre").join("log"))
 }

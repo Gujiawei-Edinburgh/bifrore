@@ -127,7 +127,9 @@ fn print_usage(program: &str) {
 
 fn load_config(path: &str) -> Result<OssConfig, String> {
     let content = fs::read(path).map_err(|err| format!("failed to read config {path}: {err}"))?;
-    serde_json::from_slice(&content).map_err(|err| format!("failed to parse config {path}: {err}"))
+    serde_json::from_slice::<OssConfig>(&content)
+        .map(OssConfig::normalize)
+        .map_err(|err| format!("failed to parse config {path}: {err}"))
 }
 
 fn build_rule_engine(config: &OssConfig) -> Result<RuleEngine, String> {

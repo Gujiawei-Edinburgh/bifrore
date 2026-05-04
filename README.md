@@ -151,7 +151,6 @@ Minimal config:
 ```json
 {
   "rule_json_path": "examples/metre-oss/rule.json",
-  "client_ids_path": "examples/metre-oss/client_ids",
   "payload": { "format": "json" },
   "mqtt": {
     "host": "127.0.0.1",
@@ -185,7 +184,8 @@ source of truth for those sessions.
 
 Runtime behavior:
 - If the client-id file exists, METRE loads and uses those IDs as-is.
-- If the file does not exist, METRE generates plain defaults: `nodeId_index`.
+- If `client_ids_path` is omitted or blank, METRE uses `./client_ids`.
+- If the client-id file does not exist, METRE generates plain defaults: `nodeId_index` and flushes them to the file.
 - If the client-id file count does not match the requested `client_count`, METRE aligns to the
   file count instead of the requested count.
 

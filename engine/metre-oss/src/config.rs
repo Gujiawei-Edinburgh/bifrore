@@ -122,6 +122,18 @@ impl Default for MetricsConfig {
     }
 }
 
+impl OssConfig {
+    pub fn normalize(mut self) -> Self {
+        let client_ids_path = self.client_ids_path.trim();
+        self.client_ids_path = if client_ids_path.is_empty() {
+            default_client_ids_path()
+        } else {
+            client_ids_path.to_string()
+        };
+        self
+    }
+}
+
 fn default_client_ids_path() -> String {
     "./client_ids".to_string()
 }
@@ -164,4 +176,34 @@ fn default_io_threads() -> u16 {
 
 fn default_queue_capacity() -> u16 {
     4096
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_client_ids_path_uses_default() {
+        let config: OssConfig = serde_json::from_str(
+            r#"{
+              "rule_json_path": "rules.json"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.normalize().client_ids_path, "./client_ids");
+    }
+
+    #[test]
+    fn blank_client_ids_path_uses_default() {
+        let config: OssConfig = serde_json::from_str(
+            r#"{
+              "rule_json_path": "rules.json",
+              "client_ids_path": "   "
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.normalize().client_ids_path, "./client_ids");
+    }
 }

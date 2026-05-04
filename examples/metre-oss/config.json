@@ -1,6 +1,5 @@
 {
   "rule_json_path": "examples/metre-oss/rule.json",
-  "client_ids_path": "examples/metre-oss/client_ids",
   "payload": {
     "format": "json"
   },

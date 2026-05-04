@@ -122,9 +122,11 @@ mod tests {
 
     #[test]
     fn generates_client_ids_when_file_is_missing() {
+        let path = "/tmp/metre-test-client-ids-missing";
+        let _ = fs::remove_file(path);
         let coordinator = OssCoordinator::from_files(
             "/tmp/metre-test-rules-missing".to_string(),
-            "/tmp/metre-test-client-ids-missing".to_string(),
+            path.to_string(),
         )
         .into_engine_coordinator();
         let ids = coordinator.resolve_client_ids("node-1", 3);
@@ -136,5 +138,11 @@ mod tests {
                 "node-1_2".to_string()
             ]
         );
+        coordinator.persist_client_ids(&ids).unwrap();
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "node-1_0\nnode-1_1\nnode-1_2\n"
+        );
+        let _ = fs::remove_file(path);
     }
 }

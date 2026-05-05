@@ -21,8 +21,8 @@ import java.util.logging.Logger;
 public final class Metre implements AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(Metre.class.getName());
     private static final Object INSTANCE_LOCK = new Object();
-    private static final long POLLER_JOIN_TIMEOUT_MILLIS = 5000L;
-    private static final long EXECUTOR_SHUTDOWN_TIMEOUT_MILLIS = 5000L;
+    private static final long POLLER_JOIN_TIMEOUT_MILLIS = 60_000L;
+    private static final long EXECUTOR_SHUTDOWN_TIMEOUT_MILLIS = 60_000L;
     private static final long DROP_WARN_EVERY = 100L;
     private static final long DIRECT_SLOT_WAIT_MILLIS = 100L;
     private static final long RETRYABLE_POLL_BACKOFF_INITIAL_MILLIS = 10L;

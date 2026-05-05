@@ -18,10 +18,14 @@ use sink::Dispatcher;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_FORCE_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() {
     if let Err(err) = run() {
@@ -78,16 +82,18 @@ fn run() -> Result<(), String> {
         keep_alive_secs: config.mqtt.keep_alive_secs,
     };
     let metrics_worker = start_metrics_server(metrics_config, Arc::clone(&eval_metrics))?;
-    let dispatcher = Arc::new(Dispatcher::new(
+    let dispatcher = Dispatcher::new(
         config.sinks,
         rule_metadata,
         Arc::clone(&oss_metrics),
-    )?);
+    )?;
+    let force_shutdown = Arc::new(AtomicBool::new(false));
     let (handler, eval_worker) = build_handler(
         rule_engine,
-        Arc::clone(&dispatcher),
+        dispatcher,
         eval_queue_capacity,
         Arc::clone(&oss_metrics),
+        Arc::clone(&force_shutdown),
     );
 
     log::info!(
@@ -105,13 +111,65 @@ fn run() -> Result<(), String> {
     log::info!("metre-oss shutdown requested; stopping MQTT intake");
     adapter.stop().map_err(|err| format!("{err:?}"))?;
     log::info!("metre-oss MQTT intake stopped; draining eval queue");
-    eval_worker
-        .join()
-        .map_err(|_| "metre-oss eval worker panicked during shutdown".to_string())?;
-    log::info!("metre-oss eval queue drained; dropping sinks");
-    drop(dispatcher);
+    let eval_join = JoinWaiter::new(eval_worker);
+    match eval_join.wait(SHUTDOWN_DRAIN_TIMEOUT) {
+        JoinOutcome::Completed(Ok(())) => {
+            log::info!("metre-oss eval queue drained; sinks dropped");
+        }
+        JoinOutcome::Completed(Err(_)) => {
+            log::error!("metre-oss eval worker panicked during shutdown; sinks dropped");
+        }
+        JoinOutcome::TimedOut => {
+            log::warn!(
+                "metre-oss eval queue drain timed out after {} ms; requesting worker stop",
+                SHUTDOWN_DRAIN_TIMEOUT.as_millis()
+            );
+            force_shutdown.store(true, Ordering::Relaxed);
+            match eval_join.wait(SHUTDOWN_FORCE_STOP_TIMEOUT) {
+                JoinOutcome::Completed(Ok(())) => {
+                    log::info!("metre-oss eval worker stopped after timeout; sinks dropped");
+                }
+                JoinOutcome::Completed(Err(_)) => {
+                    log::error!("metre-oss eval worker panicked after timeout; sinks dropped");
+                }
+                JoinOutcome::TimedOut => {
+                    log::error!(
+                        "metre-oss eval worker did not stop within {} ms after timeout; process exit may skip sink drop",
+                        SHUTDOWN_FORCE_STOP_TIMEOUT.as_millis()
+                    );
+                }
+            }
+        }
+    }
     log::info!("metre-oss shutdown complete");
     Ok(())
+}
+
+enum JoinOutcome<T> {
+    Completed(thread::Result<T>),
+    TimedOut,
+}
+
+struct JoinWaiter<T> {
+    done_rx: flume::Receiver<thread::Result<T>>,
+}
+
+impl<T: Send + 'static> JoinWaiter<T> {
+    fn new(worker: JoinHandle<T>) -> Self {
+        let (done_tx, done_rx) = flume::bounded(1);
+        thread::spawn(move || {
+            let _ = done_tx.send(worker.join());
+        });
+        Self { done_rx }
+    }
+
+    fn wait(&self, timeout: Duration) -> JoinOutcome<T> {
+        match self.done_rx.recv_timeout(timeout) {
+            Ok(result) => JoinOutcome::Completed(result),
+            Err(flume::RecvTimeoutError::Timeout) => JoinOutcome::TimedOut,
+            Err(flume::RecvTimeoutError::Disconnected) => JoinOutcome::TimedOut,
+        }
+    }
 }
 
 fn wait_for_shutdown_signal() -> Result<(), String> {
@@ -186,9 +244,10 @@ fn build_rule_engine(config: &OssConfig) -> Result<RuleEngine, String> {
 
 fn build_handler(
     mut engine: RuleEngine,
-    dispatcher: Arc<Dispatcher>,
+    dispatcher: Dispatcher,
     queue_capacity: usize,
     metrics: Arc<OssMetrics>,
+    force_shutdown: Arc<AtomicBool>,
 ) -> (MessageHandler, JoinHandle<()>) {
     let (eval_tx, eval_rx) = flume::bounded::<IncomingDelivery>(queue_capacity);
     let worker_metrics = Arc::clone(&metrics);
@@ -196,6 +255,10 @@ fn build_handler(
         .name("metre-oss-eval".to_string())
         .spawn(move || {
             while let Ok(delivery) = eval_rx.recv() {
+                if force_shutdown.load(Ordering::Relaxed) {
+                    log::warn!("stopping eval worker before queue drain because shutdown timeout was reached");
+                    break;
+                }
                 let pipeline_start = Instant::now();
                 worker_metrics.record_eval_queue_dequeued();
                 let message = delivery.message.clone();

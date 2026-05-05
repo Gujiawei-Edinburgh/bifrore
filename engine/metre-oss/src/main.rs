@@ -12,6 +12,8 @@ use metre_core::payload::{
     dynamic_protobuf_registry_from_descriptor_set_file, PayloadDecoder, PayloadFormat,
 };
 use metre_core::runtime::RuleEngine;
+use signal_hook::consts::signal::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 use sink::Dispatcher;
 use std::env;
 use std::fs;
@@ -83,7 +85,7 @@ fn run() -> Result<(), String> {
     )?);
     let (handler, eval_worker) = build_handler(
         rule_engine,
-        dispatcher,
+        Arc::clone(&dispatcher),
         eval_queue_capacity,
         Arc::clone(&oss_metrics),
     );
@@ -98,11 +100,27 @@ fn run() -> Result<(), String> {
     let adapter = start_mqtt(mqtt_config, topic_filters, handler)
         .map_err(|err| format!("{err:?}"))?;
     log::info!("metre-oss started; press Ctrl+C to stop");
-    let _adapter = adapter;
-    let _eval_worker = eval_worker;
-    metrics_worker
+    let _metrics_worker = metrics_worker;
+    wait_for_shutdown_signal()?;
+    log::info!("metre-oss shutdown requested; stopping MQTT intake");
+    adapter.stop().map_err(|err| format!("{err:?}"))?;
+    log::info!("metre-oss MQTT intake stopped; draining eval queue");
+    eval_worker
         .join()
-        .map_err(|_| "metrics endpoint thread panicked".to_string())
+        .map_err(|_| "metre-oss eval worker panicked during shutdown".to_string())?;
+    log::info!("metre-oss eval queue drained; dropping sinks");
+    drop(dispatcher);
+    log::info!("metre-oss shutdown complete");
+    Ok(())
+}
+
+fn wait_for_shutdown_signal() -> Result<(), String> {
+    let mut signals = Signals::new([SIGINT, SIGTERM])
+        .map_err(|err| format!("failed to register shutdown signals: {err}"))?;
+    if let Some(signal) = signals.forever().next() {
+        log::info!("received shutdown signal={signal}");
+    }
+    Ok(())
 }
 
 fn parse_config_path(args: Vec<String>) -> Result<String, String> {

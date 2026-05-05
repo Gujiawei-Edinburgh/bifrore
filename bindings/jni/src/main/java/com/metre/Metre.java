@@ -753,7 +753,9 @@ public final class Metre implements AutoCloseable {
     }
 
     private boolean shouldStopPollerForHeapCode(int code) {
-        return code == METRE_ERR_INVALID_ARGUMENT || code == METRE_ERR_INVALID_STATE;
+        return code == METRE_ERR_INVALID_ARGUMENT
+            || code == METRE_ERR_INVALID_STATE
+            || (disconnecting && code == METRE_ERR_INTERNAL_QUEUE_ERROR);
     }
 
     private static long nextRetryablePollBackoffMillis(long currentBackoffMillis) {
@@ -864,7 +866,7 @@ public final class Metre implements AutoCloseable {
         }
         if (count == METRE_ERR_INTERNAL_QUEUE_ERROR) {
             releaseDirectSlot(slot);
-            return PollLoopAction.BACKOFF;
+            return disconnecting ? PollLoopAction.STOP : PollLoopAction.BACKOFF;
         }
         if (count <= METRE_OK) {
             if (count == JNI_DIRECT_ERR_PAYLOAD_BUFFER_TOO_SMALL) {

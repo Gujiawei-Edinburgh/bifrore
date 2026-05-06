@@ -1,6 +1,6 @@
 package com.example;
 
-import com.metre.Metre;
+import com.tenon.Tenon;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -34,15 +34,15 @@ final class ExampleSupport {
     }
 
     static String extractRuleResource() {
-        return extractResource(DEFAULT_RULE_RESOURCE, "metre-rule-", ".json");
+        return extractResource(DEFAULT_RULE_RESOURCE, "tenon-rule-", ".json");
     }
 
     static String extractProtobufRuleResource() {
-        return extractResource(PROTOBUF_RULE_RESOURCE, "metre-rule-protobuf-", ".json");
+        return extractResource(PROTOBUF_RULE_RESOURCE, "tenon-rule-protobuf-", ".json");
     }
 
     static String extractProtobufDescriptorResource() {
-        return extractResource(PROTOBUF_DESCRIPTOR_RESOURCE, "metre-protobuf-", ".desc");
+        return extractResource(PROTOBUF_DESCRIPTOR_RESOURCE, "tenon-protobuf-", ".desc");
     }
 
     private static String extractResource(String resourcePath, String prefix, String suffix) {
@@ -74,7 +74,7 @@ final class ExampleSupport {
         return server;
     }
 
-    static void installShutdown(Metre engine, PrometheusMeterRegistry registry, HttpServer metricsServer, Runnable extraClose) {
+    static void installShutdown(Tenon engine, PrometheusMeterRegistry registry, HttpServer metricsServer, Runnable extraClose) {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (extraClose != null) {
                 extraClose.run();

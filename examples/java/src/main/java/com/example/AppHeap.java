@@ -1,15 +1,15 @@
 package com.example;
 
-import com.metre.Metre;
-import com.metre.MetreOptions;
+import com.tenon.Tenon;
+import com.tenon.TenonOptions;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 
 public final class AppHeap {
     public static void main(String[] args) throws Exception {
-        Metre engine = new Metre(
-            new MetreOptions()
+        Tenon engine = new Tenon(
+            new TenonOptions()
                 .mqtt(mqtt -> mqtt
                     .host("127.0.0.1")
                     .port(1883)

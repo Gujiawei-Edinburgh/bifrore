@@ -4,14 +4,14 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>metre-java-example</artifactId>
+    <artifactId>tenon-java-example</artifactId>
     <version>0.1.0</version>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <metre.java.version>0.1.0</metre.java.version>
+        <tenon.java.version>0.1.0</tenon.java.version>
         <jackson.databind.version>2.18.2</jackson.databind.version>
         <micrometer.core.version>1.14.5</micrometer.core.version>
         <micrometer.registry.prometheus>1.14.5</micrometer.registry.prometheus>
@@ -21,9 +21,9 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.metre</groupId>
-            <artifactId>metre-java</artifactId>
-            <version>${metre.java.version}</version>
+            <groupId>com.tenon</groupId>
+            <artifactId>tenon-java</artifactId>
+            <version>${tenon.java.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

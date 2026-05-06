@@ -1,10 +1,10 @@
 import asyncio
 
-from metre import Metre
+from tenon import Tenon
 
 
 async def main():
-    async with Metre(
+    async with Tenon(
         "./rule.json",
         host="127.0.0.1",
         port=1883,

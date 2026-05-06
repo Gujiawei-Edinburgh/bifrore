@@ -1,14 +1,6 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/metre-logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/metre-logo-light.png">
-    <img src="assets/metre-logo-light.png" alt="METRE" width="520">
-  </picture>
-</p>
+# MQTT Event Transform Rule Engine (tenon)
 
-# MQTT Event Transform Rule Engine (metre)
-
-METRE is an MQTT rule engine delivered as an embedded Rust library with a C ABI
+TENON is an MQTT rule engine delivered as an embedded Rust library with a C ABI
 and as a standalone OSS binary.
 It connects to an MQTT broker via shared subscriptions, evaluates SQL-like rules in memory,
 and emits evaluation results either to the host application (JNI / Python / C) or built-in sinks.
@@ -91,9 +83,9 @@ Build the artifacts:
 ```bash
 ./build.sh java    # platform jar with bundled native libraries
 ./build.sh python  # platform wheel with bundled native library
-./build.sh metre-oss       # standalone metre-oss binary
-./build.sh metre-oss-pypi  # PyPI wheel that installs the metre-oss command
-./build.sh all     # java + python + metre-oss + metre-oss-pypi
+./build.sh tenon-oss       # standalone tenon-oss binary
+./build.sh tenon-oss-pypi  # PyPI wheel that installs the tenon-oss command
+./build.sh all     # java + python + tenon-oss + tenon-oss-pypi
 ./scripts/test.sh core        # engine core tests
 ./scripts/test.sh jni               # JNI related test cases
 ./scripts/test.sh java-integration  # Java integration test cases
@@ -105,24 +97,24 @@ Optional feature flags (manual cargo usage):
 
 ```bash
 # core with SIMD JSON parser
-cargo build -p metre-core --features simd-json
+cargo build -p tenon-core --features simd-json
 
 # ffi with mqtt + SIMD JSON parser
-cargo build -p metre-ffi --features "mqtt simd-json"
+cargo build -p tenon-ffi --features "mqtt simd-json"
 ```
 
 Note: `simd-json` is workload and platform dependent; it is not guaranteed to be faster than
 `serde_json` in every case.
 
 Artifacts are placed under `build/`:
-- `libmetre_embed.(so|dylib)`
-- `libmetre_jni.(so|dylib)` (JNI)
-- `metre-<version>-<platform>.jar`
-- `metre-0.1.0-*.whl`
-- `metre-oss-<version>-<platform>`
+- `libtenon_embed.(so|dylib)`
+- `libtenon_jni.(so|dylib)` (JNI)
+- `tenon-<version>-<platform>.jar`
+- `tenon-0.1.0-*.whl`
+- `tenon-oss-<version>-<platform>`
 
 Java jar filenames include the native platform, for example
-`metre-0.1.0-linux-x86_64.jar` or `metre-0.1.0-darwin-aarch64.jar`.
+`tenon-0.1.0-linux-x86_64.jar` or `tenon-0.1.0-darwin-aarch64.jar`.
 The wheel keeps the standard Python platform tag.
 
 ## Standalone OSS Binary
@@ -131,16 +123,16 @@ For quick trials, build and run the standalone process:
 
 ```bash
 ./build.sh oss
-./build/metre-oss-0.1.0-darwin-aarch64 -c examples/metre-oss/config.json
+./build/tenon-oss-0.1.0-darwin-aarch64 -c examples/tenon-oss/config.json
 ```
 
-If `-c` is omitted, `metre-oss` uses `$METRE_HOME/config.json` when that file exists.
-If `METRE_HOME` is unset or the config file does not exist, it prints usage.
+If `-c` is omitted, `tenon-oss` uses `$TENON_HOME/config.json` when that file exists.
+If `TENON_HOME` is unset or the config file does not exist, it prints usage.
 
 On Linux release artifacts, use:
 
 ```bash
-./metre-oss-0.1.0-linux-x86_64 -c config.json
+./tenon-oss-0.1.0-linux-x86_64 -c config.json
 ```
 
 The OSS binary currently provides:
@@ -154,7 +146,7 @@ Minimal config:
 
 ```json
 {
-  "rule_json_path": "examples/metre-oss/rule.json",
+  "rule_json_path": "examples/tenon-oss/rule.json",
   "payload": { "format": "json" },
   "mqtt": {
     "host": "127.0.0.1",
@@ -167,7 +159,7 @@ Minimal config:
     "log": {},
     "kafka": {
       "bootstrap_servers": ["127.0.0.1:9092"],
-      "topic": "metre-output",
+      "topic": "tenon-output",
       "properties": {
         "queue.buffering.max.messages": "100000",
         "batch.num.messages": "1000",
@@ -186,32 +178,32 @@ For load testing, enable only `sinks.noop` and route rules to the `noop` destina
 
 ## Client ID Provisioning
 
-MQTT persistent sessions are stateful on the broker side. In METRE, the client-id file is the
+MQTT persistent sessions are stateful on the broker side. In TENON, the client-id file is the
 source of truth for those sessions.
 
 Runtime behavior:
-- If the client-id file exists, METRE loads and uses those IDs as-is.
-- If `client_ids_path` is omitted or blank, METRE uses `./client_ids`.
-- If the client-id file does not exist, METRE generates plain defaults: `nodeId_index` and flushes them to the file.
-- If the client-id file count does not match the requested `client_count`, METRE aligns to the
+- If the client-id file exists, TENON loads and uses those IDs as-is.
+- If `client_ids_path` is omitted or blank, TENON uses `./client_ids`.
+- If the client-id file does not exist, TENON generates plain defaults: `nodeId_index` and flushes them to the file.
+- If the client-id file count does not match the requested `client_count`, TENON aligns to the
   file count instead of the requested count.
 
 This is intentional: persistent MQTT sessions are mapped to client IDs, so session continuity is
 more important than treating `client_count` as a stateless scaling knob.
 
-If you need broker-specific client-id placement, provision the file before starting METRE.
+If you need broker-specific client-id placement, provision the file before starting TENON.
 That control-plane logic is intentionally kept out of this open-source tree. The runtime remains
 broker-neutral and simply consumes a client-id file when provided.
 
 This file-based policy is not a generic requirement for all MQTT brokers. Other brokers may not
-care about client-id patterns at all, or may require a different pattern. METRE runtime behavior
+care about client-id patterns at all, or may require a different pattern. TENON runtime behavior
 remains clear and neutral:
 - load client IDs from file if present
 - otherwise generate plain `nodeId_index` defaults
 - treat the client-id file as authoritative for persistent-session continuity
 
 If your broker needs a different provisioning policy, generate the client-id file with your own
-tooling and let METRE consume it unchanged.
+tooling and let TENON consume it unchanged.
 
 ## Examples
 
@@ -230,8 +222,8 @@ The release contract is:
 Rust embed usage:
 
 ```rust
-use metre_core::payload::dynamic_protobuf_registry_from_descriptor_set_file;
-use metre_core::runtime::RuleEngine;
+use tenon_core::payload::dynamic_protobuf_registry_from_descriptor_set_file;
+use tenon_core::runtime::RuleEngine;
 
 let decoder = dynamic_protobuf_registry_from_descriptor_set_file("/path/to/schema.desc")?;
 let engine = RuleEngine::new(decoder);
@@ -246,7 +238,7 @@ When you publish Release assets (Linux/macOS, x86_64/arm64), users can run witho
 1) Download the correct tarball from GitHub Releases and extract it:
 
 ```bash
-tar -xzf metre-embed-<os>-<arch>.tar.gz
+tar -xzf tenon-embed-<os>-<arch>.tar.gz
 ```
 
 2) Use the extracted libraries.
@@ -254,11 +246,11 @@ tar -xzf metre-embed-<os>-<arch>.tar.gz
 Java (JNI):
 
 ```java
-import com.metre.Metre;
-import com.metre.MetreOptions;
+import com.tenon.Tenon;
+import com.tenon.TenonOptions;
 
-Metre engine = new Metre(
-    new MetreOptions()
+Tenon engine = new Tenon(
+    new TenonOptions()
         .mqtt(mqtt -> mqtt.host("127.0.0.1").port(1883))
         .ffi(ffi -> ffi.ruleJsonPath("/path/to/rule.json"))
 );
@@ -277,9 +269,9 @@ java -Djava.library.path=/path/to/extracted/libs YourApp
 Python (ctypes):
 
 ```python
-from metre import Metre
+from tenon import Tenon
 
-async with Metre("/path/to/extracted/libs/libmetre_embed.dylib", "/path/to/rule.json") as engine:
+async with Tenon("/path/to/extracted/libs/libtenon_embed.dylib", "/path/to/rule.json") as engine:
     async for rule_index, payload, destinations in engine:
         print(rule_index, destinations, payload)
 ```
@@ -300,10 +292,10 @@ async with Metre("/path/to/extracted/libs/libmetre_embed.dylib", "/path/to/rule.
 ## Benchmarks
 
 A Criterion benchmark is provided at:
-- `engine/metre-core/benches/bench_e2e.rs`
-- `engine/metre-core/benches/bench_parse.rs`
-- `engine/metre-core/benches/bench_pipeline.rs`
-- `engine/metre-core/benches/benchmark_pipeline_single_rule.rs`
+- `engine/tenon-core/benches/bench_e2e.rs`
+- `engine/tenon-core/benches/bench_parse.rs`
+- `engine/tenon-core/benches/bench_pipeline.rs`
+- `engine/tenon-core/benches/benchmark_pipeline_single_rule.rs`
 
 Current benchmark scenarios:
 - `rule_eval_100_all_match_json`

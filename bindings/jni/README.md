@@ -1,11 +1,11 @@
 # JNI Notes
 
-`Metre` is a JVM-wide singleton in the Java binding.
+`Tenon` is a JVM-wide singleton in the Java binding.
 
 ## Singleton contract
 
-- Only one `com.metre.Metre` instance is allowed in the same JVM.
-- Construction is guarded in `Metre.java`.
+- Only one `com.tenon.Tenon` instance is allowed in the same JVM.
+- Construction is guarded in `Tenon.java`.
 - The singleton is released when `close()` completes.
 
 ## Why this exists

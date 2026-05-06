@@ -1,0 +1,17 @@
+use std::env;
+use std::path::PathBuf;
+
+pub fn config_path() -> Result<PathBuf, String> {
+    Ok(tenon_home()?.join("config.json"))
+}
+
+pub fn log_dir() -> Result<PathBuf, String> {
+    Ok(tenon_home()?.join("log"))
+}
+
+fn tenon_home() -> Result<PathBuf, String> {
+    env::var_os("TENON_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "TENON_HOME is not set".to_string())
+}

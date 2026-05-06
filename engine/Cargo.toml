@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-  "metre-core",
-  "metre-coordinator",
-  "metre-ffi",
-  "metre-oss",
+  "tenon-core",
+  "tenon-coordinator",
+  "tenon-ffi",
+  "tenon-oss",
 ]

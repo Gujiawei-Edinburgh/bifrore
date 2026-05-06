@@ -1,6 +1,6 @@
 # Java Example
 
-This example shows how to consume the generated platform-specific Metre jar from a Maven project.
+This example shows how to consume the generated platform-specific Tenon jar from a Maven project.
 
 ## 1. Build the jar
 
@@ -11,17 +11,17 @@ This example shows how to consume the generated platform-specific Metre jar from
 This produces:
 
 ```text
-build/metre-0.1.0-darwin-aarch64.jar
-build/metre-0.1.0-linux-x86_64.jar
+build/tenon-0.1.0-darwin-aarch64.jar
+build/tenon-0.1.0-linux-x86_64.jar
 ```
 
 ## 2. Install the jar into your local Maven repository
 
 ```bash
 mvn install:install-file \
-  -Dfile=build/metre-0.1.0-<platform>.jar \
-  -DgroupId=com.metre \
-  -DartifactId=metre-java \
+  -Dfile=build/tenon-0.1.0-<platform>.jar \
+  -DgroupId=com.tenon \
+  -DartifactId=tenon-java \
   -Dversion=0.1.0 \
   -Dpackaging=jar
 ```
@@ -46,7 +46,7 @@ http://127.0.0.1:9464/metrics
 
 The Java bindings provide:
 
-- `MetreOptions` for engine configuration
+- `TenonOptions` for engine configuration
 - `bindMetrics(...)` for binding all SDK metrics to a Micrometer registry
 - `disconnect()` to stop MQTT intake before final `close()`
 
@@ -57,7 +57,7 @@ for Prometheus or another Micrometer registry for OTLP, Datadog, StatsD, JMX, et
 Monotonic totals are bound as Micrometer function counters, while depths and max values
 are bound as gauges.
 
-Backpressure-related knobs in `MetreOptions`:
+Backpressure-related knobs in `TenonOptions`:
 
 - `callbackQueueCapacity(...)` for the default Java callback executor queue
 - `pollBatchLimit(...)` for the Rust-to-Java batch drain cap
@@ -78,7 +78,7 @@ The callback reads the payload slice directly from the shared heap batch blob.
 
 The direct example also configures protobuf payload decoding at engine init with:
 
-- `payloadFormat(Metre.PAYLOAD_PROTOBUF)`
+- `payloadFormat(Tenon.PAYLOAD_PROTOBUF)`
 - `protobufDescriptorSetPath(...)`
 
 The nested protobuf schema source lives at:

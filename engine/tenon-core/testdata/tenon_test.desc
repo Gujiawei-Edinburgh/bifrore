@@ -1,0 +1,25 @@
+
+ 
+tenon_test.proto
+tenon.test"3
+EvalPayload
+temp (Rtemp
+hum (Rhum"Y
+TypedRuntimePayload
+temp (Rtemp
+device (	Rdevice
+online (Ronline"I
+TypedMetric
+value (Rvalue
+ok (Rok
+label (	Rlabel"l
+TypedDeepNode/
+child (2.tenon.test.TypedDeepNodeRchild
+value (Rvalue
+label (	Rlabel"®
+TypedPayload
+temp (Rtemp
+hum (Rhum-
+deep (2.tenon.test.TypedDeepNodeRdeep1
+metrics (2.tenon.test.TypedMetricRmetrics
+device (	Rdevicebproto3

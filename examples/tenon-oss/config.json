@@ -1,0 +1,31 @@
+{
+  "rule_json_path": "examples/tenon-oss/rule.json",
+  "payload": {
+    "format": "json"
+  },
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 1883,
+    "client_count": 1,
+    "username": "dev",
+    "password": "dev",
+    "group_name": "tenon-oss"
+  },
+  "sinks": {
+    "noop": {},
+    "log": {},
+    "kafka": {
+      "bootstrap_servers": ["127.0.0.1:9092"],
+      "topic": "tenon-output",
+      "properties": {
+        "queue.buffering.max.messages": "100000",
+        "batch.num.messages": "1000",
+        "linger.ms": "5",
+        "acks": "1"
+      }
+    }
+  },
+  "metrics": {
+    "detailed_latency": false
+  }
+}

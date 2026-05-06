@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 RUST_DIR="$ROOT_DIR/engine"
-METRE_VERSION="${METRE_VERSION:-0.1.0}"
+TENON_VERSION="${TENON_VERSION:-0.1.0}"
 
 OS_NAME="$(uname -s)"
 case "$OS_NAME" in
@@ -41,8 +41,8 @@ ensure_java_home() {
 }
 
 platform_tag() {
-  if [[ -n "${METRE_WHEEL_PLATFORM_TAG:-}" ]]; then
-    echo "$METRE_WHEEL_PLATFORM_TAG"
+  if [[ -n "${TENON_WHEEL_PLATFORM_TAG:-}" ]]; then
+    echo "$TENON_WHEEL_PLATFORM_TAG"
     return
   fi
   case "$OS_NAME" in
@@ -93,7 +93,7 @@ java_jar_name() {
     echo "unsupported"
     return
   fi
-  echo "metre-${METRE_VERSION}-${platform}.jar"
+  echo "tenon-${TENON_VERSION}-${platform}.jar"
 }
 
 java_jar_path() {
@@ -113,49 +113,49 @@ oss_binary_name() {
     echo "unsupported"
     return
   fi
-  echo "metre-oss-${METRE_VERSION}-${platform}"
+  echo "tenon-oss-${TENON_VERSION}-${platform}"
 }
 
 build_rust() {
   echo "Building Rust cdylib..."
-  (cd "$RUST_DIR" && cargo build --release -p metre-ffi --features mqtt)
-  cp "$RUST_DIR/target/release/libmetre_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
+  (cd "$RUST_DIR" && cargo build --release -p tenon-ffi --features mqtt)
+  cp "$RUST_DIR/target/release/libtenon_embed.$RUST_LIB_EXT" "$BUILD_DIR/"
 }
 
-build_metre_oss_binary() {
-  echo "Building metre-oss binary..."
+build_tenon_oss_binary() {
+  echo "Building tenon-oss binary..."
   local binary_name
   binary_name="$(oss_binary_name)"
   if [[ "$binary_name" == "unsupported" ]]; then
-    echo "Unsupported platform for metre-oss binary: $OS_NAME/$(uname -m)"
+    echo "Unsupported platform for tenon-oss binary: $OS_NAME/$(uname -m)"
     exit 7
   fi
-  (cd "$RUST_DIR" && cargo build --release -p metre-oss)
-  cp "$RUST_DIR/target/release/metre-oss" "$BUILD_DIR/$binary_name"
-  echo "metre-oss binary: $BUILD_DIR/$binary_name"
+  (cd "$RUST_DIR" && cargo build --release -p tenon-oss)
+  cp "$RUST_DIR/target/release/tenon-oss" "$BUILD_DIR/$binary_name"
+  echo "tenon-oss binary: $BUILD_DIR/$binary_name"
 }
 
-build_metre_oss_pypi() {
-  echo "Building metre-oss PyPI wheel..."
+build_tenon_oss_pypi() {
+  echo "Building tenon-oss PyPI wheel..."
   local platform binary_name wheel_stage package_dir
   platform="$(platform_tag)"
   if [[ "$platform" == "unsupported" ]]; then
-    echo "Unsupported platform for metre-oss PyPI wheel: $OS_NAME/$(uname -m)"
+    echo "Unsupported platform for tenon-oss PyPI wheel: $OS_NAME/$(uname -m)"
     exit 8
   fi
 
-  build_metre_oss_binary
+  build_tenon_oss_binary
   binary_name="$(oss_binary_name)"
-  wheel_stage="$BUILD_DIR/metre-oss-pypi-stage"
-  package_dir="$wheel_stage/metre_oss"
-  rm -f "$BUILD_DIR"/metre_oss-*.whl
+  wheel_stage="$BUILD_DIR/tenon-oss-pypi-stage"
+  package_dir="$wheel_stage/tenon_oss"
+  rm -f "$BUILD_DIR"/tenon_oss-*.whl
   rm -rf "$wheel_stage"
   mkdir -p "$package_dir/bin"
 
-  cp "$ROOT_DIR/scripts/metre-oss-pypi/metre_oss/__init__.py" "$package_dir/__init__.py"
-  cp "$ROOT_DIR/scripts/metre-oss-pypi/metre_oss/cli.py" "$package_dir/cli.py"
-  cp "$BUILD_DIR/$binary_name" "$package_dir/bin/metre-oss"
-  chmod 755 "$package_dir/bin/metre-oss"
+  cp "$ROOT_DIR/scripts/tenon-oss-pypi/tenon_oss/__init__.py" "$package_dir/__init__.py"
+  cp "$ROOT_DIR/scripts/tenon-oss-pypi/tenon_oss/cli.py" "$package_dir/cli.py"
+  cp "$BUILD_DIR/$binary_name" "$package_dir/bin/tenon-oss"
+  chmod 755 "$package_dir/bin/tenon-oss"
 
   cat > "$wheel_stage/setup.py" <<EOF
 from setuptools import setup
@@ -172,12 +172,12 @@ class PlatformWheel(bdist_wheel):
 
 
 setup(
-    name="metre-oss",
-    version="${METRE_VERSION}",
-    description="METRE standalone OSS executable",
-    packages=["metre_oss"],
-    package_data={"metre_oss": ["bin/metre-oss"]},
-    entry_points={"console_scripts": ["metre-oss=metre_oss.cli:main"]},
+    name="tenon-oss",
+    version="${TENON_VERSION}",
+    description="TENON standalone OSS executable",
+    packages=["tenon_oss"],
+    package_data={"tenon_oss": ["bin/tenon-oss"]},
+    entry_points={"console_scripts": ["tenon-oss=tenon_oss.cli:main"]},
     include_package_data=True,
     zip_safe=False,
     cmdclass={"bdist_wheel": PlatformWheel},
@@ -201,11 +201,11 @@ build_jni() {
 
   cc $JNI_CFLAGS \
     -I"$jni_include" -I"$jni_platform_include" \
-    -o "$BUILD_DIR/libmetre_jni.$JNI_LIB_EXT" \
-    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni.c" \
-    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni_heap_poll.c" \
-    "$ROOT_DIR/bindings/jni/src/main/c/metre_jni_direct_poll.c" \
-    -L"$BUILD_DIR" -lmetre_embed \
+    -o "$BUILD_DIR/libtenon_jni.$JNI_LIB_EXT" \
+    "$ROOT_DIR/bindings/jni/src/main/c/tenon_jni.c" \
+    "$ROOT_DIR/bindings/jni/src/main/c/tenon_jni_heap_poll.c" \
+    "$ROOT_DIR/bindings/jni/src/main/c/tenon_jni_direct_poll.c" \
+    -L"$BUILD_DIR" -ltenon_embed \
     $JNI_LDFLAGS
 }
 
@@ -223,10 +223,10 @@ build_jni_test() {
 
   cc $JNI_CFLAGS -pthread \
     -I"$jni_include" -I"$jni_platform_include" \
-    -o "$BUILD_DIR/metre-jni-direct-test" \
-    "$ROOT_DIR/bindings/jni/test/c/metre_jni_direct_test.c"
+    -o "$BUILD_DIR/tenon-jni-direct-test" \
+    "$ROOT_DIR/bindings/jni/test/c/tenon_jni_direct_test.c"
 
-  "$BUILD_DIR/metre-jni-direct-test"
+  "$BUILD_DIR/tenon-jni-direct-test"
 }
 
 build_java_jar() {
@@ -242,12 +242,12 @@ build_java_jar() {
   resources_root="$BUILD_DIR/java-stage/resources"
   resources_dir="$resources_root/natives"
   jar_path="$(java_jar_path)"
-  rm -f "$BUILD_DIR"/metre-*.jar
+  rm -f "$BUILD_DIR"/tenon-*.jar
   rm -rf "$BUILD_DIR/java-stage"
   mkdir -p "$native_dir" "$classes_dir" "$resources_dir"
 
-  cp "$BUILD_DIR/libmetre_embed.$RUST_LIB_EXT" "$native_dir/"
-  cp "$BUILD_DIR/libmetre_jni.$JNI_LIB_EXT" "$native_dir/"
+  cp "$BUILD_DIR/libtenon_embed.$RUST_LIB_EXT" "$native_dir/"
+  cp "$BUILD_DIR/libtenon_jni.$JNI_LIB_EXT" "$native_dir/"
 
   find "$ROOT_DIR/bindings/jni/src/main/java" -name '*.java' -print0 | \
     xargs -0 javac --release 17 -d "$classes_dir"
@@ -267,15 +267,15 @@ build_python() {
     exit 5
   fi
   wheel_stage="$BUILD_DIR/python-wheel-stage"
-  package_dir="$wheel_stage/metre"
+  package_dir="$wheel_stage/tenon"
   native_dir="$package_dir"
   dist_dir="$BUILD_DIR"
-  rm -f "$BUILD_DIR"/metre-*.whl
+  rm -f "$BUILD_DIR"/tenon-*.whl
   rm -rf "$wheel_stage"
   mkdir -p "$package_dir"
 
-  cp "$ROOT_DIR/bindings/python/metre.py" "$package_dir/__init__.py"
-  cp "$BUILD_DIR/libmetre_embed.$RUST_LIB_EXT" "$native_dir/"
+  cp "$ROOT_DIR/bindings/python/tenon.py" "$package_dir/__init__.py"
+  cp "$BUILD_DIR/libtenon_embed.$RUST_LIB_EXT" "$native_dir/"
 
   cat > "$wheel_stage/setup.py" <<EOF
 from setuptools import setup
@@ -292,11 +292,11 @@ class PlatformWheel(bdist_wheel):
 
 
 setup(
-    name="metre",
-    version="${METRE_VERSION}",
-    description="Metre Python bindings",
-    packages=["metre"],
-    package_data={"metre": ["libmetre_embed.*"]},
+    name="tenon",
+    version="${TENON_VERSION}",
+    description="Tenon Python bindings",
+    packages=["tenon"],
+    package_data={"tenon": ["libtenon_embed.*"]},
     include_package_data=True,
     zip_safe=False,
     cmdclass={"bdist_wheel": PlatformWheel},
@@ -318,9 +318,9 @@ install_java_jar_to_local_maven() {
   mvn -q org.apache.maven.plugins:maven-install-plugin:3.1.2:install-file \
     -Dmaven.repo.local="$maven_repo_local" \
     -Dfile="$jar_path" \
-    -DgroupId=com.metre \
-    -DartifactId=metre-java \
-    -Dversion="$METRE_VERSION" \
+    -DgroupId=com.tenon \
+    -DartifactId=tenon-java \
+    -Dversion="$TENON_VERSION" \
     -Dpackaging=jar \
     -DgeneratePom=true
 }
@@ -330,8 +330,8 @@ run_java_jmh() {
   local classpath_file="$BUILD_DIR/java-bench-classpath.txt"
   local test_classes_dir="$ROOT_DIR/bindings/jni/test/target/test-classes"
   install_java_jar_to_local_maven "$maven_repo_local"
-  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dmetre.java.version="$METRE_VERSION" -f bindings/jni/test/pom.xml -DskipTests test-compile)
-  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dmetre.java.version="$METRE_VERSION" -f bindings/jni/test/pom.xml \
+  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dtenon.java.version="$TENON_VERSION" -f bindings/jni/test/pom.xml -DskipTests test-compile)
+  (cd "$ROOT_DIR" && mvn -q -Dmaven.repo.local="$maven_repo_local" -Dtenon.java.version="$TENON_VERSION" -f bindings/jni/test/pom.xml \
     org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath \
     -Dmdep.outputFile="$classpath_file" \
     -DincludeScope=test)

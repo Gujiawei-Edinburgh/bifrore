@@ -1,0 +1,24 @@
+[package]
+name = "tenon-oss"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tenon-oss"
+path = "src/main.rs"
+
+[dependencies]
+tenon-core = { path = "../tenon-core", features = ["mqtt"] }
+tenon-coordinator = { path = "../tenon-coordinator" }
+flume = "0.11"
+log = "0.4"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.17"
+rdkafka = { version = "0.36", default-features = false, features = ["cmake-build"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+signal-hook = "0.3"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-log = "0.2"
+tracing-subscriber = "0.3"

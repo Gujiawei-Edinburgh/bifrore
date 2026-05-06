@@ -64,8 +64,8 @@ jobs:
       - name: Wait for broker readiness
         run: |
           for i in $(seq 1 60); do
-            if mosquitto_pub -V mqttv5 -h 127.0.0.1 -p 1883 -i metre-ci-probe -q 0 \
-              -t metre/ci/probe -m ready >/dev/null 2>&1; then
+            if mosquitto_pub -V mqttv5 -h 127.0.0.1 -p 1883 -i tenon-ci-probe -q 0 \
+              -t tenon/ci/probe -m ready >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
@@ -107,7 +107,7 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_aarch64
             wheel_tag: manylinux_2_28_aarch64
     env:
-      METRE_WHEEL_PLATFORM_TAG: ${{ matrix.wheel_tag }}
+      TENON_WHEEL_PLATFORM_TAG: ${{ matrix.wheel_tag }}
 
     steps:
       - name: Check out repository
@@ -137,34 +137,34 @@ jobs:
       - name: Build Linux ${{ matrix.arch }} jar, wheels, and binary
         run: |
           chmod +x build.sh
-          export METRE_VERSION="${GITHUB_REF_NAME#v}"
-          ./build.sh metre-oss-pypi
+          export TENON_VERSION="${GITHUB_REF_NAME#v}"
+          ./build.sh tenon-oss-pypi
           ./build.sh java
           ./build.sh python
 
       - name: Verify build outputs
         run: |
-          ls -1 build/metre-oss-*
-          ls -1 build/metre_oss-*.whl
-          ls -1 build/metre-*.jar
-          ls -1 build/metre-*.whl
+          ls -1 build/tenon-oss-*
+          ls -1 build/tenon_oss-*.whl
+          ls -1 build/tenon-*.jar
+          ls -1 build/tenon-*.whl
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: metre-linux-${{ matrix.arch }}-release-artifacts
+          name: tenon-linux-${{ matrix.arch }}-release-artifacts
           path: |
-            build/metre-oss-*
-            build/metre_oss-*.whl
-            build/metre-*.jar
-            build/metre-*.whl
+            build/tenon-oss-*
+            build/tenon_oss-*.whl
+            build/tenon-*.jar
+            build/tenon-*.whl
           if-no-files-found: error
 
       - name: Upload assets to GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/metre-oss-*
-            build/metre_oss-*.whl
-            build/metre-*.jar
-            build/metre-*.whl
+            build/tenon-oss-*
+            build/tenon_oss-*.whl
+            build/tenon-*.jar
+            build/tenon-*.whl

@@ -1,0 +1,174 @@
+use crate::config::{KafkaSinkConfig, SinkConfig};
+use crate::metrics::OssMetrics;
+use tenon_core::message::Message;
+use tenon_core::runtime::RuleMetadata;
+use rdkafka::config::ClientConfig;
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use rdkafka::producer::{BaseRecord, DefaultProducerContext, Producer, ThreadedProducer};
+use rdkafka::util::Timeout;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+pub struct Dispatcher {
+    noop_sink: Option<NoopSink>,
+    log_sink: Option<LogSink>,
+    kafka_sink: Option<KafkaSink>,
+    metadata_by_rule_index: HashMap<usize, RuleMetadata>,
+    metrics: Arc<OssMetrics>,
+}
+
+impl Dispatcher {
+    pub fn new(
+        sinks: SinkConfig,
+        rule_metadata: Vec<RuleMetadata>,
+        metrics: Arc<OssMetrics>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            noop_sink: sinks.noop.map(|_| NoopSink {
+                metrics: Arc::clone(&metrics),
+            }),
+            log_sink: sinks.log.map(|_| LogSink),
+            kafka_sink: sinks
+                .kafka
+                .map(|config| KafkaSink::new(config, Arc::clone(&metrics)))
+                .transpose()?,
+            metadata_by_rule_index: rule_metadata
+                .into_iter()
+                .map(|metadata| (metadata.rule_index, metadata))
+                .collect(),
+            metrics,
+        })
+    }
+
+    pub fn dispatch(&self, rule_index: usize, message: &Message) {
+        let Some(metadata) = self.metadata_by_rule_index.get(&rule_index) else {
+            log::warn!("dropping result for unknown rule_index={rule_index}");
+            return;
+        };
+        for destination in &metadata.destinations {
+            match destination.as_str() {
+                "noop" => {
+                    if let Some(sink) = &self.noop_sink {
+                        sink.send();
+                    }
+                }
+                "log" => {
+                    if let Some(sink) = &self.log_sink {
+                        sink.send(rule_index, message, metadata);
+                    }
+                }
+                "kafka" => {
+                    if let Some(sink) = &self.kafka_sink {
+                        sink.send(rule_index, message, metadata);
+                    }
+                }
+                other => {
+                    self.metrics.record_sink_unsupported_destination();
+                    log::warn!("unsupported destination={other} rule_index={rule_index}");
+                }
+            }
+        }
+    }
+}
+
+struct NoopSink {
+    metrics: Arc<OssMetrics>,
+}
+
+impl NoopSink {
+    fn send(&self) {
+        self.metrics.record_noop_sink_message();
+    }
+}
+
+struct LogSink;
+
+impl LogSink {
+    fn send(&self, rule_index: usize, message: &Message, metadata: &RuleMetadata) {
+        log::info!(
+            "tenon result rule_index={} destinations={:?} topic={} payload={}",
+            rule_index,
+            metadata.destinations,
+            message.topic,
+            String::from_utf8_lossy(&message.payload)
+        );
+    }
+}
+
+struct KafkaSink {
+    bootstrap_servers: Vec<String>,
+    topic: String,
+    properties: HashMap<String, String>,
+    producer: ThreadedProducer<DefaultProducerContext>,
+    metrics: Arc<OssMetrics>,
+}
+
+impl KafkaSink {
+    fn new(config: KafkaSinkConfig, metrics: Arc<OssMetrics>) -> Result<Self, String> {
+        if config.bootstrap_servers.is_empty() {
+            return Err("sinks.kafka.bootstrap_servers must not be empty".to_string());
+        }
+        if config.topic.is_empty() {
+            return Err("sinks.kafka.topic must not be empty".to_string());
+        }
+        let mut client_config = ClientConfig::new();
+        client_config.set("bootstrap.servers", config.bootstrap_servers.join(","));
+        for (key, value) in &config.properties {
+            client_config.set(key, value);
+        }
+        let producer = client_config
+            .create()
+            .map_err(|err| format!("failed to create kafka producer: {err}"))?;
+        Ok(Self {
+            bootstrap_servers: config.bootstrap_servers,
+            topic: config.topic,
+            properties: config.properties,
+            producer,
+            metrics,
+        })
+    }
+
+    fn send(&self, rule_index: usize, message: &Message, metadata: &RuleMetadata) {
+        let record = BaseRecord::to(&self.topic)
+            .key(&message.topic)
+            .payload(&message.payload);
+        match self.producer.send(record) {
+            Ok(()) => self.metrics.record_kafka_enqueue(),
+            Err((err, _record)) => match err {
+                KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) => {
+                    self.metrics.record_kafka_queue_full();
+                    log::warn!(
+                        "kafka producer queue full topic={} rule_index={} destinations={:?} payload_bytes={}",
+                        self.topic,
+                        rule_index,
+                        metadata.destinations,
+                        message.payload.len()
+                    );
+                }
+                other => {
+                    self.metrics.record_kafka_enqueue_error();
+                    log::error!(
+                        "kafka producer enqueue failed topic={} rule_index={} destinations={:?} error={}",
+                        self.topic,
+                        rule_index,
+                        metadata.destinations,
+                        other
+                    );
+                }
+            },
+        }
+    }
+}
+
+impl Drop for KafkaSink {
+    fn drop(&mut self) {
+        log::info!(
+            "flushing kafka producer bootstrap_servers={} topic={} properties={}",
+            self.bootstrap_servers.join(","),
+            self.topic,
+            self.properties.len()
+        );
+        let _ = self.producer.flush(Timeout::After(Duration::from_secs(5)));
+    }
+}

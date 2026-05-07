@@ -10,8 +10,13 @@ pub fn log_dir() -> Result<PathBuf, String> {
 }
 
 fn tenon_home() -> Result<PathBuf, String> {
-    env::var_os("TENON_HOME")
+    if let Some(path) = env::var_os("TENON_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+
+    env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .ok_or_else(|| "TENON_HOME is not set".to_string())
+        .map(|home| home.join(".tenon"))
+        .ok_or_else(|| "HOME is not set".to_string())
 }

@@ -17,7 +17,7 @@ use signal_hook::iterator::Signals;
 use sink::Dispatcher;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -35,8 +35,19 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    let command = parse_cli(env::args().collect())?;
+    let config_path = match command {
+        CliCommand::Run { config_path } => config_path,
+        CliCommand::Help { program } => {
+            print_usage(&program);
+            return Ok(());
+        }
+        CliCommand::Version => {
+            print_version();
+            return Ok(());
+        }
+    };
     let _log_guard = logger::init()?;
-    let config_path = parse_config_path(env::args().collect())?;
     let config = load_config(&config_path)?;
     let coordinator = EngineCoordinator::from_oss_files(
         config.rule_json_path.clone(),
@@ -145,6 +156,13 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum CliCommand {
+    Run { config_path: String },
+    Help { program: String },
+    Version,
+}
+
 enum JoinOutcome<T> {
     Completed(thread::Result<T>),
     TimedOut,
@@ -181,12 +199,18 @@ fn wait_for_shutdown_signal() -> Result<(), String> {
     Ok(())
 }
 
-fn parse_config_path(args: Vec<String>) -> Result<String, String> {
-    let default_path = paths::config_path()?;
-    parse_config_path_with_default(args, &default_path)
+fn parse_cli(args: Vec<String>) -> Result<CliCommand, String> {
+    parse_cli_with_default_resolver(args, paths::config_path)
 }
 
-fn parse_config_path_with_default(args: Vec<String>, default_path: &Path) -> Result<String, String> {
+fn parse_cli_with_default_resolver<F>(
+    args: Vec<String>,
+    default_path: F,
+) -> Result<CliCommand, String>
+where
+    F: FnOnce() -> Result<PathBuf, String>,
+{
+    let program = args.first().cloned().unwrap_or_else(|| "tenon-oss".to_string());
     let index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -194,21 +218,23 @@ fn parse_config_path_with_default(args: Vec<String>, default_path: &Path) -> Res
                 let Some(path) = args.get(index + 1) else {
                     return Err("missing value for -c/--config".to_string());
                 };
-                return Ok(path.clone());
+                return Ok(CliCommand::Run {
+                    config_path: path.clone(),
+                });
             }
-            "-h" | "--help" => {
-                print_usage(&args[0]);
-                std::process::exit(0);
-            }
+            "-h" | "--help" => return Ok(CliCommand::Help { program }),
+            "--version" => return Ok(CliCommand::Version),
             value => return Err(format!("unknown argument: {value}")),
         }
     }
 
+    let default_path = default_path()?;
     if default_path.is_file() {
-        return Ok(default_path.to_string_lossy().to_string());
+        return Ok(CliCommand::Run {
+            config_path: default_path.to_string_lossy().to_string(),
+        });
     }
 
-    print_usage(&args[0]);
     Err(format!(
         "missing config: pass -c <config.json> or create {}",
         default_path.display()
@@ -217,7 +243,13 @@ fn parse_config_path_with_default(args: Vec<String>, default_path: &Path) -> Res
 
 fn print_usage(program: &str) {
     println!("Usage: {program} [-c config.json]");
-    println!("Default config: $TENON_HOME/config.json");
+    println!("       {program} -h|--help");
+    println!("       {program} --version");
+    println!("Default config: ~/.tenon/config.json");
+}
+
+fn print_version() {
+    println!("tenon-oss {}", env!("CARGO_PKG_VERSION"));
 }
 
 fn load_config(path: &str) -> Result<OssConfig, String> {
@@ -303,30 +335,49 @@ fn generate_default_node_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn fixed_default_path(path: &Path) -> impl FnOnce() -> Result<PathBuf, String> + '_ {
+        || Ok(path.to_path_buf())
+    }
 
     #[test]
     fn explicit_config_arg_wins_over_default() {
         let default_path = Path::new("/tmp/tenon-oss-default-config-arg-wins.json");
-        let path = parse_config_path_with_default(
+        let command = parse_cli_with_default_resolver(
             vec![
                 "tenon-oss".to_string(),
                 "-c".to_string(),
                 "custom.json".to_string(),
             ],
-            default_path,
+            fixed_default_path(default_path),
         )
         .unwrap();
 
-        assert_eq!(path, "custom.json");
+        assert_eq!(
+            command,
+            CliCommand::Run {
+                config_path: "custom.json".to_string(),
+            }
+        );
     }
 
     #[test]
     fn uses_default_config_when_present() {
         let default_path = Path::new("/tmp/tenon-oss-default-config-present.json");
         let _ = fs::write(default_path, "{}");
-        let path = parse_config_path_with_default(vec!["tenon-oss".to_string()], default_path).unwrap();
+        let command = parse_cli_with_default_resolver(
+            vec!["tenon-oss".to_string()],
+            fixed_default_path(default_path),
+        )
+        .unwrap();
 
-        assert_eq!(path, default_path.to_string_lossy());
+        assert_eq!(
+            command,
+            CliCommand::Run {
+                config_path: default_path.to_string_lossy().to_string(),
+            }
+        );
         let _ = fs::remove_file(default_path);
     }
 
@@ -334,9 +385,43 @@ mod tests {
     fn errors_when_no_explicit_or_default_config() {
         let default_path = Path::new("/tmp/tenon-oss-default-config-missing.json");
         let _ = fs::remove_file(default_path);
-        let err = parse_config_path_with_default(vec!["tenon-oss".to_string()], default_path)
-            .unwrap_err();
+        let err = parse_cli_with_default_resolver(
+            vec!["tenon-oss".to_string()],
+            fixed_default_path(default_path),
+        )
+        .unwrap_err();
 
         assert!(err.contains("missing config"));
+    }
+
+    #[test]
+    fn help_does_not_require_default_config() {
+        let default_path = Path::new("/tmp/tenon-oss-default-config-help-missing.json");
+        let _ = fs::remove_file(default_path);
+        let command = parse_cli_with_default_resolver(
+            vec!["tenon-oss".to_string(), "-h".to_string()],
+            fixed_default_path(default_path),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            CliCommand::Help {
+                program: "tenon-oss".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn version_does_not_require_default_config() {
+        let default_path = Path::new("/tmp/tenon-oss-default-config-version-missing.json");
+        let _ = fs::remove_file(default_path);
+        let command = parse_cli_with_default_resolver(
+            vec!["tenon-oss".to_string(), "--version".to_string()],
+            fixed_default_path(default_path),
+        )
+        .unwrap();
+
+        assert_eq!(command, CliCommand::Version);
     }
 }

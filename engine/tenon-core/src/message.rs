@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
+    pub packet_id: u16,
     pub topic: String,
     pub payload: Vec<u8>,
     pub qos: u8,
@@ -16,6 +17,7 @@ pub struct Message {
 impl Message {
     pub fn new(topic: impl Into<String>, payload: Vec<u8>) -> Self {
         Self {
+            packet_id: 0,
             topic: topic.into(),
             payload,
             qos: 0,

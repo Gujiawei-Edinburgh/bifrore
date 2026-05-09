@@ -160,7 +160,8 @@ impl RuleEngine {
             Err(err) => {
                 self.metrics.record_payload_error(err.kind());
                 log::warn!(
-                    "dropping message with invalid payload topic={} decoder={:?} error={}",
+                    "dropping message with invalid payload packet_id={}, topic={} decoder={:?} error={}",
+                    message.packet_id,
                     message.topic,
                     self.payload_runtime.decoder(),
                     err
@@ -211,7 +212,8 @@ impl RuleEngine {
                 Err(err) => {
                     self.metrics.record_payload_error(err.kind());
                     log::warn!(
-                        "dropping protobuf message with invalid payload topic={} schema={} error={}",
+                        "dropping protobuf message with invalid payload packet_id={}, topic={} schema={} error={}",
+                        message.packet_id,
                         message.topic,
                         group.schema,
                         err
@@ -578,7 +580,8 @@ fn evaluate_single_rule(
         },
         Err(error) => {
             log::warn!(
-                "dropping rule evaluation topic={} rule_id={} error={}",
+                "dropping rule evaluation packet_id={}, topic={} rule_id={} error={}",
+                message.packet_id,
                 message.topic,
                 rule.id,
                 error

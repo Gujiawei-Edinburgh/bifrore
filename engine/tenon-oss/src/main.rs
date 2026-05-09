@@ -351,9 +351,8 @@ fn build_handler(
                 }
                 let pipeline_start = Instant::now();
                 worker_metrics.record_eval_queue_dequeued();
-                let message = delivery.message.clone();
                 let core_eval_start = Instant::now();
-                let results = engine.evaluate(&message);
+                let results = engine.evaluate(&delivery.message);
                 worker_metrics.record_core_eval(core_eval_start.elapsed().as_nanos() as u64);
                 delivery.ack();
                 for result in results {
@@ -368,13 +367,19 @@ fn build_handler(
         metrics.record_ingress();
         match eval_tx.try_send(delivery) {
             Ok(()) => metrics.record_eval_queue_enqueued(),
-            Err(flume::TrySendError::Full(_)) => {
+            Err(flume::TrySendError::Full(delivery)) => {
                 metrics.record_eval_queue_drop();
-                log::warn!("dropping incoming message because eval queue is full");
+                log::warn!(
+                    "dropping incoming message ctx_id={} because eval queue is full",
+                    delivery.message.packet_id
+                );
             }
-            Err(flume::TrySendError::Disconnected(_)) => {
+            Err(flume::TrySendError::Disconnected(delivery)) => {
                 metrics.record_eval_queue_drop();
-                log::warn!("dropping incoming message because eval queue is closed");
+                log::warn!(
+                    "dropping incoming message ctx_id={} because eval queue is closed",
+                    delivery.message.packet_id
+                );
             }
         }
     });

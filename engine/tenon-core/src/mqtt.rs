@@ -267,6 +267,7 @@ async fn run_event_loop(
                         let mut msg = Message::new(topic, publish.payload.to_vec());
                         log::trace!("Received publish packet: {:?}", msg);
                         msg.qos = publish.qos as u8;
+                        msg.packet_id = publish.pkid;
                         msg.retain = publish.retain;
                         msg.dup = publish.dup;
                         msg.timestamp_millis = SystemTime::now()

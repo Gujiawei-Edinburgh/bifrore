@@ -17,7 +17,7 @@ use signal_hook::iterator::Signals;
 use sink::Dispatcher;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -26,6 +26,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_FORCE_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_RULE_JSON: &str = r#"{
+  "rules": [
+    {
+      "expression": "select * from data",
+      "destinations": ["log"]
+    }
+  ]
+}
+"#;
 
 fn main() {
     if let Err(err) = run() {
@@ -35,7 +44,10 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let command = parse_cli(env::args().collect())?;
+    let default_config_path = paths::config_path()?;
+    provision_default_config_if_missing(&default_config_path)?;
+
+    let command = parse_cli_with_default_resolver(env::args().collect(), || Ok(default_config_path))?;
     let config_path = match command {
         CliCommand::Run { config_path } => config_path,
         CliCommand::Help { program } => {
@@ -199,10 +211,6 @@ fn wait_for_shutdown_signal() -> Result<(), String> {
     Ok(())
 }
 
-fn parse_cli(args: Vec<String>) -> Result<CliCommand, String> {
-    parse_cli_with_default_resolver(args, paths::config_path)
-}
-
 fn parse_cli_with_default_resolver<F>(
     args: Vec<String>,
     default_path: F,
@@ -235,10 +243,9 @@ where
         });
     }
 
-    Err(format!(
-        "missing config: pass -c <config.json> or create {}",
-        default_path.display()
-    ))
+    Ok(CliCommand::Run {
+        config_path: default_path.to_string_lossy().to_string(),
+    })
 }
 
 fn print_usage(program: &str) {
@@ -250,6 +257,57 @@ fn print_usage(program: &str) {
 
 fn print_version() {
     println!("tenon-oss {}", env!("CARGO_PKG_VERSION"));
+}
+
+fn provision_default_config_if_missing(path: &Path) -> Result<(), String> {
+    let config_path = path;
+    if config_path.is_file() {
+        return Ok(());
+    }
+
+    let config_dir = config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("invalid config path: {}", config_path.display()))?;
+    fs::create_dir_all(config_dir)
+        .map_err(|err| format!("failed to create config dir {}: {err}", config_dir.display()))?;
+
+    let rule_path = config_dir.join("rule.json");
+    if !rule_path.is_file() {
+        fs::write(&rule_path, DEFAULT_RULE_JSON)
+            .map_err(|err| format!("failed to provision rule {}: {err}", rule_path.display()))?;
+    }
+
+    let client_ids_path = config_dir.join("client_ids");
+    let config = serde_json::json!({
+        "rule_json_path": rule_path.to_string_lossy(),
+        "client_ids_path": client_ids_path.to_string_lossy(),
+        "payload": {
+            "format": "json"
+        },
+        "mqtt": {
+            "host": "127.0.0.1",
+            "port": 1883,
+            "client_count": 1,
+            "group_name": "tenon-oss"
+        },
+        "sinks": {
+            "log": {}
+        },
+        "metrics": {
+            "detailed_latency": false
+        }
+    });
+    let content = serde_json::to_vec_pretty(&config)
+        .map_err(|err| format!("failed to serialize default config: {err}"))?;
+    fs::write(config_path, content)
+        .map_err(|err| format!("failed to provision config {}: {err}", config_path.display()))?;
+    log::info!(
+        "provisioned default tenon-oss config={} rule={}",
+        config_path.display(),
+        rule_path.display()
+    );
+    Ok(())
 }
 
 fn load_config(path: &str) -> Result<OssConfig, String> {
@@ -335,7 +393,6 @@ fn generate_default_node_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn fixed_default_path(path: &Path) -> impl FnOnce() -> Result<PathBuf, String> + '_ {
         || Ok(path.to_path_buf())
@@ -382,16 +439,21 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_no_explicit_or_default_config() {
+    fn missing_default_config_returns_default_path() {
         let default_path = Path::new("/tmp/tenon-oss-default-config-missing.json");
         let _ = fs::remove_file(default_path);
-        let err = parse_cli_with_default_resolver(
+        let command = parse_cli_with_default_resolver(
             vec!["tenon-oss".to_string()],
             fixed_default_path(default_path),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.contains("missing config"));
+        assert_eq!(
+            command,
+            CliCommand::Run {
+                config_path: default_path.to_string_lossy().to_string(),
+            }
+        );
     }
 
     #[test]
@@ -423,5 +485,28 @@ mod tests {
         .unwrap();
 
         assert_eq!(command, CliCommand::Version);
+    }
+
+    #[test]
+    fn provisions_default_config_and_rule() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "tenon-oss-provision-default-{}",
+            std::process::id()
+        ));
+        let config_path = config_dir.join("config.json");
+        let rule_path = config_dir.join("rule.json");
+        let _ = fs::remove_dir_all(&config_dir);
+
+        provision_default_config_if_missing(&config_path).unwrap();
+
+        assert!(config_path.is_file());
+        assert!(rule_path.is_file());
+        let config = load_config(&config_path.to_string_lossy()).unwrap();
+        assert_eq!(config.rule_json_path, rule_path.to_string_lossy());
+        assert_eq!(
+            config.client_ids_path,
+            config_dir.join("client_ids").to_string_lossy()
+        );
+        let _ = fs::remove_dir_all(&config_dir);
     }
 }

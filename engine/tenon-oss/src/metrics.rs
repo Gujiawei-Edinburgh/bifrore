@@ -1,6 +1,7 @@
 use crate::config::MetricsConfig;
 use tenon_core::metrics::{EvalMetrics, EvalMetricsSnapshot, LatencyMetricsSnapshot};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -116,6 +117,7 @@ fn handle_metrics_connection(
     let request = String::from_utf8_lossy(&buffer[..read_len]);
     if request.starts_with("GET /metrics ") || request.starts_with("GET /metrics?") {
         publish_eval_metrics(eval_metrics.snapshot());
+        publish_process_metrics();
         write_response(&mut stream, "200 OK", &handle.render());
     } else if request.starts_with("GET /health ") || request.starts_with("GET /health?") {
         write_response(&mut stream, "200 OK", "OK\n");
@@ -159,6 +161,24 @@ fn publish_eval_metrics(current: EvalMetricsSnapshot) {
     publish_latency_snapshot("tenon_projection_latency", current.projection);
 }
 
+fn publish_process_metrics() {
+    if let Some(bytes) = process_resident_memory_bytes() {
+        ::metrics::gauge!("process_resident_memory_bytes").set(bytes as f64);
+    }
+    if let Some(bytes) = process_virtual_memory_bytes() {
+        ::metrics::gauge!("process_virtual_memory_bytes").set(bytes as f64);
+    }
+    if let Some(seconds) = process_cpu_seconds() {
+        ::metrics::gauge!("process_cpu_seconds_total").set(seconds);
+    }
+    if let Some(count) = process_open_fds() {
+        ::metrics::gauge!("process_open_fds").set(count as f64);
+    }
+    if let Some(count) = process_threads() {
+        ::metrics::gauge!("process_threads").set(count as f64);
+    }
+}
+
 fn publish_latency_snapshot(name: &'static str, current: LatencyMetricsSnapshot) {
     publish_counter_absolute(&format!("{name}_samples_total"), current.count);
     publish_counter_absolute(&format!("{name}_nanos_total"), current.total_nanos);
@@ -171,4 +191,106 @@ fn publish_counter_absolute(name: &str, value: u64) {
 
 fn record_latency_histogram(name: &'static str, duration_nanos: u64) {
     ::metrics::histogram!(name).record(duration_nanos as f64 / 1_000_000_000.0);
+}
+
+fn process_cpu_seconds() -> Option<f64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let usage = unsafe { usage.assume_init() };
+    Some(timeval_seconds(usage.ru_utime) + timeval_seconds(usage.ru_stime))
+}
+
+fn timeval_seconds(value: libc::timeval) -> f64 {
+    value.tv_sec as f64 + value.tv_usec as f64 / 1_000_000.0
+}
+
+#[cfg(target_os = "linux")]
+fn process_resident_memory_bytes() -> Option<u64> {
+    statm_pages().map(|(_, resident_pages)| resident_pages * page_size_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn process_virtual_memory_bytes() -> Option<u64> {
+    statm_pages().map(|(virtual_pages, _)| virtual_pages * page_size_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn statm_pages() -> Option<(u64, u64)> {
+    let content = fs::read_to_string("/proc/self/statm").ok()?;
+    let mut fields = content.split_whitespace();
+    let virtual_pages = fields.next()?.parse().ok()?;
+    let resident_pages = fields.next()?.parse().ok()?;
+    Some((virtual_pages, resident_pages))
+}
+
+#[cfg(target_os = "linux")]
+fn page_size_bytes() -> u64 {
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size > 0 {
+        page_size as u64
+    } else {
+        4096
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_resident_memory_bytes() -> Option<u64> {
+    macos_task_info().map(|info| info.pti_resident_size)
+}
+
+#[cfg(target_os = "macos")]
+fn process_virtual_memory_bytes() -> Option<u64> {
+    macos_task_info().map(|info| info.pti_virtual_size)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_task_info() -> Option<libc::proc_taskinfo> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    let rc = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            libc::PROC_PIDTASKINFO,
+            0,
+            info.as_mut_ptr() as *mut libc::c_void,
+            size,
+        )
+    };
+    if rc == size {
+        Some(unsafe { info.assume_init() })
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_threads() -> Option<u64> {
+    let content = fs::read_to_string("/proc/self/status").ok()?;
+    content.lines().find_map(|line| {
+        line.strip_prefix("Threads:")
+            .and_then(|value| value.trim().parse().ok())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn process_threads() -> Option<u64> {
+    macos_task_info().map(|info| info.pti_threadnum as u64)
+}
+
+#[cfg(target_os = "linux")]
+fn process_open_fds() -> Option<u64> {
+    count_dir_entries("/proc/self/fd")
+}
+
+#[cfg(target_os = "macos")]
+fn process_open_fds() -> Option<u64> {
+    count_dir_entries("/dev/fd")
+}
+
+fn count_dir_entries(path: &str) -> Option<u64> {
+    let count = fs::read_dir(path).ok()?.filter(|entry| entry.is_ok()).count();
+    Some(count as u64)
 }

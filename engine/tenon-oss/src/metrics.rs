@@ -70,6 +70,7 @@ pub fn start_metrics_server(
     let handle = PrometheusBuilder::new()
         .install_recorder()
         .map_err(|err| format!("failed to install prometheus metrics recorder: {err}"))?;
+    initialize_oss_metrics();
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, METRICS_PORT))
         .map_err(|err| format!("failed to bind metrics endpoint 0.0.0.0:9100: {err}"))?;
 
@@ -90,6 +91,17 @@ pub fn start_metrics_server(
         })
         .map_err(|err| format!("failed to spawn metrics endpoint: {err}"))?;
     Ok(server)
+}
+
+fn initialize_oss_metrics() {
+    publish_counter_absolute("tenon_oss_ingress_messages_total", 0);
+    publish_counter_absolute("tenon_oss_eval_queue_drops_total", 0);
+    publish_counter_absolute("tenon_oss_kafka_enqueue_total", 0);
+    publish_counter_absolute("tenon_oss_kafka_queue_full_total", 0);
+    publish_counter_absolute("tenon_oss_kafka_enqueue_errors_total", 0);
+    publish_counter_absolute("tenon_oss_noop_sink_messages_total", 0);
+    publish_counter_absolute("tenon_oss_sink_unsupported_destinations_total", 0);
+    ::metrics::gauge!("tenon_oss_eval_queue_depth").set(0.0);
 }
 
 fn handle_metrics_connection(

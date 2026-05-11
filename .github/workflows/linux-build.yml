@@ -146,8 +146,8 @@ jobs:
         run: |
           ls -1 build/tenon-oss-*
           ls -1 build/tenon_oss-*.whl
-          ls -1 build/tenon-*.jar
-          ls -1 build/tenon-*.whl
+          ls -1 build/tenon-oss-java-*.jar
+          ls -1 build/tenon_oss_python-*.whl
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -156,8 +156,8 @@ jobs:
           path: |
             build/tenon-oss-*
             build/tenon_oss-*.whl
-            build/tenon-*.jar
-            build/tenon-*.whl
+            build/tenon-oss-java-*.jar
+            build/tenon_oss_python-*.whl
           if-no-files-found: error
 
       - name: Upload assets to GitHub release
@@ -166,5 +166,5 @@ jobs:
           files: |
             build/tenon-oss-*
             build/tenon_oss-*.whl
-            build/tenon-*.jar
-            build/tenon-*.whl
+            build/tenon-oss-java-*.jar
+            build/tenon_oss_python-*.whl

@@ -22,7 +22,7 @@
     <dependencies>
         <dependency>
             <groupId>com.tenon</groupId>
-            <artifactId>tenon-java</artifactId>
+            <artifactId>tenon-oss-java</artifactId>
             <version>${tenon.java.version}</version>
         </dependency>
         <dependency>

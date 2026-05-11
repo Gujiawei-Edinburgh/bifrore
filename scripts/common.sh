@@ -93,7 +93,7 @@ java_jar_name() {
     echo "unsupported"
     return
   fi
-  echo "tenon-${TENON_VERSION}-${platform}.jar"
+  echo "tenon-oss-java-${TENON_VERSION}-${platform}.jar"
 }
 
 java_jar_path() {
@@ -242,7 +242,7 @@ build_java_jar() {
   resources_root="$BUILD_DIR/java-stage/resources"
   resources_dir="$resources_root/natives"
   jar_path="$(java_jar_path)"
-  rm -f "$BUILD_DIR"/tenon-*.jar
+  rm -f "$BUILD_DIR"/tenon-oss-java-*.jar
   rm -rf "$BUILD_DIR/java-stage"
   mkdir -p "$native_dir" "$classes_dir" "$resources_dir"
 
@@ -270,7 +270,7 @@ build_python() {
   package_dir="$wheel_stage/tenon"
   native_dir="$package_dir"
   dist_dir="$BUILD_DIR"
-  rm -f "$BUILD_DIR"/tenon-*.whl
+  rm -f "$BUILD_DIR"/tenon_oss_python-*.whl
   rm -rf "$wheel_stage"
   mkdir -p "$package_dir"
 
@@ -292,9 +292,9 @@ class PlatformWheel(bdist_wheel):
 
 
 setup(
-    name="tenon",
+    name="tenon-oss-python",
     version="${TENON_VERSION}",
-    description="Tenon Python bindings",
+    description="Tenon OSS Python bindings",
     packages=["tenon"],
     package_data={"tenon": ["libtenon_embed.*"]},
     include_package_data=True,
@@ -319,7 +319,7 @@ install_java_jar_to_local_maven() {
     -Dmaven.repo.local="$maven_repo_local" \
     -Dfile="$jar_path" \
     -DgroupId=com.tenon \
-    -DartifactId=tenon-java \
+    -DartifactId=tenon-oss-java \
     -Dversion="$TENON_VERSION" \
     -Dpackaging=jar \
     -DgeneratePom=true

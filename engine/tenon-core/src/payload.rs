@@ -14,16 +14,6 @@ pub enum PayloadFormat {
     Protobuf,
 }
 
-impl PayloadFormat {
-    pub fn from_ffi_code(code: i32) -> Option<Self> {
-        match code {
-            1 => Some(Self::Json),
-            2 => Some(Self::Protobuf),
-            _ => None,
-        }
-    }
-}
-
 type DecodeFn = dyn Fn(&[u8], PayloadDecodePlan<'_>, Option<&EvalMetrics>, &str) -> Result<MsgIr, PayloadError>
     + Send
     + Sync

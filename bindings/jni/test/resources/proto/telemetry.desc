@@ -1,14 +1,0 @@
-
-Å
-telemetry.protoexample.telemetry"G
-Reading
-temp (Rtemp
-hum (Rhum
-online (Ronline"V
-Sensor
-device (	Rdevice4
-reading (2.example.telemetry.ReadingRreading"Q
-Envelope1
-sensor (2.example.telemetry.SensorRsensor
-site (	RsiteB#
-com.example.protoBTelemetryProtobproto3

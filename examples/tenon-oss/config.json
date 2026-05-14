@@ -12,9 +12,14 @@
     "group_name": "tenon-oss"
   },
   "sinks": {
-    "noop": {},
-    "log": {},
-    "kafka": {
+    "dev_blackhole": {
+      "type": "noop"
+    },
+    "local_log": {
+      "type": "log"
+    },
+    "raw_kafka": {
+      "type": "kafka",
       "bootstrap_servers": ["127.0.0.1:9092"],
       "topic": "tenon-output",
       "properties": {

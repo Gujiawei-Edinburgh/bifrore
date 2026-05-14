@@ -52,25 +52,19 @@ pub struct MqttOssConfig {
     pub queue_capacity: u16,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SinkConfig {
-    pub noop: Option<NoopSinkConfig>,
-    pub log: Option<LogSinkConfig>,
-    pub kafka: Option<KafkaSinkConfig>,
-}
+pub type SinkConfig = HashMap<String, SinkDefinition>;
 
 #[derive(Debug, Deserialize)]
-pub struct NoopSinkConfig {}
-
-#[derive(Debug, Deserialize)]
-pub struct LogSinkConfig {}
-
-#[derive(Debug, Deserialize)]
-pub struct KafkaSinkConfig {
-    pub bootstrap_servers: Vec<String>,
-    pub topic: String,
-    #[serde(default)]
-    pub properties: HashMap<String, String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SinkDefinition {
+    Noop,
+    Log,
+    Kafka {
+        bootstrap_servers: Vec<String>,
+        topic: String,
+        #[serde(default)]
+        properties: HashMap<String, String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -105,16 +99,6 @@ impl Default for MqttOssConfig {
             keep_alive_secs: default_keep_alive_secs(),
             io_threads: default_io_threads(),
             queue_capacity: default_queue_capacity(),
-        }
-    }
-}
-
-impl Default for SinkConfig {
-    fn default() -> Self {
-        Self {
-            noop: None,
-            log: None,
-            kafka: None,
         }
     }
 }
@@ -210,5 +194,28 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.normalize().client_ids_path, "./client_ids");
+    }
+
+    #[test]
+    fn sinks_are_logical_destinations_with_builtin_types() {
+        let config: OssConfig = serde_json::from_str(
+            r#"{
+              "rule_json_path": "rules.json",
+              "sinks": {
+                "dev_blackhole": {"type": "noop"},
+                "audit_log": {"type": "log"},
+                "raw_kafka": {
+                  "type": "kafka",
+                  "bootstrap_servers": ["127.0.0.1:9092"],
+                  "topic": "tenon-output"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(config.sinks.get("dev_blackhole"), Some(SinkDefinition::Noop)));
+        assert!(matches!(config.sinks.get("audit_log"), Some(SinkDefinition::Log)));
+        assert!(matches!(config.sinks.get("raw_kafka"), Some(SinkDefinition::Kafka { .. })));
     }
 }

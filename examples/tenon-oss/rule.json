@@ -2,7 +2,7 @@
   "rules": [
     {
       "expression": "select * from data",
-      "destinations": ["noop", "log", "kafka"]
+      "destinations": ["dev_blackhole", "local_log", "raw_kafka"]
     }
   ]
 }

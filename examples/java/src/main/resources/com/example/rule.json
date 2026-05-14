@@ -1,8 +1,0 @@
-{
-  "rules": [
-    {
-      "expression": "select hum + 10 from data where temp > 25",
-      "destinations": ["log"]
-    }
-  ]
-}

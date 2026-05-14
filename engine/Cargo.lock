@@ -1614,18 +1614,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tenon-ffi"
-version = "0.1.0"
-dependencies = [
- "flume",
- "libc",
- "log",
- "serde_json",
- "tenon-coordinator",
- "tenon-core",
-]
-
-[[package]]
 name = "tenon-oss"
 version = "0.1.0"
 dependencies = [

@@ -27,12 +27,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_FORCE_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_RULE_JSON: &str = r#"{
-  "rules": [
-    {
-      "expression": "select * from data",
-      "destinations": ["log"]
-    }
-  ]
+      "rules": [
+        {
+          "expression": "select * from #",
+          "destinations": ["default_log"]
+        }
+      ]
 }
 "#;
 
@@ -292,7 +292,9 @@ fn provision_default_config_if_missing(path: &Path) -> Result<(), String> {
             "group_name": "tenon-oss"
         },
         "sinks": {
-            "log": {}
+            "default_log": {
+                "type": "log"
+            }
         },
         "metrics": {
             "detailed_latency": false

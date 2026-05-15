@@ -138,6 +138,7 @@ If `-c` is omitted, `tenon-oss` uses `~/.tenon/config.json` and provisions a def
 Requirements:
 
 - Rust toolchain
+- Docker for `./scripts/test.sh all`
 - Python only when building the PyPI wrapper
 
 Commands:
@@ -146,8 +147,6 @@ Commands:
 ./build.sh tenon-oss       # standalone binary
 ./build.sh tenon-oss-pypi  # wheel that installs the tenon-oss command
 ./build.sh all             # same as tenon-oss-pypi
-./scripts/test.sh core     # Rust tests
-./scripts/bench.sh rust    # Rust benchmarks
 ```
 
 Artifacts are written to `build/`:

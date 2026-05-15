@@ -4,4 +4,5 @@ members = [
   "tenon-core",
   "tenon-coordinator",
   "tenon-oss",
+  "tenon-test-mqtt",
 ]

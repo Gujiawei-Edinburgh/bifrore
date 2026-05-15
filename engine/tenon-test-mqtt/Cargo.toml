@@ -1,0 +1,13 @@
+[package]
+name = "tenon-test-mqtt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "tenon-test-mqtt"
+path = "src/main.rs"
+
+[dependencies]
+rumqttc = "0.24"
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time"] }

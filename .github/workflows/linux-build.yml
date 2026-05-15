@@ -28,6 +28,11 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libcurl4-openssl-dev
+
       - name: Run Rust and tenon-oss integration tests
         run: ./scripts/test.sh all
 
@@ -58,7 +63,7 @@ jobs:
 
       - name: Install system build tools
         run: |
-          dnf install -y gcc gcc-c++ make cmake findutils which tar gzip zip
+          dnf install -y gcc gcc-c++ make cmake findutils which tar gzip zip libcurl-devel
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

@@ -59,11 +59,26 @@ mqtt_publish() {
   local topic="$4"
   local payload="$5"
   "$RUST_DIR/target/release/tenon-test-mqtt" \
+    --publish \
     --host "$host" \
     --port "$port" \
     --client-id "$client_id" \
     --topic "$topic" \
     --payload "$payload" \
+    --timeout-secs 10
+}
+
+mqtt_subscribe_check() {
+  local host="$1"
+  local port="$2"
+  local client_id="$3"
+  local topic="$4"
+  "$RUST_DIR/target/release/tenon-test-mqtt" \
+    --subscribe-check \
+    --host "$host" \
+    --port "$port" \
+    --client-id "$client_id" \
+    --topic "$topic" \
     --timeout-secs 10
 }
 
@@ -92,14 +107,16 @@ run_tenon_oss_integration_test() {
   tenon_pid=""
 
   cleanup() {
-    if [[ -n "$tenon_pid" ]] && kill -0 "$tenon_pid" >/dev/null 2>&1; then
+    if [[ -n "${tenon_pid:-}" ]] && kill -0 "$tenon_pid" >/dev/null 2>&1; then
       kill -TERM "$tenon_pid" >/dev/null 2>&1 || true
       wait_for_process_exit "$tenon_pid" 10 >/dev/null 2>&1 || kill -KILL "$tenon_pid" >/dev/null 2>&1 || true
     fi
-    if [[ "$broker_started" == "1" ]]; then
+    if [[ "${broker_started:-0}" == "1" ]]; then
       docker rm -f "$broker_container" >/dev/null 2>&1 || true
     fi
-    rm -rf "$work_dir"
+    if [[ -n "${work_dir:-}" ]]; then
+      rm -rf "$work_dir"
+    fi
   }
   trap cleanup EXIT
 
@@ -123,6 +140,20 @@ run_tenon_oss_integration_test() {
   done
   if ! mqtt_publish "$mqtt_host" "$mqtt_port" tenon-oss-itest-probe tenon/itest/probe ready >/dev/null 2>&1; then
     echo "MQTT broker did not become ready on $mqtt_host:$mqtt_port"
+    if [[ "$broker_started" == "1" ]]; then
+      docker logs "$broker_container" || true
+    fi
+    exit 12
+  fi
+
+  for _ in $(seq 1 60); do
+    if mqtt_subscribe_check "$mqtt_host" "$mqtt_port" tenon-oss-itest-sub-probe '$share/tenon-oss-itest/data' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  if ! mqtt_subscribe_check "$mqtt_host" "$mqtt_port" tenon-oss-itest-sub-probe '$share/tenon-oss-itest/data' >/dev/null 2>&1; then
+    echo "MQTT broker did not accept shared subscription on $mqtt_host:$mqtt_port"
     if [[ "$broker_started" == "1" ]]; then
       docker logs "$broker_container" || true
     fi

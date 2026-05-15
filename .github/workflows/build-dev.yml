@@ -18,8 +18,5 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run Rust core tests
-        run: ./scripts/test.sh core
-
-      - name: Build tenon-oss binary
-        run: ./build.sh tenon-oss
+      - name: Run Rust and tenon-oss integration tests
+        run: ./scripts/test.sh all

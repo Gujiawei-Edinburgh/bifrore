@@ -1,4 +1,5 @@
 use crate::config::{SinkConfig, SinkDefinition};
+use crate::ipc_sink::IpcSink;
 use crate::metrics::OssMetrics;
 use tenon_core::message::Message;
 use tenon_core::runtime::RuleMetadata;
@@ -60,6 +61,21 @@ impl Dispatcher {
                     properties,
                     Arc::clone(&metrics),
                 )?),
+                SinkDefinition::Ipc {
+                    path,
+                    queue_capacity,
+                    batch_max_messages,
+                    batch_max_bytes,
+                    flush_interval_millis,
+                } => BuiltInSink::Ipc(IpcSink::new(
+                    destination.as_str(),
+                    path,
+                    queue_capacity,
+                    batch_max_messages,
+                    batch_max_bytes,
+                    flush_interval_millis,
+                    Arc::clone(&metrics),
+                )?),
             };
             sinks_by_destination.insert(destination, sink);
         }
@@ -101,6 +117,7 @@ enum BuiltInSink {
     Noop(NoopSink),
     Log(LogSink),
     Kafka(KafkaSink),
+    Ipc(IpcSink),
 }
 
 impl BuiltInSink {
@@ -109,6 +126,7 @@ impl BuiltInSink {
             Self::Noop(sink) => sink.send(),
             Self::Log(sink) => sink.send(destination, rule_index, message, metadata),
             Self::Kafka(sink) => sink.send(rule_index, message, metadata),
+            Self::Ipc(sink) => sink.send(rule_index, message),
         }
     }
 }

@@ -9,6 +9,13 @@ pub fn log_dir() -> Result<PathBuf, String> {
     Ok(tenon_home()?.join("log"))
 }
 
+pub fn expand_user_path(path: &str) -> Result<PathBuf, String> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        return Ok(user_home()?.join(rest));
+    }
+    Ok(PathBuf::from(path))
+}
+
 fn tenon_home() -> Result<PathBuf, String> {
     configured_tenon_home().map(Ok).unwrap_or_else(default_tenon_home)
 }

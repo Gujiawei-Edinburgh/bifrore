@@ -28,6 +28,14 @@
         "linger.ms": "5",
         "acks": "1"
       }
+    },
+    "custom_ipc": {
+      "type": "ipc",
+      "path": "~/.tenon/ipc/custom_ipc.sock",
+      "queue_capacity": 4096,
+      "batch_max_messages": 64,
+      "batch_max_bytes": 1048576,
+      "flush_interval_millis": 5
     }
   },
   "metrics": {

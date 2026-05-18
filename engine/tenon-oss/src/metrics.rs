@@ -14,6 +14,7 @@ const METRICS_PORT: u16 = 9100;
 #[derive(Default)]
 pub struct OssMetrics {
     eval_queue_depth: AtomicU64,
+    ipc_queue_depth: AtomicU64,
 }
 
 impl OssMetrics {
@@ -62,6 +63,51 @@ impl OssMetrics {
     pub fn record_sink_unsupported_destination(&self) {
         ::metrics::counter!("tenon_oss_sink_unsupported_destinations_total").increment(1);
     }
+
+    pub fn record_ipc_connection(&self) {
+        ::metrics::counter!("tenon_oss_ipc_connections_total").increment(1);
+    }
+
+    pub fn record_ipc_rejected_connection(&self) {
+        ::metrics::counter!("tenon_oss_ipc_rejected_connections_total").increment(1);
+    }
+
+    pub fn record_ipc_disconnect(&self) {
+        ::metrics::counter!("tenon_oss_ipc_disconnects_total").increment(1);
+    }
+
+    pub fn record_ipc_enqueued(&self) {
+        let depth = self.ipc_queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        ::metrics::gauge!("tenon_oss_ipc_queue_depth").set(depth as f64);
+    }
+
+    pub fn record_ipc_dequeued(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        let depth = self.ipc_queue_depth.fetch_sub(count, Ordering::Relaxed).saturating_sub(count);
+        ::metrics::gauge!("tenon_oss_ipc_queue_depth").set(depth as f64);
+    }
+
+    pub fn record_ipc_queue_drop(&self) {
+        ::metrics::counter!("tenon_oss_ipc_queue_drops_total").increment(1);
+    }
+
+    pub fn record_ipc_disconnected_drop(&self) {
+        ::metrics::counter!("tenon_oss_ipc_disconnected_drops_total").increment(1);
+    }
+
+    pub fn record_ipc_write_error(&self) {
+        ::metrics::counter!("tenon_oss_ipc_write_errors_total").increment(1);
+    }
+
+    pub fn record_ipc_batches(&self) {
+        ::metrics::counter!("tenon_oss_ipc_batches_total").increment(1);
+    }
+
+    pub fn record_ipc_messages_written(&self, count: u64) {
+        ::metrics::counter!("tenon_oss_ipc_messages_written_total").increment(count);
+    }
 }
 
 pub fn start_metrics_server(
@@ -102,7 +148,16 @@ fn initialize_oss_metrics() {
     publish_counter_absolute("tenon_oss_kafka_enqueue_errors_total", 0);
     publish_counter_absolute("tenon_oss_noop_sink_messages_total", 0);
     publish_counter_absolute("tenon_oss_sink_unsupported_destinations_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_connections_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_rejected_connections_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_disconnects_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_queue_drops_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_disconnected_drops_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_write_errors_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_batches_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_messages_written_total", 0);
     ::metrics::gauge!("tenon_oss_eval_queue_depth").set(0.0);
+    ::metrics::gauge!("tenon_oss_ipc_queue_depth").set(0.0);
 }
 
 fn handle_metrics_connection(

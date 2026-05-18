@@ -1,4 +1,5 @@
 mod config;
+mod ipc_sink;
 mod logger;
 mod metrics;
 mod paths;

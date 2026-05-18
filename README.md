@@ -73,8 +73,9 @@ Built-in sink types:
 - `noop`: discard output; useful for load testing.
 - `log`: write projected payloads to the TENON log.
 - `kafka`: forward projected payload bytes as-is to Kafka.
+- `ipc`: forward projected payloads to one local Unix domain socket consumer.
 
-Custom sink behavior will be modeled as IPC later. TENON does not define sink-specific payload transformations inside rules.
+TENON does not define sink-specific payload transformations inside rules. Use `ipc` for custom delivery code.
 
 Example:
 
@@ -97,6 +98,14 @@ Example:
         "linger.ms": "5",
         "acks": "1"
       }
+    },
+    "events_custom": {
+      "type": "ipc",
+      "path": "~/.tenon/ipc/events_custom.sock",
+      "queue_capacity": 4096,
+      "batch_max_messages": 64,
+      "batch_max_bytes": 1048576,
+      "flush_interval_millis": 5
     }
   }
 }

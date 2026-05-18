@@ -65,6 +65,17 @@ pub enum SinkDefinition {
         #[serde(default)]
         properties: HashMap<String, String>,
     },
+    Ipc {
+        path: String,
+        #[serde(default = "default_ipc_queue_capacity")]
+        queue_capacity: usize,
+        #[serde(default = "default_ipc_batch_max_messages")]
+        batch_max_messages: usize,
+        #[serde(default = "default_ipc_batch_max_bytes")]
+        batch_max_bytes: usize,
+        #[serde(default = "default_ipc_flush_interval_millis")]
+        flush_interval_millis: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -167,6 +178,22 @@ fn default_queue_capacity() -> u16 {
     4096
 }
 
+fn default_ipc_queue_capacity() -> usize {
+    4096
+}
+
+fn default_ipc_batch_max_messages() -> usize {
+    64
+}
+
+fn default_ipc_batch_max_bytes() -> usize {
+    1024 * 1024
+}
+
+fn default_ipc_flush_interval_millis() -> u64 {
+    5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +235,10 @@ mod tests {
                   "type": "kafka",
                   "bootstrap_servers": ["127.0.0.1:9092"],
                   "topic": "tenon-output"
+                },
+                "custom_out": {
+                  "type": "ipc",
+                  "path": "/tmp/tenon-custom-out.sock"
                 }
               }
             }"#,
@@ -217,5 +248,6 @@ mod tests {
         assert!(matches!(config.sinks.get("dev_blackhole"), Some(SinkDefinition::Noop)));
         assert!(matches!(config.sinks.get("audit_log"), Some(SinkDefinition::Log)));
         assert!(matches!(config.sinks.get("raw_kafka"), Some(SinkDefinition::Kafka { .. })));
+        assert!(matches!(config.sinks.get("custom_out"), Some(SinkDefinition::Ipc { .. })));
     }
 }

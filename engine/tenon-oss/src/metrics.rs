@@ -97,6 +97,10 @@ impl OssMetrics {
         ::metrics::counter!("tenon_oss_ipc_disconnected_drops_total").increment(1);
     }
 
+    pub fn record_ipc_encode_drop(&self) {
+        ::metrics::counter!("tenon_oss_ipc_encode_drops_total").increment(1);
+    }
+
     pub fn record_ipc_write_error(&self) {
         ::metrics::counter!("tenon_oss_ipc_write_errors_total").increment(1);
     }
@@ -153,6 +157,7 @@ fn initialize_oss_metrics() {
     publish_counter_absolute("tenon_oss_ipc_disconnects_total", 0);
     publish_counter_absolute("tenon_oss_ipc_queue_drops_total", 0);
     publish_counter_absolute("tenon_oss_ipc_disconnected_drops_total", 0);
+    publish_counter_absolute("tenon_oss_ipc_encode_drops_total", 0);
     publish_counter_absolute("tenon_oss_ipc_write_errors_total", 0);
     publish_counter_absolute("tenon_oss_ipc_batches_total", 0);
     publish_counter_absolute("tenon_oss_ipc_messages_written_total", 0);

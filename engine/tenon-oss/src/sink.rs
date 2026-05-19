@@ -68,7 +68,6 @@ impl Dispatcher {
                     batch_max_bytes,
                     flush_interval_millis,
                 } => BuiltInSink::Ipc(IpcSink::new(
-                    destination.as_str(),
                     path,
                     queue_capacity,
                     batch_max_messages,
@@ -126,7 +125,7 @@ impl BuiltInSink {
             Self::Noop(sink) => sink.send(),
             Self::Log(sink) => sink.send(destination, rule_index, message, metadata),
             Self::Kafka(sink) => sink.send(rule_index, message, metadata),
-            Self::Ipc(sink) => sink.send(rule_index, message),
+            Self::Ipc(sink) => sink.send(destination, rule_index, message),
         }
     }
 }

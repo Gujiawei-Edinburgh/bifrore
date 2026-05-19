@@ -13,10 +13,9 @@ use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: u8 = 1;
 const FRAME_TYPE_BATCH: u8 = 2;
-const IPC_ITEM_FIXED_LEN: usize = 20;
+const IPC_ITEM_HEADER_LEN: usize = 18;
 
 pub struct IpcSink {
-    destination: String,
     tx: Sender<IpcMessage>,
     connected: Arc<AtomicBool>,
     metrics: Arc<OssMetrics>,
@@ -26,7 +25,6 @@ pub struct IpcSink {
 
 impl IpcSink {
     pub fn new(
-        destination: &str,
         path: String,
         queue_capacity: usize,
         batch_max_messages: usize,
@@ -57,7 +55,7 @@ impl IpcSink {
 
         let listener = UnixListener::bind(&socket_path).map_err(|err| {
             format!(
-                "failed to bind IPC sink {destination} at {}: {err}",
+                "failed to bind IPC sink at {}: {err}",
                 socket_path.display()
             )
         })?;
@@ -68,37 +66,33 @@ impl IpcSink {
         let connected = Arc::new(AtomicBool::new(false));
         let worker_connected = Arc::clone(&connected);
         let worker_metrics = Arc::clone(&metrics);
-        let worker_destination = destination.to_string();
         let worker_socket_path = socket_path.clone();
         let worker = thread::Builder::new()
-            .name(format!("tenon-ipc-{destination}"))
+            .name("tenon-ipc".to_string())
             .spawn(move || {
                 run_ipc_worker(
-                    worker_destination,
                     listener,
                     rx,
                     worker_connected,
                     worker_metrics,
                     batch_max_messages.max(1),
-                    batch_max_bytes.max(IPC_ITEM_FIXED_LEN),
+                    batch_max_bytes.max(IPC_ITEM_HEADER_LEN),
                     Duration::from_millis(flush_interval_millis.max(1)),
                 );
                 let _ = fs::remove_file(worker_socket_path);
             })
-            .map_err(|err| format!("failed to spawn IPC sink worker for {destination}: {err}"))?;
+            .map_err(|err| format!("failed to spawn IPC sink worker: {err}"))?;
 
         log::info!(
-            "IPC sink listening destination={} path={} queue_capacity={} batch_max_messages={} batch_max_bytes={} flush_interval_millis={}",
-            destination,
+            "IPC sink listening path={} queue_capacity={} batch_max_messages={} batch_max_bytes={} flush_interval_millis={}",
             socket_path.display(),
             queue_capacity.max(1),
             batch_max_messages.max(1),
-            batch_max_bytes.max(IPC_ITEM_FIXED_LEN),
+            batch_max_bytes.max(IPC_ITEM_HEADER_LEN),
             flush_interval_millis.max(1)
         );
 
         Ok(Self {
-            destination: destination.to_string(),
             tx,
             connected,
             metrics,
@@ -107,15 +101,34 @@ impl IpcSink {
         })
     }
 
-    pub fn send(&self, rule_index: usize, message: &Message) {
+    pub fn send(&self, destination: &str, rule_index: usize, message: &Message) {
         if !self.connected.load(Ordering::Relaxed) {
             self.metrics.record_ipc_disconnected_drop();
+            return;
+        }
+        if destination.as_bytes().len() > u8::MAX as usize {
+            self.metrics.record_ipc_encode_drop();
+            log::warn!(
+                "dropping IPC message because destination is too long destination_len={} max_bytes={}",
+                destination.as_bytes().len(),
+                u8::MAX
+            );
+            return;
+        }
+        if message.topic.as_bytes().len() > u8::MAX as usize {
+            self.metrics.record_ipc_encode_drop();
+            log::warn!(
+                "dropping IPC message because topic is too long destination={} topic_len={} max_bytes={}",
+                destination,
+                message.topic.as_bytes().len(),
+                u8::MAX
+            );
             return;
         }
         let ipc_message = IpcMessage {
             rule_index: rule_index as u32,
             packet_id: message.packet_id,
-            destination: self.destination.as_bytes().to_vec(),
+            destination: destination.as_bytes().to_vec(),
             topic: message.topic.as_bytes().to_vec(),
             payload: message.payload.clone(),
         };
@@ -151,12 +164,11 @@ struct IpcMessage {
 
 impl IpcMessage {
     fn encoded_len(&self) -> usize {
-        IPC_ITEM_FIXED_LEN + self.destination.len() + self.topic.len() + self.payload.len()
+        IPC_ITEM_HEADER_LEN + self.destination.len() + self.topic.len() + self.payload.len()
     }
 }
 
 fn run_ipc_worker(
-    destination: String,
     listener: UnixListener,
     rx: Receiver<IpcMessage>,
     connected: Arc<AtomicBool>,
@@ -174,14 +186,13 @@ fn run_ipc_worker(
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                 if connected.swap(true, Ordering::Relaxed) {
                     metrics.record_ipc_rejected_connection();
-                    log::warn!("rejecting extra IPC consumer destination={destination}");
+                    log::warn!("rejecting extra IPC consumer");
                     continue;
                 }
                 metrics.record_ipc_connection();
-                log::info!("IPC consumer connected destination={destination}");
+                log::debug!("IPC consumer connected");
                 drain_stale_messages(&rx, &metrics);
                 serve_consumer(
-                    &destination,
                     &mut stream,
                     &rx,
                     &connected,
@@ -192,14 +203,14 @@ fn run_ipc_worker(
                 );
                 connected.store(false, Ordering::Relaxed);
                 metrics.record_ipc_disconnect();
-                log::info!("IPC consumer disconnected destination={destination}");
+                log::debug!("IPC consumer disconnected");
             }
             Err(err) => {
                 if err.kind() == ErrorKind::WouldBlock {
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                log::warn!("IPC sink accept failed destination={destination}: {err}");
+                log::warn!("IPC sink accept failed: {err}");
                 if rx.is_disconnected() {
                     break;
                 }
@@ -209,7 +220,6 @@ fn run_ipc_worker(
 }
 
 fn serve_consumer(
-    destination: &str,
     stream: &mut UnixStream,
     rx: &Receiver<IpcMessage>,
     connected: &AtomicBool,
@@ -250,7 +260,7 @@ fn serve_consumer(
 
         if let Err(err) = write_batch(stream, &batch) {
             metrics.record_ipc_write_error();
-            log::warn!("IPC sink write failed destination={destination}: {err}");
+            log::warn!("IPC sink write failed: {err}");
             connected.store(false, Ordering::Relaxed);
             metrics.record_ipc_dequeued(batch.len() as u64);
             return;
@@ -276,7 +286,7 @@ fn write_batch(stream: &mut UnixStream, messages: &[IpcMessage]) -> std::io::Res
     let mut body = Vec::new();
     body.push(PROTOCOL_VERSION);
     body.push(FRAME_TYPE_BATCH);
-    body.extend_from_slice(&0u16.to_le_bytes());
+    buffer.extend_from_slice(&0u16.to_le_bytes()); // header flags and reserved
     body.extend_from_slice(&(messages.len() as u16).to_le_bytes());
     body.extend_from_slice(&0u16.to_le_bytes());
 
@@ -295,9 +305,9 @@ fn encode_message_item(buffer: &mut Vec<u8>, message: &IpcMessage) {
     buffer.extend_from_slice(&item_len.to_le_bytes());
     buffer.extend_from_slice(&message.rule_index.to_le_bytes());
     buffer.extend_from_slice(&message.packet_id.to_le_bytes());
-    buffer.extend_from_slice(&(message.destination.len() as u16).to_le_bytes());
-    buffer.extend_from_slice(&(message.topic.len() as u16).to_le_bytes());
-    buffer.extend_from_slice(&0u16.to_le_bytes());
+    buffer.push(message.destination.len() as u8);
+    buffer.push(message.topic.len() as u8);
+    buffer.extend_from_slice(&0u16.to_le_bytes()); // item flags and reserved
     buffer.extend_from_slice(&(message.payload.len() as u32).to_le_bytes());
     buffer.extend_from_slice(&message.destination);
     buffer.extend_from_slice(&message.topic);
@@ -320,7 +330,8 @@ mod tests {
         let mut body = Vec::new();
         body.push(PROTOCOL_VERSION);
         body.push(FRAME_TYPE_BATCH);
-        body.extend_from_slice(&0u16.to_le_bytes());
+        body.push(0);
+        body.push(0);
         body.extend_from_slice(&1u16.to_le_bytes());
         body.extend_from_slice(&0u16.to_le_bytes());
         encode_message_item(&mut body, &message);
@@ -333,11 +344,13 @@ mod tests {
         assert_eq!(u32::from_le_bytes(item[0..4].try_into().unwrap()), message.encoded_len() as u32);
         assert_eq!(u32::from_le_bytes(item[4..8].try_into().unwrap()), 7);
         assert_eq!(u16::from_le_bytes(item[8..10].try_into().unwrap()), 42);
-        assert_eq!(u16::from_le_bytes(item[10..12].try_into().unwrap()), 6);
-        assert_eq!(u16::from_le_bytes(item[12..14].try_into().unwrap()), 4);
-        assert_eq!(u32::from_le_bytes(item[16..20].try_into().unwrap()), 11);
-        assert_eq!(&item[20..26], b"custom");
-        assert_eq!(&item[26..30], b"data");
-        assert_eq!(&item[30..], br#"{"temp":30}"#);
+        assert_eq!(item[10], 6);
+        assert_eq!(item[11], 4);
+        assert_eq!(item[12], 0);
+        assert_eq!(item[13], 0);
+        assert_eq!(u32::from_le_bytes(item[14..18].try_into().unwrap()), 11);
+        assert_eq!(&item[18..24], b"custom");
+        assert_eq!(&item[24..28], b"data");
+        assert_eq!(&item[28..], br#"{"temp":30}"#);
     }
 }

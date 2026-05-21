@@ -1,0 +1,294 @@
+// Tenon DSL grammar.
+//
+// This file is intended to be the authoritative grammar for the Tenon DSL.
+// It is not wired into the build yet. The semantic actions reference the
+// planned AST types so the grammar shape can be reviewed before the compiler
+// implementation lands.
+//
+// V1 scope:
+// - MQTT topic source.
+// - JSON payload semantics.
+// - Predicate expression.
+// - Projection expression.
+// - Destination dispatch.
+//
+// Example:
+//
+// from topic "sensor/+/data"
+// where payload.temp > 30 and topic[1] == "room1"
+// select {
+//   device: topic[1],
+//   temp: payload.temp,
+//   raw: payload,
+//   first_value: payload.values[0],
+//   score: payload.temp + 10
+// }
+// into raw_kafka, local_log
+
+grammar;
+
+use crate::dsl::ast::{
+    BinaryOp, ExprAst, FieldSegment, LiteralAst, ProjectionAst, ProjectionItemAst, RuleAst,
+    SourceAst, UnaryOp,
+};
+use crate::dsl::literal::{parse_float_literal, parse_index_literal, parse_int_literal, unescape_string};
+use crate::dsl::token::validate_ident;
+
+pub Rules: Vec<RuleAst> = {
+    <rules:RuleList> ";"? => rules,
+};
+
+RuleList: Vec<RuleAst> = {
+    <head:Rule> <tail:(";" <Rule>)*> => {
+        let mut rules = vec![head];
+        rules.extend(tail);
+        rules
+    },
+};
+
+pub Rule: RuleAst = {
+    <source:Source> <predicate:WhereClause?> <projection:SelectClause> <destinations:IntoClause> => {
+        RuleAst {
+            source,
+            predicate,
+            projection,
+            destinations,
+        }
+    },
+};
+
+Source: SourceAst = {
+    "from" "topic" <topic_filter:StringLiteral> => SourceAst::Topic {
+        filter: topic_filter,
+    },
+};
+
+WhereClause: ExprAst = {
+    "where" <expr:Expr> => expr,
+};
+
+SelectClause: ProjectionAst = {
+    "select" "*" => ProjectionAst::All,
+    "select" <projection:ObjectProjection> => ProjectionAst::Object(projection),
+};
+
+ObjectProjection: Vec<ProjectionItemAst> = {
+    "{" <items:ProjectionItems?> "}" => items.unwrap_or_default(),
+};
+
+ProjectionItems: Vec<ProjectionItemAst> = {
+    <head:ProjectionItem> <tail:("," <ProjectionItem>)*> ","? => {
+        let mut items = vec![head];
+        items.extend(tail);
+        items
+    },
+};
+
+ProjectionItem: ProjectionItemAst = {
+    <name:ProjectionKey> ":" <expr:Expr> => ProjectionItemAst { name, expr },
+};
+
+ProjectionKey: String = {
+    Ident,
+    StringLiteral,
+};
+
+IntoClause: Vec<String> = {
+    "into" <destinations:IdentList> => destinations,
+};
+
+IdentList: Vec<String> = {
+    <head:Ident> <tail:("," <Ident>)*> ","? => {
+        let mut items = vec![head];
+        items.extend(tail);
+        items
+    },
+};
+
+Expr: ExprAst = {
+    LogicalOr,
+};
+
+LogicalOr: ExprAst = {
+    <left:LogicalOr> "or" <right:LogicalAnd> => ExprAst::Binary {
+        op: BinaryOp::Or,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    LogicalAnd,
+};
+
+LogicalAnd: ExprAst = {
+    <left:LogicalAnd> "and" <right:Equality> => ExprAst::Binary {
+        op: BinaryOp::And,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    Equality,
+};
+
+Equality: ExprAst = {
+    <left:Comparison> "==" <right:Comparison> => ExprAst::Binary {
+        op: BinaryOp::Eq,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:Comparison> "!=" <right:Comparison> => ExprAst::Binary {
+        op: BinaryOp::Ne,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    Comparison,
+};
+
+Comparison: ExprAst = {
+    <left:AddSub> ">" <right:AddSub> => ExprAst::Binary {
+        op: BinaryOp::Gt,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:AddSub> ">=" <right:AddSub> => ExprAst::Binary {
+        op: BinaryOp::Ge,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:AddSub> "<" <right:AddSub> => ExprAst::Binary {
+        op: BinaryOp::Lt,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:AddSub> "<=" <right:AddSub> => ExprAst::Binary {
+        op: BinaryOp::Le,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    AddSub,
+};
+
+AddSub: ExprAst = {
+    <left:AddSub> "+" <right:MulDivRem> => ExprAst::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:AddSub> "-" <right:MulDivRem> => ExprAst::Binary {
+        op: BinaryOp::Sub,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    MulDivRem,
+};
+
+MulDivRem: ExprAst = {
+    <left:MulDivRem> "*" <right:Unary> => ExprAst::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:MulDivRem> "/" <right:Unary> => ExprAst::Binary {
+        op: BinaryOp::Div,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    <left:MulDivRem> "%" <right:Unary> => ExprAst::Binary {
+        op: BinaryOp::Rem,
+        left: Box::new(left),
+        right: Box::new(right),
+    },
+    Unary,
+};
+
+Unary: ExprAst = {
+    "not" <expr:Unary> => ExprAst::Unary {
+        op: UnaryOp::Not,
+        expr: Box::new(expr),
+    },
+    "-" <expr:Unary> => ExprAst::Unary {
+        op: UnaryOp::Neg,
+        expr: Box::new(expr),
+    },
+    Primary,
+};
+
+Primary: ExprAst = {
+    Literal,
+    PayloadRef,
+    TopicRef,
+    PropertyRef,
+    MetadataRef,
+    FunctionCall,
+    "(" <Expr> ")",
+};
+
+Literal: ExprAst = {
+    <value:StringLiteral> => ExprAst::Literal(LiteralAst::String(value)),
+    <value:FloatLiteral> => ExprAst::Literal(LiteralAst::Float(value)),
+    <value:IntLiteral> => ExprAst::Literal(LiteralAst::Int(value)),
+    "true" => ExprAst::Literal(LiteralAst::Bool(true)),
+    "false" => ExprAst::Literal(LiteralAst::Bool(false)),
+    "null" => ExprAst::Literal(LiteralAst::Null),
+};
+
+PayloadRef: ExprAst = {
+    "payload" => ExprAst::PayloadRoot,
+    "payload" <path:FieldPath> => ExprAst::PayloadField(path),
+};
+
+TopicRef: ExprAst = {
+    "topic" "[" <level:IndexLiteral> "]" => ExprAst::TopicLevel(level),
+};
+
+PropertyRef: ExprAst = {
+    "properties" "[" <key:StringLiteral> "]" => ExprAst::Property(key),
+};
+
+MetadataRef: ExprAst = {
+    "metadata" "." <key:Ident> => ExprAst::Metadata(key),
+    "metadata" "[" <key:StringLiteral> "]" => ExprAst::Metadata(key),
+};
+
+FunctionCall: ExprAst = {
+    <name:Ident> "(" <args:CallArgs?> ")" => ExprAst::Call {
+        name,
+        args: args.unwrap_or_default(),
+    },
+};
+
+CallArgs: Vec<ExprAst> = {
+    <head:Expr> <tail:("," <Expr>)*> ","? => {
+        let mut args = vec![head];
+        args.extend(tail);
+        args
+    },
+};
+
+FieldPath: Vec<FieldSegment> = {
+    <segments:FieldSegment+> => segments,
+};
+
+FieldSegment: FieldSegment = {
+    "." <name:Ident> => FieldSegment::Name(name),
+    "[" <name:StringLiteral> "]" => FieldSegment::Name(name),
+    "[" <index:IndexLiteral> "]" => FieldSegment::Index(index),
+};
+
+Ident: String = {
+    <raw:r"[A-Za-z_][A-Za-z0-9_]*"> =>? validate_ident(raw),
+};
+
+StringLiteral: String = {
+    <raw:r#""([^"\\]|\\.)*""#> =>? unescape_string(raw),
+};
+
+FloatLiteral: f64 = {
+    <raw:r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?"> =>? parse_float_literal(raw),
+    <raw:r"[0-9]+[eE][+-]?[0-9]+"> =>? parse_float_literal(raw),
+};
+
+IntLiteral: i64 = {
+    <raw:r"[0-9]+"> =>? parse_int_literal(raw),
+};
+
+IndexLiteral: usize = {
+    <raw:r"[0-9]+"> =>? parse_index_literal(raw),
+};

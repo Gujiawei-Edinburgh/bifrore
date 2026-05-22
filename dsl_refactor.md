@@ -51,33 +51,40 @@ The parser should not directly produce executable rules. Syntax, semantic valida
 Example:
 
 ```text
-from topic "sensor/+/data"
-where payload.temp > 30 and topic[1] == "room1"
-select {
-  device: topic[1],
-  temp: payload.temp,
-  hum: payload.hum,
-  score: payload.temp + 10
+on topic "sensor/+/data"
+decode payload as json into p
+guard p.temp > 30 && topic[1] == "room1"
+emit to raw_kafka, local_log {
+  "device": topic[1],
+  "temp": p.temp,
+  "hum": p.hum,
+  "score": p.temp + 10
 }
-into raw_kafka, local_log
 ```
 
 Raw forwarding:
 
 ```text
-from topic "#"
-select *
-into ipc_out
+on topic "#"
+decode payload as json into p
+emit to ipc_out {
+  "payload": p
+}
 ```
 
 Conceptual structure:
 
 ```text
-from topic <mqtt_topic_filter>
-where <predicate_expr>
-select * | select { <name>: <expr>, ... }
-into <destination>, ...
+on topic <mqtt_topic_filter>
+decode payload as json into <payload_alias>
+guard <predicate_expr>
+emit to <destination>, ... {
+  "<json_key>": <expr>,
+  ...
+}
 ```
+
+The clause names intentionally describe Tenon's pipeline: MQTT event trigger, payload decode, guard evaluation, and result emission. Projection keys must be quoted string literals so keys such as `"topic"` and `"payload"` are unambiguous JSON output fields. Empty projection objects are invalid.
 
 ## Grammar Source of Truth
 
@@ -94,39 +101,40 @@ Parser generation is build-time only. Tenon should never generate a parser durin
 ## Suggested Grammar Sketch
 
 ```ebnf
-rule            = source where_clause? select_clause into_clause ;
+rules           = rule (";" rule)* ";"? ;
+rule            = on_clause decode_clause guard_clause? emit_clause ;
 
-source          = "from" "topic" string_literal ;
-where_clause    = "where" expr ;
-select_clause   = "select" "*" | "select" object_projection ;
-into_clause     = "into" ident_list ;
+on_clause       = "on" "topic" string_literal ;
+decode_clause   = "decode" "payload" "as" payload_format "into" ident ;
+payload_format  = "json" ;
+guard_clause    = "guard" expr ;
+emit_clause     = "emit" "to" destination_list projection_object ;
 
-object_projection = "{" projection_item ("," projection_item)* ","? "}" ;
-projection_item   = projection_key ":" expr ;
-projection_key    = ident | string_literal ;
+projection_object = "{" projection_item ("," projection_item)* ","? "}" ;
+projection_item   = string_literal ":" expr ;
 
 expr            = logical_or ;
-logical_or      = logical_and ( "or" logical_and )* ;
-logical_and     = equality ( "and" equality )* ;
+logical_or      = logical_and ( "||" logical_and )* ;
+logical_and     = equality ( "&&" equality )* ;
 equality        = comparison ( "==" | "!=" ) comparison | comparison ;
 comparison      = term ( ">" | ">=" | "<" | "<=" ) term | term ;
 term            = factor (("+" | "-") factor)* ;
 factor          = unary (("*" | "/" | "%") unary)* ;
-unary           = ("not" | "-") unary | primary ;
-primary         = literal | payload_ref | topic_ref | property_ref | metadata_ref | function_call | "(" expr ")" ;
+unary           = ("!" | "-") unary | primary ;
+primary         = literal | topic_ref | property_ref | metadata_ref | named_ref_or_call | "(" expr ")" ;
 
-payload_ref     = "payload" | "payload" field_path ;
+named_ref_or_call = ident "(" (expr ("," expr)* ","?)? ")" | ident field_path | ident ;
 field_path      = ("." ident | "[" string_literal "]" | "[" index_literal "]")+ ;
 topic_ref       = "topic" "[" index_literal "]" ;
 property_ref    = "properties" "[" string_literal "]" ;
 metadata_ref    = "metadata" "." ident | "metadata" "[" string_literal "]" ;
-function_call   = ident "(" (expr ("," expr)* ","?)? ")" ;
 
 literal         = string_literal | int_literal | float_literal | bool_literal | null ;
-ident_list      = ident ("," ident)* ","? ;
+destination     = /[A-Za-z_][A-Za-z0-9_-]*/ ;
+destination_list = destination ("," destination)* ","? ;
 ```
 
-Identifiers must reject reserved keywords. String and numeric literal parsing must be fallible so invalid escapes and integer overflow are reported as parser diagnostics rather than panics.
+Identifiers must reject reserved keywords. Emit destinations are not identifiers; they are matched against configured sink names and may use reserved words or hyphenated names such as `raw-kafka`. String and numeric literal parsing must be fallible so invalid escapes and integer overflow are reported as parser diagnostics rather than panics.
 
 ## AST Layer
 
@@ -136,10 +144,10 @@ Example shape:
 
 ```rust
 RuleAst {
-    topic_filter: String,
-    where_expr: Option<ExprAst>,
-    projection: ProjectionAst,
-    destinations: Vec<String>,
+    source: SourceAst,
+    decode: DecodeAst,
+    guard: Option<ExprAst>,
+    emit: EmitAst,
 }
 ```
 

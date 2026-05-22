@@ -7,29 +7,28 @@
 //
 // V1 scope:
 // - MQTT topic source.
-// - JSON payload semantics.
-// - Predicate expression.
+// - Explicit JSON payload decode.
+// - Guard expression.
 // - Projection expression.
 // - Destination dispatch.
 //
 // Example:
 //
-// from topic "sensor/+/data"
-// where payload.temp > 30 and topic[1] == "room1"
-// select {
-//   device: topic[1],
-//   temp: payload.temp,
-//   raw: payload,
-//   first_value: payload.values[0],
-//   score: payload.temp + 10
+// on topic "sensor/+/data"
+// decode payload as json into p
+// guard p.temp > 30 && topic[1] == "room1"
+// emit to raw_kafka, local_log {
+//   "topic": topic[1],
+//   "payload": p,
+//   "first_value": p.values[0],
+//   "score": p.temp + 10
 // }
-// into raw_kafka, local_log
 
 grammar;
 
 use crate::dsl::ast::{
-    BinaryOp, ExprAst, FieldSegment, LiteralAst, ProjectionAst, ProjectionItemAst, RuleAst,
-    SourceAst, UnaryOp,
+    BinaryOp, DecodeAst, EmitAst, ExprAst, FieldSegment, LiteralAst, PayloadFormatAst,
+    ProjectionItemAst, RuleAst, SourceAst, UnaryOp,
 };
 use crate::dsl::literal::{parse_float_literal, parse_index_literal, parse_int_literal, unescape_string};
 use crate::dsl::token::validate_ident;
@@ -47,33 +46,46 @@ RuleList: Vec<RuleAst> = {
 };
 
 pub Rule: RuleAst = {
-    <source:Source> <predicate:WhereClause?> <projection:SelectClause> <destinations:IntoClause> => {
+    <source:OnClause> <decode:DecodeClause> <guard:GuardClause?> <emit:EmitClause> => {
         RuleAst {
             source,
-            predicate,
-            projection,
-            destinations,
+            decode,
+            guard,
+            emit,
         }
     },
 };
 
-Source: SourceAst = {
-    "from" "topic" <topic_filter:StringLiteral> => SourceAst::Topic {
+OnClause: SourceAst = {
+    "on" "topic" <topic_filter:StringLiteral> => SourceAst::Topic {
         filter: topic_filter,
     },
 };
 
-WhereClause: ExprAst = {
-    "where" <expr:Expr> => expr,
+DecodeClause: DecodeAst = {
+    "decode" "payload" "as" <format:PayloadFormat> "into" <alias:Ident> => DecodeAst {
+        format,
+        alias,
+    },
 };
 
-SelectClause: ProjectionAst = {
-    "select" "*" => ProjectionAst::All,
-    "select" <projection:ObjectProjection> => ProjectionAst::Object(projection),
+PayloadFormat: PayloadFormatAst = {
+    "json" => PayloadFormatAst::Json,
 };
 
-ObjectProjection: Vec<ProjectionItemAst> = {
-    "{" <items:ProjectionItems?> "}" => items.unwrap_or_default(),
+GuardClause: ExprAst = {
+    "guard" <expr:Expr> => expr,
+};
+
+EmitClause: EmitAst = {
+    "emit" "to" <destinations:DestinationList> <projection:ProjectionObject> => EmitAst {
+        destinations,
+        projection,
+    },
+};
+
+ProjectionObject: Vec<ProjectionItemAst> = {
+    "{" <items:ProjectionItems> "}" => items,
 };
 
 ProjectionItems: Vec<ProjectionItemAst> = {
@@ -85,24 +97,7 @@ ProjectionItems: Vec<ProjectionItemAst> = {
 };
 
 ProjectionItem: ProjectionItemAst = {
-    <name:ProjectionKey> ":" <expr:Expr> => ProjectionItemAst { name, expr },
-};
-
-ProjectionKey: String = {
-    Ident,
-    StringLiteral,
-};
-
-IntoClause: Vec<String> = {
-    "into" <destinations:IdentList> => destinations,
-};
-
-IdentList: Vec<String> = {
-    <head:Ident> <tail:("," <Ident>)*> ","? => {
-        let mut items = vec![head];
-        items.extend(tail);
-        items
-    },
+    <name:StringLiteral> ":" <expr:Expr> => ProjectionItemAst { name, expr },
 };
 
 Expr: ExprAst = {
@@ -110,7 +105,7 @@ Expr: ExprAst = {
 };
 
 LogicalOr: ExprAst = {
-    <left:LogicalOr> "or" <right:LogicalAnd> => ExprAst::Binary {
+    <left:LogicalOr> "||" <right:LogicalAnd> => ExprAst::Binary {
         op: BinaryOp::Or,
         left: Box::new(left),
         right: Box::new(right),
@@ -119,7 +114,7 @@ LogicalOr: ExprAst = {
 };
 
 LogicalAnd: ExprAst = {
-    <left:LogicalAnd> "and" <right:Equality> => ExprAst::Binary {
+    <left:LogicalAnd> "&&" <right:Equality> => ExprAst::Binary {
         op: BinaryOp::And,
         left: Box::new(left),
         right: Box::new(right),
@@ -199,7 +194,7 @@ MulDivRem: ExprAst = {
 };
 
 Unary: ExprAst = {
-    "not" <expr:Unary> => ExprAst::Unary {
+    "!" <expr:Unary> => ExprAst::Unary {
         op: UnaryOp::Not,
         expr: Box::new(expr),
     },
@@ -212,11 +207,10 @@ Unary: ExprAst = {
 
 Primary: ExprAst = {
     Literal,
-    PayloadRef,
     TopicRef,
     PropertyRef,
     MetadataRef,
-    FunctionCall,
+    NamedRefOrCall,
     "(" <Expr> ")",
 };
 
@@ -227,11 +221,6 @@ Literal: ExprAst = {
     "true" => ExprAst::Literal(LiteralAst::Bool(true)),
     "false" => ExprAst::Literal(LiteralAst::Bool(false)),
     "null" => ExprAst::Literal(LiteralAst::Null),
-};
-
-PayloadRef: ExprAst = {
-    "payload" => ExprAst::PayloadRoot,
-    "payload" <path:FieldPath> => ExprAst::PayloadField(path),
 };
 
 TopicRef: ExprAst = {
@@ -247,11 +236,16 @@ MetadataRef: ExprAst = {
     "metadata" "[" <key:StringLiteral> "]" => ExprAst::Metadata(key),
 };
 
-FunctionCall: ExprAst = {
+NamedRefOrCall: ExprAst = {
     <name:Ident> "(" <args:CallArgs?> ")" => ExprAst::Call {
         name,
         args: args.unwrap_or_default(),
     },
+    <name:Ident> <path:FieldPath> => ExprAst::VariableField {
+        name,
+        path,
+    },
+    <name:Ident> => ExprAst::VariableRoot(name),
 };
 
 CallArgs: Vec<ExprAst> = {
@@ -272,6 +266,24 @@ FieldSegment: FieldSegment = {
     "[" <index:IndexLiteral> "]" => FieldSegment::Index(index),
 };
 
+DestinationList: Vec<String> = {
+    <head:DestinationName> <tail:("," <DestinationName>)*> ","? => {
+        let mut items = vec![head];
+        items.extend(tail);
+        items
+    },
+};
+
+// Sink destination names are matched against configured sink names. They are
+// intentionally not checked as identifiers, so `emit to json`, `emit to topic`,
+// and `emit to raw-kafka` are valid destination references.
+DestinationName: String = {
+    r"[A-Za-z_][A-Za-z0-9_-]*" => <>.to_string(),
+};
+
+// Reserved keywords:
+// on, topic, decode, payload, as, json, into, guard, emit, to,
+// true, false, null, properties, metadata.
 Ident: String = {
     <raw:r"[A-Za-z_][A-Za-z0-9_]*"> =>? validate_ident(raw),
 };

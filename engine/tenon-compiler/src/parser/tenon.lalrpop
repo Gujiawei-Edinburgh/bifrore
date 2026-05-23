@@ -1,9 +1,8 @@
 // Tenon DSL grammar.
 //
 // This file is intended to be the authoritative grammar for the Tenon DSL.
-// It is not wired into the build yet. The semantic actions reference the
-// planned AST types so the grammar shape can be reviewed before the compiler
-// implementation lands.
+// The semantic actions build AST types. Later compiler phases lower the AST
+// into logical IR, optimized IR, and executable bytecode.
 //
 // V1 scope:
 // - MQTT topic source.
@@ -26,23 +25,27 @@
 
 grammar;
 
-use crate::dsl::ast::{
-    BinaryOp, DecodeAst, EmitAst, ExprAst, FieldSegment, LiteralAst, PayloadFormatAst,
-    ProjectionItemAst, RuleAst, SourceAst, UnaryOp,
+extern {
+    type Error = String;
+}
+
+use crate::parser::ast::{
+    binary_expr, fold_binary_expr, BinaryOp, DecodeAst, EmitAst, ExprAst, FieldSegment,
+    LiteralAst, PayloadFormatAst, ProjectionItemAst, RuleAst, SourceAst, UnaryOp,
 };
-use crate::dsl::literal::{parse_float_literal, parse_index_literal, parse_int_literal, unescape_string};
-use crate::dsl::token::validate_ident;
+use crate::parser::literal::{
+    parse_float_literal, parse_index_literal, parse_int_literal, unescape_string,
+};
+use crate::parser::token::validate_ident;
 
 pub Rules: Vec<RuleAst> = {
-    <rules:RuleList> ";"? => rules,
-};
-
-RuleList: Vec<RuleAst> = {
-    <head:Rule> <tail:(";" <Rule>)*> => {
+    <head:Rule> ";" <tail:Rules> => {
         let mut rules = vec![head];
         rules.extend(tail);
         rules
     },
+    <rule:Rule> ";" => vec![rule],
+    <rule:Rule> => vec![rule],
 };
 
 pub Rule: RuleAst = {
@@ -89,11 +92,13 @@ ProjectionObject: Vec<ProjectionItemAst> = {
 };
 
 ProjectionItems: Vec<ProjectionItemAst> = {
-    <head:ProjectionItem> <tail:("," <ProjectionItem>)*> ","? => {
+    <head:ProjectionItem> "," <tail:ProjectionItems> => {
         let mut items = vec![head];
         items.extend(tail);
         items
     },
+    <item:ProjectionItem> "," => vec![item],
+    <item:ProjectionItem> => vec![item],
 };
 
 ProjectionItem: ProjectionItemAst = {
@@ -105,92 +110,64 @@ Expr: ExprAst = {
 };
 
 LogicalOr: ExprAst = {
-    <left:LogicalOr> "||" <right:LogicalAnd> => ExprAst::Binary {
-        op: BinaryOp::Or,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    LogicalAnd,
+    <head:LogicalAnd> <tail:LogicalOrTail*> => fold_binary_expr(head, tail),
+};
+
+LogicalOrTail: (BinaryOp, ExprAst) = {
+    "||" <right:LogicalAnd> => (BinaryOp::Or, right),
 };
 
 LogicalAnd: ExprAst = {
-    <left:LogicalAnd> "&&" <right:Equality> => ExprAst::Binary {
-        op: BinaryOp::And,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    Equality,
+    <head:Equality> <tail:LogicalAndTail*> => fold_binary_expr(head, tail),
+};
+
+LogicalAndTail: (BinaryOp, ExprAst) = {
+    "&&" <right:Equality> => (BinaryOp::And, right),
 };
 
 Equality: ExprAst = {
-    <left:Comparison> "==" <right:Comparison> => ExprAst::Binary {
-        op: BinaryOp::Eq,
-        left: Box::new(left),
-        right: Box::new(right),
+    <left:Comparison> <tail:EqualityTail?> => match tail {
+        Some((op, right)) => binary_expr(op, left, right),
+        None => left,
     },
-    <left:Comparison> "!=" <right:Comparison> => ExprAst::Binary {
-        op: BinaryOp::Ne,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    Comparison,
+};
+
+EqualityTail: (BinaryOp, ExprAst) = {
+    "==" <right:Comparison> => (BinaryOp::Eq, right),
+    "!=" <right:Comparison> => (BinaryOp::Ne, right),
 };
 
 Comparison: ExprAst = {
-    <left:AddSub> ">" <right:AddSub> => ExprAst::Binary {
-        op: BinaryOp::Gt,
-        left: Box::new(left),
-        right: Box::new(right),
+    <left:AddSub> <tail:ComparisonTail?> => match tail {
+        Some((op, right)) => binary_expr(op, left, right),
+        None => left,
     },
-    <left:AddSub> ">=" <right:AddSub> => ExprAst::Binary {
-        op: BinaryOp::Ge,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    <left:AddSub> "<" <right:AddSub> => ExprAst::Binary {
-        op: BinaryOp::Lt,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    <left:AddSub> "<=" <right:AddSub> => ExprAst::Binary {
-        op: BinaryOp::Le,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    AddSub,
+};
+
+ComparisonTail: (BinaryOp, ExprAst) = {
+    ">" <right:AddSub> => (BinaryOp::Gt, right),
+    ">=" <right:AddSub> => (BinaryOp::Ge, right),
+    "<" <right:AddSub> => (BinaryOp::Lt, right),
+    "<=" <right:AddSub> => (BinaryOp::Le, right),
 };
 
 AddSub: ExprAst = {
-    <left:AddSub> "+" <right:MulDivRem> => ExprAst::Binary {
-        op: BinaryOp::Add,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    <left:AddSub> "-" <right:MulDivRem> => ExprAst::Binary {
-        op: BinaryOp::Sub,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    MulDivRem,
+    <head:MulDivRem> <tail:AddSubTail*> => fold_binary_expr(head, tail),
+};
+
+AddSubTail: (BinaryOp, ExprAst) = {
+    "+" <right:MulDivRem> => (BinaryOp::Add, right),
+    "-" <right:MulDivRem> => (BinaryOp::Sub, right),
 };
 
 MulDivRem: ExprAst = {
-    <left:MulDivRem> "*" <right:Unary> => ExprAst::Binary {
-        op: BinaryOp::Mul,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    <left:MulDivRem> "/" <right:Unary> => ExprAst::Binary {
-        op: BinaryOp::Div,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    <left:MulDivRem> "%" <right:Unary> => ExprAst::Binary {
-        op: BinaryOp::Rem,
-        left: Box::new(left),
-        right: Box::new(right),
-    },
-    Unary,
+    <head:Unary> <tail:MulDivRemTail*> => fold_binary_expr(head, tail),
+};
+
+MulDivRemTail: (BinaryOp, ExprAst) = {
+    "*" <right:Unary> => (BinaryOp::Mul, right),
+    "/" <right:Unary> => (BinaryOp::Div, right),
+    "%" <right:Unary> => (BinaryOp::Rem, right),
 };
 
 Unary: ExprAst = {
@@ -249,11 +226,13 @@ NamedRefOrCall: ExprAst = {
 };
 
 CallArgs: Vec<ExprAst> = {
-    <head:Expr> <tail:("," <Expr>)*> ","? => {
+    <head:Expr> "," <tail:CallArgs> => {
         let mut args = vec![head];
         args.extend(tail);
         args
     },
+    <expr:Expr> "," => vec![expr],
+    <expr:Expr> => vec![expr],
 };
 
 FieldPath: Vec<FieldSegment> = {
@@ -267,40 +246,66 @@ FieldSegment: FieldSegment = {
 };
 
 DestinationList: Vec<String> = {
-    <head:DestinationName> <tail:("," <DestinationName>)*> ","? => {
+    <head:DestinationName> "," <tail:DestinationList> => {
         let mut items = vec![head];
         items.extend(tail);
         items
     },
+    <name:DestinationName> "," => vec![name],
+    <name:DestinationName> => vec![name],
 };
 
 // Sink destination names are matched against configured sink names. They are
 // intentionally not checked as identifiers, so `emit to json`, `emit to topic`,
 // and `emit to raw-kafka` are valid destination references.
 DestinationName: String = {
-    r"[A-Za-z_][A-Za-z0-9_-]*" => <>.to_string(),
+    Word,
+    r"[A-Za-z_][A-Za-z0-9_]*-[A-Za-z0-9_-]*" => <>.to_string(),
+    ReservedDestinationName,
+};
+
+ReservedDestinationName: String = {
+    "on" => "on".to_string(),
+    "topic" => "topic".to_string(),
+    "decode" => "decode".to_string(),
+    "payload" => "payload".to_string(),
+    "as" => "as".to_string(),
+    "json" => "json".to_string(),
+    "into" => "into".to_string(),
+    "guard" => "guard".to_string(),
+    "emit" => "emit".to_string(),
+    "to" => "to".to_string(),
+    "true" => "true".to_string(),
+    "false" => "false".to_string(),
+    "null" => "null".to_string(),
+    "properties" => "properties".to_string(),
+    "metadata" => "metadata".to_string(),
 };
 
 // Reserved keywords:
 // on, topic, decode, payload, as, json, into, guard, emit, to,
-// true, false, null, properties, metadata.
+// true, false, null, properties, metadata, raw_payload.
 Ident: String = {
-    <raw:r"[A-Za-z_][A-Za-z0-9_]*"> =>? validate_ident(raw),
+    <raw:Word> =>? Ok(validate_ident(raw.as_str())?),
+};
+
+Word: String = {
+    r"[A-Za-z_][A-Za-z0-9_]*" => <>.to_string(),
 };
 
 StringLiteral: String = {
-    <raw:r#""([^"\\]|\\.)*""#> =>? unescape_string(raw),
+    <raw:r#""([^"\\]|\\.)*""#> =>? Ok(unescape_string(raw)?),
 };
 
 FloatLiteral: f64 = {
-    <raw:r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?"> =>? parse_float_literal(raw),
-    <raw:r"[0-9]+[eE][+-]?[0-9]+"> =>? parse_float_literal(raw),
+    <raw:r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?"> =>? Ok(parse_float_literal(raw)?),
+    <raw:r"[0-9]+[eE][+-]?[0-9]+"> =>? Ok(parse_float_literal(raw)?),
 };
 
 IntLiteral: i64 = {
-    <raw:r"[0-9]+"> =>? parse_int_literal(raw),
+    <raw:r"[0-9]+"> =>? Ok(parse_int_literal(raw)?),
 };
 
 IndexLiteral: usize = {
-    <raw:r"[0-9]+"> =>? parse_index_literal(raw),
+    <raw:r"[0-9]+"> =>? Ok(parse_index_literal(raw)?),
 };

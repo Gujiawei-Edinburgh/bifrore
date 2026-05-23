@@ -46,6 +46,18 @@ DSL text
 
 The parser should not directly produce executable rules. Syntax, semantic validation, optimization, and execution should be separate layers.
 
+## Crate Boundary
+
+The compiler pipeline should live outside `tenon-core`:
+
+```text
+tenon-compiler -> tenon-core
+tenon-coordinator -> tenon-compiler + tenon-core
+tenon-oss -> tenon-coordinator + tenon-core
+```
+
+`tenon-compiler` owns DSL parsing, AST, semantic analysis, IR lowering, optimization, and bytecode generation. `tenon-core` owns the runtime value model, bytecode/VM execution, MQTT adapter, metrics, and sink-facing evaluation output. Coordinators use the compiler facade to compile rule source before installing or swapping compiled rule sets in core.
+
 ## Proposed DSL Shape
 
 Example:
@@ -91,7 +103,7 @@ The clause names intentionally describe Tenon's pipeline: MQTT event trigger, pa
 Use the LALRPOP grammar file as the authoritative grammar:
 
 ```text
-engine/tenon-core/src/dsl/tenon.lalrpop
+engine/tenon-compiler/src/parser/tenon.lalrpop
 ```
 
 The grammar file is the public source of truth for review and discussion. It is LALRPOP-specific syntax rather than generic EBNF, but this avoids drift between a public grammar document and the parser generator input.

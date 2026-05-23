@@ -1,7 +1,7 @@
 use crate::metrics::OssMetrics;
 use crate::paths;
 use tenon_core::message::Message;
-use flume::{Receiver, Sender};
+use flume::{bounded, Receiver, Sender};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -286,7 +286,7 @@ fn write_batch(stream: &mut UnixStream, messages: &[IpcMessage]) -> std::io::Res
     let mut body = Vec::new();
     body.push(PROTOCOL_VERSION);
     body.push(FRAME_TYPE_BATCH);
-    buffer.extend_from_slice(&0u16.to_le_bytes()); // header flags and reserved
+    body.extend_from_slice(&0u16.to_le_bytes()); // header flags and reserved
     body.extend_from_slice(&(messages.len() as u16).to_le_bytes());
     body.extend_from_slice(&0u16.to_le_bytes());
 

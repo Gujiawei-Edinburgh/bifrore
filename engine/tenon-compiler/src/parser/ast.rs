@@ -82,10 +82,6 @@ pub enum ExprKindAst {
         name: String,
         path: Vec<FieldSegment>,
     },
-    Call {
-        name: String,
-        args: Vec<ExprAst>,
-    },
     Unary {
         op: UnaryOp,
         expr: Box<ExprAst>,

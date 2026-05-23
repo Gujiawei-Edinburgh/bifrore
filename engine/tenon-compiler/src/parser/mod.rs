@@ -241,4 +241,18 @@ mod tests {
         let err = parse_rules(source).expect_err("invalid token");
         assert_eq!(err.kind, ParseErrorKind::InvalidToken);
     }
+
+    #[test]
+    fn rejects_function_call_syntax() {
+        let source = r#"
+            on topic "data"
+            decode payload as json into p
+            emit to local_log {
+                "payload": lower(p.name)
+            }
+            "#;
+        let err = parse_rules(source).expect_err("function calls are not in v1 grammar");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
+    }
 }

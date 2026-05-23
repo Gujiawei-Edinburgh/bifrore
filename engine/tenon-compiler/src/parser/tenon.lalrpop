@@ -192,7 +192,7 @@ Primary: ExprAst = {
     TopicRef,
     PropertyRef,
     MetadataRef,
-    NamedRefOrCall,
+    NamedRef,
     <start:@L> "(" <expr:Expr> ")" <end:@R> => expr.with_span(Span::new(start, end)),
 };
 
@@ -248,14 +248,7 @@ MetadataRef: ExprAst = {
     ),
 };
 
-NamedRefOrCall: ExprAst = {
-    <start:@L> <name:Ident> "(" <args:CallArgs?> ")" <end:@R> => ExprAst::new(
-        ExprKindAst::Call {
-            name,
-            args: args.unwrap_or_default(),
-        },
-        Span::new(start, end),
-    ),
+NamedRef: ExprAst = {
     <start:@L> <name:Ident> <path:FieldPath> <end:@R> => ExprAst::new(
         ExprKindAst::VariableField {
             name,
@@ -267,16 +260,6 @@ NamedRefOrCall: ExprAst = {
         ExprKindAst::VariableRoot(name),
         Span::new(start, end),
     ),
-};
-
-CallArgs: Vec<ExprAst> = {
-    <head:Expr> "," <tail:CallArgs> => {
-        let mut args = vec![head];
-        args.extend(tail);
-        args
-    },
-    <expr:Expr> "," => vec![expr],
-    <expr:Expr> => vec![expr],
 };
 
 FieldPath: Vec<FieldSegment> = {

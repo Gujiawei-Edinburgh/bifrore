@@ -18,13 +18,13 @@ pub fn parse_rules(input: &str) -> Result<Vec<RuleAst>, ParseError<'_>> {
 mod tests {
     use super::*;
     use crate::parser::ast::{
-        BinaryOp, ExprAst, FieldSegment, LiteralAst, PayloadFormatAst, SourceAst,
+        BinaryOp, ExprKindAst, FieldSegmentKindAst, LiteralAst, PayloadFormatAst,
+        SourceKindAst,
     };
 
     #[test]
     fn parses_pipeline_rule() {
-        let rules = parse_rules(
-            r#"
+        let source = r#"
             on topic "sensor/+/data"
             decode payload as json into p
             guard p.temp > 30 && topic[1] == "room1"
@@ -34,15 +34,14 @@ mod tests {
               "first_value": p.values[0],
               "score": p.temp + 10
             }
-            "#,
-        )
-        .expect("parse rules");
+            "#;
+        let rules = parse_rules(source).expect("parse rules");
         assert_eq!(rules.len(), 1);
         let rule = &rules[0];
 
         assert_eq!(
-            rule.source,
-            SourceAst::Topic {
+            rule.source.kind,
+            SourceKindAst::Topic {
                 filter: "sensor/+/data".to_string()
             }
         );
@@ -51,7 +50,13 @@ mod tests {
         assert_eq!(rule.emit.destinations, vec!["raw_kafka", "local-log"]);
         assert_eq!(rule.emit.projection.len(), 4);
         assert_eq!(rule.emit.projection[1].name, "payload");
-        assert!(matches!(rule.emit.projection[1].expr, ExprAst::VariableRoot(ref name) if name == "p"));
+        assert!(matches!(rule.emit.projection[1].expr.kind, ExprKindAst::VariableRoot(ref name) if name == "p"));
+        assert_eq!(&source[rule.span.start..rule.span.start + 2], "on");
+        assert_eq!(
+            &source[rule.emit.projection[0].expr.span.start
+                ..rule.emit.projection[0].expr.span.end],
+            "topic[1]"
+        );
     }
 
     #[test]
@@ -93,21 +98,20 @@ mod tests {
         assert_eq!(rules.len(), 1);
         let rule = &rules[0];
 
-        let ExprAst::Binary { op, left, right } = &rule.emit.projection[0].expr else {
+        let ExprKindAst::Binary { op, left, right } = &rule.emit.projection[0].expr.kind else {
             panic!("expected binary expression");
         };
         assert_eq!(*op, BinaryOp::Add);
-        assert!(matches!(**right, ExprAst::Literal(LiteralAst::Int(10))));
+        assert!(matches!(right.kind, ExprKindAst::Literal(LiteralAst::Int(10))));
         assert!(matches!(
-            **left,
-            ExprAst::VariableField {
+            left.kind,
+            ExprKindAst::VariableField {
                 ref name,
                 ref path
             } if name == "p"
-                && path == &vec![
-                    FieldSegment::Name("values".to_string()),
-                    FieldSegment::Index(0)
-                ]
+                && path.len() == 2
+                && matches!(path[0].kind, FieldSegmentKindAst::Name(ref value) if value == "values")
+                && matches!(path[1].kind, FieldSegmentKindAst::Index(0))
         ));
     }
 

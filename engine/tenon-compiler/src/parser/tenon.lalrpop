@@ -30,8 +30,9 @@ extern {
 }
 
 use crate::parser::ast::{
-    binary_expr, fold_binary_expr, BinaryOp, DecodeAst, EmitAst, ExprAst, FieldSegment,
-    LiteralAst, PayloadFormatAst, ProjectionItemAst, RuleAst, SourceAst, UnaryOp,
+    binary_expr, fold_binary_expr, unary_expr, BinaryOp, DecodeAst, EmitAst, ExprAst,
+    ExprKindAst, FieldSegment, FieldSegmentKindAst, LiteralAst, PayloadFormatAst,
+    ProjectionItemAst, RuleAst, SourceAst, SourceKindAst, Span, UnaryOp,
 };
 use crate::parser::literal::{
     parse_float_literal, parse_index_literal, parse_int_literal, unescape_string,
@@ -49,26 +50,31 @@ pub Rules: Vec<RuleAst> = {
 };
 
 pub Rule: RuleAst = {
-    <source:OnClause> <decode:DecodeClause> <guard:GuardClause?> <emit:EmitClause> => {
+    <start:@L> <source:OnClause> <decode:DecodeClause> <guard:GuardClause?> <emit:EmitClause> <end:@R> => {
         RuleAst {
             source,
             decode,
             guard,
             emit,
+            span: Span::new(start, end),
         }
     },
 };
 
 OnClause: SourceAst = {
-    "on" "topic" <topic_filter:StringLiteral> => SourceAst::Topic {
-        filter: topic_filter,
+    <start:@L> "on" "topic" <topic_filter:StringLiteral> <end:@R> => SourceAst {
+        kind: SourceKindAst::Topic {
+            filter: topic_filter,
+        },
+        span: Span::new(start, end),
     },
 };
 
 DecodeClause: DecodeAst = {
-    "decode" "payload" "as" <format:PayloadFormat> "into" <alias:Ident> => DecodeAst {
+    <start:@L> "decode" "payload" "as" <format:PayloadFormat> "into" <alias:Ident> <end:@R> => DecodeAst {
         format,
         alias,
+        span: Span::new(start, end),
     },
 };
 
@@ -81,9 +87,10 @@ GuardClause: ExprAst = {
 };
 
 EmitClause: EmitAst = {
-    "emit" "to" <destinations:DestinationList> <projection:ProjectionObject> => EmitAst {
+    <start:@L> "emit" "to" <destinations:DestinationList> <projection:ProjectionObject> <end:@R> => EmitAst {
         destinations,
         projection,
+        span: Span::new(start, end),
     },
 };
 
@@ -102,7 +109,11 @@ ProjectionItems: Vec<ProjectionItemAst> = {
 };
 
 ProjectionItem: ProjectionItemAst = {
-    <name:StringLiteral> ":" <expr:Expr> => ProjectionItemAst { name, expr },
+    <start:@L> <name:StringLiteral> ":" <expr:Expr> <end:@R> => ProjectionItemAst {
+        name,
+        expr,
+        span: Span::new(start, end),
+    },
 };
 
 Expr: ExprAst = {
@@ -171,14 +182,8 @@ MulDivRemTail: (BinaryOp, ExprAst) = {
 };
 
 Unary: ExprAst = {
-    "!" <expr:Unary> => ExprAst::Unary {
-        op: UnaryOp::Not,
-        expr: Box::new(expr),
-    },
-    "-" <expr:Unary> => ExprAst::Unary {
-        op: UnaryOp::Neg,
-        expr: Box::new(expr),
-    },
+    <start:@L> "!" <expr:Unary> => unary_expr(UnaryOp::Not, expr, start),
+    <start:@L> "-" <expr:Unary> => unary_expr(UnaryOp::Neg, expr, start),
     Primary,
 };
 
@@ -188,41 +193,80 @@ Primary: ExprAst = {
     PropertyRef,
     MetadataRef,
     NamedRefOrCall,
-    "(" <Expr> ")",
+    <start:@L> "(" <expr:Expr> ")" <end:@R> => expr.with_span(Span::new(start, end)),
 };
 
 Literal: ExprAst = {
-    <value:StringLiteral> => ExprAst::Literal(LiteralAst::String(value)),
-    <value:FloatLiteral> => ExprAst::Literal(LiteralAst::Float(value)),
-    <value:IntLiteral> => ExprAst::Literal(LiteralAst::Int(value)),
-    "true" => ExprAst::Literal(LiteralAst::Bool(true)),
-    "false" => ExprAst::Literal(LiteralAst::Bool(false)),
-    "null" => ExprAst::Literal(LiteralAst::Null),
+    <start:@L> <value:StringLiteral> <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::String(value)),
+        Span::new(start, end),
+    ),
+    <start:@L> <value:FloatLiteral> <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::Float(value)),
+        Span::new(start, end),
+    ),
+    <start:@L> <value:IntLiteral> <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::Int(value)),
+        Span::new(start, end),
+    ),
+    <start:@L> "true" <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::Bool(true)),
+        Span::new(start, end),
+    ),
+    <start:@L> "false" <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::Bool(false)),
+        Span::new(start, end),
+    ),
+    <start:@L> "null" <end:@R> => ExprAst::new(
+        ExprKindAst::Literal(LiteralAst::Null),
+        Span::new(start, end),
+    ),
 };
 
 TopicRef: ExprAst = {
-    "topic" "[" <level:IndexLiteral> "]" => ExprAst::TopicLevel(level),
+    <start:@L> "topic" "[" <level:IndexLiteral> "]" <end:@R> => ExprAst::new(
+        ExprKindAst::TopicLevel(level),
+        Span::new(start, end),
+    ),
 };
 
 PropertyRef: ExprAst = {
-    "properties" "[" <key:StringLiteral> "]" => ExprAst::Property(key),
+    <start:@L> "properties" "[" <key:StringLiteral> "]" <end:@R> => ExprAst::new(
+        ExprKindAst::Property(key),
+        Span::new(start, end),
+    ),
 };
 
 MetadataRef: ExprAst = {
-    "metadata" "." <key:Ident> => ExprAst::Metadata(key),
-    "metadata" "[" <key:StringLiteral> "]" => ExprAst::Metadata(key),
+    <start:@L> "metadata" "." <key:Ident> <end:@R> => ExprAst::new(
+        ExprKindAst::Metadata(key),
+        Span::new(start, end),
+    ),
+    <start:@L> "metadata" "[" <key:StringLiteral> "]" <end:@R> => ExprAst::new(
+        ExprKindAst::Metadata(key),
+        Span::new(start, end),
+    ),
 };
 
 NamedRefOrCall: ExprAst = {
-    <name:Ident> "(" <args:CallArgs?> ")" => ExprAst::Call {
-        name,
-        args: args.unwrap_or_default(),
-    },
-    <name:Ident> <path:FieldPath> => ExprAst::VariableField {
-        name,
-        path,
-    },
-    <name:Ident> => ExprAst::VariableRoot(name),
+    <start:@L> <name:Ident> "(" <args:CallArgs?> ")" <end:@R> => ExprAst::new(
+        ExprKindAst::Call {
+            name,
+            args: args.unwrap_or_default(),
+        },
+        Span::new(start, end),
+    ),
+    <start:@L> <name:Ident> <path:FieldPath> <end:@R> => ExprAst::new(
+        ExprKindAst::VariableField {
+            name,
+            path,
+        },
+        Span::new(start, end),
+    ),
+    <start:@L> <name:Ident> <end:@R> => ExprAst::new(
+        ExprKindAst::VariableRoot(name),
+        Span::new(start, end),
+    ),
 };
 
 CallArgs: Vec<ExprAst> = {
@@ -240,9 +284,18 @@ FieldPath: Vec<FieldSegment> = {
 };
 
 FieldSegment: FieldSegment = {
-    "." <name:Ident> => FieldSegment::Name(name),
-    "[" <name:StringLiteral> "]" => FieldSegment::Name(name),
-    "[" <index:IndexLiteral> "]" => FieldSegment::Index(index),
+    <start:@L> "." <name:Ident> <end:@R> => FieldSegment::new(
+        FieldSegmentKindAst::Name(name),
+        Span::new(start, end),
+    ),
+    <start:@L> "[" <name:StringLiteral> "]" <end:@R> => FieldSegment::new(
+        FieldSegmentKindAst::Name(name),
+        Span::new(start, end),
+    ),
+    <start:@L> "[" <index:IndexLiteral> "]" <end:@R> => FieldSegment::new(
+        FieldSegmentKindAst::Index(index),
+        Span::new(start, end),
+    ),
 };
 
 DestinationList: Vec<String> = {

@@ -26,7 +26,7 @@
 grammar;
 
 extern {
-    type Error = String;
+    type Error = crate::parser::ParseError;
 }
 
 use crate::parser::ast::{
@@ -71,7 +71,7 @@ OnClause: SourceAst = {
 };
 
 DecodeClause: DecodeAst = {
-    <start:@L> "decode" "payload" "as" <format:PayloadFormat> "into" <alias:Ident> <end:@R> => DecodeAst {
+    <start:@L> "decode" "payload" "as" <format:PayloadFormat> "into" <alias:DecodeAlias> <end:@R> => DecodeAst {
         format,
         alias,
         span: Span::new(start, end),
@@ -339,26 +339,50 @@ ReservedDestinationName: String = {
 // on, topic, decode, payload, as, json, into, guard, emit, to,
 // true, false, null, properties, metadata, raw_payload.
 Ident: String = {
-    <raw:Word> =>? Ok(validate_ident(raw.as_str())?),
+    <start:@L> <raw:Word> <end:@R> =>? Ok(validate_ident(raw.as_str(), Span::new(start, end))?),
 };
 
 Word: String = {
     r"[A-Za-z_][A-Za-z0-9_]*" => <>.to_string(),
 };
 
+DecodeAlias: String = {
+    Ident,
+    <start:@L> <raw:ReservedKeyword> <end:@R> =>? Ok(validate_ident(raw.as_str(), Span::new(start, end))?),
+};
+
+ReservedKeyword: String = {
+    "on" => "on".to_string(),
+    "topic" => "topic".to_string(),
+    "decode" => "decode".to_string(),
+    "payload" => "payload".to_string(),
+    "as" => "as".to_string(),
+    "json" => "json".to_string(),
+    "into" => "into".to_string(),
+    "guard" => "guard".to_string(),
+    "emit" => "emit".to_string(),
+    "to" => "to".to_string(),
+    "true" => "true".to_string(),
+    "false" => "false".to_string(),
+    "null" => "null".to_string(),
+    "properties" => "properties".to_string(),
+    "metadata" => "metadata".to_string(),
+    "raw_payload" => "raw_payload".to_string(),
+};
+
 StringLiteral: String = {
-    <raw:r#""([^"\\]|\\.)*""#> =>? Ok(unescape_string(raw)?),
+    <start:@L> <raw:r#""([^"\\]|\\.)*""#> <end:@R> =>? Ok(unescape_string(raw, Span::new(start, end))?),
 };
 
 FloatLiteral: f64 = {
-    <raw:r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?"> =>? Ok(parse_float_literal(raw)?),
-    <raw:r"[0-9]+[eE][+-]?[0-9]+"> =>? Ok(parse_float_literal(raw)?),
+    <start:@L> <raw:r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?"> <end:@R> =>? Ok(parse_float_literal(raw, Span::new(start, end))?),
+    <start:@L> <raw:r"[0-9]+[eE][+-]?[0-9]+"> <end:@R> =>? Ok(parse_float_literal(raw, Span::new(start, end))?),
 };
 
 IntLiteral: i64 = {
-    <raw:r"[0-9]+"> =>? Ok(parse_int_literal(raw)?),
+    <start:@L> <raw:r"[0-9]+"> <end:@R> =>? Ok(parse_int_literal(raw, Span::new(start, end))?),
 };
 
 IndexLiteral: usize = {
-    <raw:r"[0-9]+"> =>? Ok(parse_index_literal(raw)?),
+    <start:@L> <raw:r"[0-9]+"> <end:@R> =>? Ok(parse_index_literal(raw, Span::new(start, end))?),
 };

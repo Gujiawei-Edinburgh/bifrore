@@ -1,17 +1,54 @@
 pub mod ast;
+mod error;
 
 mod literal;
 mod token;
 
 use ast::RuleAst;
+pub use error::{ParseError, ParseErrorKind};
 
 lalrpop_util::lalrpop_mod!(tenon, "/parser/tenon.rs");
 
-pub type ParseError<'input> =
-    lalrpop_util::ParseError<usize, lalrpop_util::lexer::Token<'input>, String>;
+type RawParseError<'input> =
+    lalrpop_util::ParseError<usize, lalrpop_util::lexer::Token<'input>, ParseError>;
 
-pub fn parse_rules(input: &str) -> Result<Vec<RuleAst>, ParseError<'_>> {
-    tenon::RulesParser::new().parse(input)
+pub fn parse_rules(input: &str) -> Result<Vec<RuleAst>, ParseError> {
+    tenon::RulesParser::new()
+        .parse(input)
+        .map_err(map_lalrpop_error)
+}
+
+fn map_lalrpop_error(err: RawParseError<'_>) -> ParseError {
+    match err {
+        lalrpop_util::ParseError::InvalidToken { location } => ParseError::new(
+            ParseErrorKind::InvalidToken,
+            Some(ast::Span::new(location, location.saturating_add(1))),
+            "invalid token",
+        ),
+        lalrpop_util::ParseError::UnrecognizedEof { location, expected } => ParseError::new(
+            ParseErrorKind::UnexpectedEof,
+            Some(ast::Span::new(location, location)),
+            expected_message("unexpected end of input", expected),
+        ),
+        lalrpop_util::ParseError::UnrecognizedToken { token, expected } => ParseError::new(
+            ParseErrorKind::UnexpectedToken,
+            Some(ast::Span::new(token.0, token.2)),
+            expected_message("unexpected token", expected),
+        ),
+        lalrpop_util::ParseError::ExtraToken { token } => ParseError::new(
+            ParseErrorKind::ExtraToken,
+            Some(ast::Span::new(token.0, token.2)),
+            "extra token",
+        ),
+        lalrpop_util::ParseError::User { error } => error,
+    }
+}
+
+fn expected_message(prefix: &str, expected: Vec<String>) -> String {
+    if expected.is_empty() {
+        return prefix.to_string();
+    }
+    format!("{prefix}; expected {}", expected.join(", "))
 }
 
 #[cfg(test)]
@@ -117,39 +154,38 @@ mod tests {
 
     #[test]
     fn rejects_empty_projection() {
-        assert!(
-            parse_rules(
-                r#"
+        let err = parse_rules(
+            r#"
                 on topic "data"
                 decode payload as json into p
                 emit to local_log {}
                 "#,
-            )
-            .is_err()
-        );
+        )
+        .expect_err("empty projection should fail");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
     }
 
     #[test]
     fn rejects_unquoted_projection_key() {
-        assert!(
-            parse_rules(
-                r#"
+        let err = parse_rules(
+            r#"
                 on topic "data"
                 decode payload as json into p
                 emit to local_log {
                   payload: p
                 }
                 "#,
-            )
-            .is_err()
-        );
+        )
+        .expect_err("unquoted projection key should fail");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
     }
 
     #[test]
     fn rejects_chained_comparison() {
-        assert!(
-            parse_rules(
-                r#"
+        let err = parse_rules(
+            r#"
                 on topic "data"
                 decode payload as json into p
                 guard p.temp > 10 > 5
@@ -157,40 +193,52 @@ mod tests {
                   "payload": p
                 }
                 "#,
-            )
-            .is_err()
-        );
+        )
+        .expect_err("chained comparison should fail");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
     }
 
     #[test]
     fn rejects_reserved_decode_alias() {
-        assert!(
-            parse_rules(
-                r#"
+        let source = r#"
                 on topic "data"
                 decode payload as json into topic
                 emit to local_log {
                   "payload": p
                 }
-                "#,
-            )
-            .is_err()
-        );
+                "#;
+        let err = parse_rules(source).expect_err("reserved alias should fail");
+        assert_eq!(err.kind, ParseErrorKind::ReservedKeyword);
+        let span = err.span.expect("error span");
+        assert_eq!(&source[span.start..span.end], "topic");
     }
 
     #[test]
     fn rejects_invalid_string_escape() {
-        assert!(
-            parse_rules(
-                r#"
+        let source = r#"
                 on topic "data"
                 decode payload as json into p
                 emit to local_log {
                   "payload": "\q"
                 }
-                "#,
-            )
-            .is_err()
-        );
+                "#;
+        let err = parse_rules(source).expect_err("invalid string escape should fail");
+        assert_eq!(err.kind, ParseErrorKind::InvalidLiteral);
+        let span = err.span.expect("error span");
+        assert_eq!(&source[span.start..span.end], r#""\q""#);
+    }
+
+    #[test]
+    fn rejects_invalid_token() {
+        let source = r#"
+            on topic "data"
+            decode payload as json into p
+            emit to local_log {
+                "payload": @
+            }
+            "#;
+        let err = parse_rules(source).expect_err("invalid token");
+        assert_eq!(err.kind, ParseErrorKind::InvalidToken);
     }
 }

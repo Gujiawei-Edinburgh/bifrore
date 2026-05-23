@@ -31,8 +31,8 @@ extern {
 
 use crate::parser::ast::{
     binary_expr, fold_binary_expr, unary_expr, BinaryOp, DecodeAst, EmitAst, ExprAst,
-    ExprKindAst, FieldSegment, FieldSegmentKindAst, LiteralAst, PayloadFormatAst,
-    ProjectionItemAst, RuleAst, SourceAst, SourceKindAst, Span, UnaryOp,
+    ExprKindAst, FieldSegment, FieldSegmentKindAst, LiteralAst, MetadataFieldAst,
+    PayloadFormatAst, ProjectionItemAst, RuleAst, SourceAst, SourceKindAst, Span, UnaryOp,
 };
 use crate::parser::literal::{
     parse_float_literal, parse_index_literal, parse_int_literal, unescape_string,
@@ -238,14 +238,17 @@ PropertyRef: ExprAst = {
 };
 
 MetadataRef: ExprAst = {
-    <start:@L> "metadata" "." <key:Ident> <end:@R> => ExprAst::new(
-        ExprKindAst::Metadata(key),
+    <start:@L> "metadata" "." <field:MetadataField> <end:@R> => ExprAst::new(
+        ExprKindAst::Metadata(field),
         Span::new(start, end),
     ),
-    <start:@L> "metadata" "[" <key:StringLiteral> "]" <end:@R> => ExprAst::new(
-        ExprKindAst::Metadata(key),
-        Span::new(start, end),
-    ),
+};
+
+MetadataField: MetadataFieldAst = {
+    "dup" => MetadataFieldAst::Dup,
+    "qos" => MetadataFieldAst::Qos,
+    "retain" => MetadataFieldAst::Retain,
+    "pkid" => MetadataFieldAst::Pkid,
 };
 
 NamedRef: ExprAst = {

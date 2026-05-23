@@ -55,8 +55,8 @@ fn expected_message(prefix: &str, expected: Vec<String>) -> String {
 mod tests {
     use super::*;
     use crate::parser::ast::{
-        BinaryOp, ExprKindAst, FieldSegmentKindAst, LiteralAst, PayloadFormatAst,
-        SourceKindAst,
+        BinaryOp, ExprKindAst, FieldSegmentKindAst, LiteralAst, MetadataFieldAst,
+        PayloadFormatAst, SourceKindAst,
     };
 
     #[test]
@@ -153,6 +153,41 @@ mod tests {
     }
 
     #[test]
+    fn parses_mqtt_publish_metadata_fields() {
+        let rules = parse_rules(
+            r#"
+            on topic "data"
+            decode payload as json into p
+            emit to local_log {
+              "dup": metadata.dup,
+              "qos": metadata.qos,
+              "retain": metadata.retain,
+              "pkid": metadata.pkid
+            }
+            "#,
+        )
+        .expect("parse rules");
+        let projection = &rules[0].emit.projection;
+
+        assert!(matches!(
+            projection[0].expr.kind,
+            ExprKindAst::Metadata(MetadataFieldAst::Dup)
+        ));
+        assert!(matches!(
+            projection[1].expr.kind,
+            ExprKindAst::Metadata(MetadataFieldAst::Qos)
+        ));
+        assert!(matches!(
+            projection[2].expr.kind,
+            ExprKindAst::Metadata(MetadataFieldAst::Retain)
+        ));
+        assert!(matches!(
+            projection[3].expr.kind,
+            ExprKindAst::Metadata(MetadataFieldAst::Pkid)
+        ));
+    }
+
+    #[test]
     fn rejects_empty_projection() {
         let err = parse_rules(
             r#"
@@ -240,6 +275,34 @@ mod tests {
             "#;
         let err = parse_rules(source).expect_err("invalid token");
         assert_eq!(err.kind, ParseErrorKind::InvalidToken);
+    }
+
+    #[test]
+    fn rejects_unknown_metadata_field() {
+        let source = r#"
+            on topic "data"
+            decode payload as json into p
+            emit to local_log {
+                "payload": metadata.username
+            }
+            "#;
+        let err = parse_rules(source).expect_err("unknown metadata field");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
+    }
+
+    #[test]
+    fn rejects_metadata_bracket_access() {
+        let source = r#"
+            on topic "data"
+            decode payload as json into p
+            emit to local_log {
+                "payload": metadata["qos"]
+            }
+            "#;
+        let err = parse_rules(source).expect_err("metadata bracket access should fail");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
     }
 
     #[test]

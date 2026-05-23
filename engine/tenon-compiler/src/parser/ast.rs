@@ -76,7 +76,7 @@ pub enum ExprKindAst {
     Literal(LiteralAst),
     TopicLevel(usize),
     Property(String),
-    Metadata(String),
+    Metadata(MetadataFieldAst),
     VariableRoot(String),
     VariableField {
         name: String,
@@ -100,6 +100,14 @@ pub enum LiteralAst {
     Int(i64),
     Float(f64),
     String(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataFieldAst {
+    Dup,
+    Qos,
+    Retain,
+    Pkid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

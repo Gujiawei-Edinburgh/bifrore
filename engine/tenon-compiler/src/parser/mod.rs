@@ -69,7 +69,8 @@ mod tests {
               "topic": topic[1],
               "payload": p,
               "first_value": p.values[0],
-              "score": p.temp + 10
+              "score": p.temp + 10,
+              "loc": p.temp.loc
             }
             "#;
         let rules = parse_rules(source).expect("parse rules");
@@ -85,9 +86,19 @@ mod tests {
         assert_eq!(rule.decode.format, PayloadFormatAst::Json);
         assert_eq!(rule.decode.alias, "p");
         assert_eq!(rule.emit.destinations, vec!["raw_kafka", "local-log"]);
-        assert_eq!(rule.emit.projection.len(), 4);
+        assert_eq!(rule.emit.projection.len(), 5);
         assert_eq!(rule.emit.projection[1].name, "payload");
         assert!(matches!(rule.emit.projection[1].expr.kind, ExprKindAst::VariableRoot(ref name) if name == "p"));
+        assert!(matches!(
+            rule.emit.projection[4].expr.kind,
+            ExprKindAst::VariableField {
+                ref name,
+                ref path
+            } if name == "p"
+                && path.len() == 2
+                && matches!(path[0].kind, FieldSegmentKindAst::Name(ref value) if value == "temp")
+                && matches!(path[1].kind, FieldSegmentKindAst::Name(ref value) if value == "loc")
+        ));
         assert_eq!(&source[rule.span.start..rule.span.start + 2], "on");
         assert_eq!(
             &source[rule.emit.projection[0].expr.span.start

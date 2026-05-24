@@ -13,6 +13,7 @@ pub(crate) struct SemanticError {
 pub(crate) enum SemanticErrorKind {
     UnknownVariable,
     DuplicateDestination,
+    TypeMismatch,
 }
 
 impl SemanticError {

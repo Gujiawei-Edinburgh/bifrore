@@ -47,7 +47,24 @@ pub(crate) struct CheckedProjectionItem {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CheckedExpr {
     pub(crate) kind: CheckedExprKind,
+    pub(crate) value_type: ValueType,
     pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueType {
+    Null,
+    Bool,
+    String,
+    Number(NumberKind),
+    Dynamic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NumberKind {
+    Int,
+    UInt,
+    Float,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,7 +93,11 @@ impl CheckedRuleSet {
 }
 
 impl CheckedExpr {
-    pub(crate) fn new(kind: CheckedExprKind, span: Span) -> Self {
-        Self { kind, span }
+    pub(crate) fn new(kind: CheckedExprKind, value_type: ValueType, span: Span) -> Self {
+        Self {
+            kind,
+            value_type,
+            span,
+        }
     }
 }

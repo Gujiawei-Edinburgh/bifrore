@@ -383,4 +383,18 @@ mod tests {
         assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
         assert!(err.span.is_some());
     }
+
+    #[test]
+    fn rejects_null_topic() {
+        let source = r#"
+            on topic
+            decode payload as json into p
+            emit to local_log {
+                "payload": lower(p.name)
+            }
+            "#;
+        let err = parse_rules(source).expect_err("topic is needed");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
+    }
 }

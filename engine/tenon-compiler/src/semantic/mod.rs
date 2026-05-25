@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::parser::ast::{
     BinaryOp, DecodeAst, EmitAst, ExprAst, ExprKindAst, LiteralAst, MetadataFieldAst,
-    ProjectionItemAst, RuleAst, SourceAst, Span, UnaryOp,
+    ProjectionItemAst, RuleAst, SourceAst, SourceKindAst, Span, UnaryOp,
 };
 
 use checked::{
@@ -34,7 +34,7 @@ fn analyze_rule(rule: RuleAst) -> Result<CheckedRule, SemanticError> {
         require_guard_type(expr)?;
     }
     Ok(CheckedRule {
-        source: analyze_source(rule.source),
+        source: analyze_source(rule.source)?,
         decode: analyze_decode(rule.decode),
         guard,
         emit: analyze_emit(rule.emit, &alias)?,
@@ -42,11 +42,14 @@ fn analyze_rule(rule: RuleAst) -> Result<CheckedRule, SemanticError> {
     })
 }
 
-fn analyze_source(source: SourceAst) -> CheckedSource {
-    CheckedSource {
+fn analyze_source(source: SourceAst) -> Result<CheckedSource, SemanticError> {
+    match &source.kind {
+        SourceKindAst::Topic { filter } => validate_topic_filter(filter, source.span)?,
+    }
+    Ok(CheckedSource {
         kind: source.kind,
         span: source.span,
-    }
+    })
 }
 
 fn analyze_decode(decode: DecodeAst) -> CheckedDecode {
@@ -295,6 +298,72 @@ fn reject_duplicate_destinations(emit: &EmitAst) -> Result<(), SemanticError> {
     Ok(())
 }
 
+fn validate_topic_filter(filter: &str, span: Span) -> Result<(), SemanticError> {
+    if filter.is_empty() {
+        return Err(invalid_topic_filter(span, "topic filter cannot be empty"));
+    }
+    if filter.len() > u16::MAX as usize {
+        return Err(invalid_topic_filter(
+            span,
+            "topic filter exceeds MQTT string length limit",
+        ));
+    }
+    if filter.contains('\0') {
+        return Err(invalid_topic_filter(
+            span,
+            "topic filter cannot contain null character",
+        ));
+    }
+    if filter.contains("$SYS") || filter.contains("$sys") {
+        return Err(invalid_topic_filter(
+            span,
+            "topic filter cannot use reserved $SYS namespace",
+        ));
+    }
+    if filter.contains("$share") {
+        return Err(invalid_topic_filter(
+            span,
+            "topic filter cannot use MQTT shared subscription namespace",
+        ));
+    }
+
+    for segment in filter.split('/') {
+        if segment.contains('#') && segment != "#" {
+            return Err(invalid_topic_filter(
+                span,
+                "multi-level wildcard # must occupy an entire topic level",
+            ));
+        }
+        if segment == "#" && !filter.ends_with("/#") && filter != "#" {
+            return Err(invalid_topic_filter(
+                span,
+                "multi-level wildcard # must be the final topic level",
+            ));
+        }
+        if segment.contains('+') && segment != "+" {
+            return Err(invalid_topic_filter(
+                span,
+                "single-level wildcard + must occupy an entire topic level",
+            ));
+        }
+    }
+
+    if let Some(index) = filter.find('#') {
+        if index + '#'.len_utf8() != filter.len() {
+            return Err(invalid_topic_filter(
+                span,
+                "multi-level wildcard # must be the final topic level",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_topic_filter(span: Span, message: impl Into<String>) -> SemanticError {
+    SemanticError::new(SemanticErrorKind::InvalidTopicFilter, span, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +430,97 @@ mod tests {
         let err = analyze_rules(rules).expect_err("duplicate destination");
 
         assert_eq!(err.kind, SemanticErrorKind::DuplicateDestination);
+    }
+
+    #[test]
+    fn accepts_valid_mqtt_topic_filters() {
+        let rules = parse_rules(
+            r#"
+            on topic "sensor/+/data"
+            decode payload as json into p
+            emit to local_log {
+              "payload": p
+            };
+
+            on topic "tenant/#"
+            decode payload as json into p
+            emit to local_log {
+              "payload": p
+            };
+
+            on topic "+"
+            decode payload as json into p
+            emit to local_log {
+              "payload": p
+            }
+            "#,
+        )
+        .expect("parse");
+
+        let checked = analyze_rules(rules).expect("semantic");
+        assert_eq!(checked.rules.len(), 3);
+    }
+
+    #[test]
+    fn rejects_invalid_mqtt_topic_wildcards() {
+        for topic_filter in ["sensor+", "sensor/+data", "sensor/#/data", "sensor/data#"] {
+            let rules = parse_rules(&format!(
+                r#"
+                on topic "{topic_filter}"
+                decode payload as json into p
+                emit to local_log {{
+                  "payload": p
+                }}
+                "#
+            ))
+            .expect("parse");
+
+            let err = analyze_rules(rules).expect_err("invalid topic filter");
+            assert_eq!(err.kind, SemanticErrorKind::InvalidTopicFilter);
+        }
+    }
+
+    #[test]
+    fn rejects_reserved_mqtt_topic_namespaces() {
+        for topic_filter in [
+            "$SYS/broker",
+            "$sys/broker",
+            "tenant/$SYS/broker",
+            "tenant/$sys/broker",
+            "$share/group/data",
+            "tenant/$share/group/data",
+        ] {
+            let rules = parse_rules(&format!(
+                r#"
+                on topic "{topic_filter}"
+                decode payload as json into p
+                emit to local_log {{
+                  "payload": p
+                }}
+                "#
+            ))
+            .expect("parse");
+
+            let err = analyze_rules(rules).expect_err("reserved topic namespace");
+            assert_eq!(err.kind, SemanticErrorKind::InvalidTopicFilter);
+        }
+    }
+
+    #[test]
+    fn rejects_empty_mqtt_topic_filter() {
+        let rules = parse_rules(
+            r#"
+            on topic ""
+            decode payload as json into p
+            emit to local_log {
+              "payload": p
+            }
+            "#,
+        )
+        .expect("parse");
+
+        let err = analyze_rules(rules).expect_err("empty topic filter");
+        assert_eq!(err.kind, SemanticErrorKind::InvalidTopicFilter);
     }
 
     #[test]

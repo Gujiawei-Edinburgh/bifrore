@@ -37,7 +37,7 @@ use crate::parser::ast::{
 use crate::parser::literal::{
     parse_float_literal, parse_index_literal, parse_int_literal, unescape_string,
 };
-use crate::parser::token::validate_ident;
+use crate::parser::token::reject_reserved_keyword;
 
 pub Rules: Vec<RuleAst> = {
     <head:Rule> ";" <tail:Rules> => {
@@ -296,36 +296,20 @@ DestinationList: Vec<String> = {
 
 // Sink destination names are matched against configured sink names. They are
 // intentionally not checked as identifiers, so `emit to json`, `emit to topic`,
-// and `emit to raw-kafka` are valid destination references.
+// `emit to raw-kafka`, and `emit to "raw.kafka"` are valid destination
+// references.
 DestinationName: String = {
     Word,
-    r"[A-Za-z_][A-Za-z0-9_]*-[A-Za-z0-9_-]*" => <>.to_string(),
-    ReservedDestinationName,
-};
-
-ReservedDestinationName: String = {
-    "on" => "on".to_string(),
-    "topic" => "topic".to_string(),
-    "decode" => "decode".to_string(),
-    "payload" => "payload".to_string(),
-    "as" => "as".to_string(),
-    "json" => "json".to_string(),
-    "into" => "into".to_string(),
-    "guard" => "guard".to_string(),
-    "emit" => "emit".to_string(),
-    "to" => "to".to_string(),
-    "true" => "true".to_string(),
-    "false" => "false".to_string(),
-    "null" => "null".to_string(),
-    "properties" => "properties".to_string(),
-    "metadata" => "metadata".to_string(),
+    r"[A-Za-z_][A-Za-z0-9_]*(-[A-Za-z0-9_]+)+" => <>.to_string(),
+    StringLiteral,
+    Keyword,
 };
 
 // Reserved keywords:
 // on, topic, decode, payload, as, json, into, guard, emit, to,
-// true, false, null, properties, metadata, raw_payload.
+// true, false, null, properties, metadata.
 Ident: String = {
-    <start:@L> <raw:Word> <end:@R> =>? Ok(validate_ident(raw.as_str(), Span::new(start, end))?),
+    Word,
 };
 
 Word: String = {
@@ -334,10 +318,10 @@ Word: String = {
 
 DecodeAlias: String = {
     Ident,
-    <start:@L> <raw:ReservedKeyword> <end:@R> =>? Ok(validate_ident(raw.as_str(), Span::new(start, end))?),
+    <start:@L> <raw:Keyword> <end:@R> =>? Ok(reject_reserved_keyword(raw.as_str(), Span::new(start, end))?),
 };
 
-ReservedKeyword: String = {
+Keyword: String = {
     "on" => "on".to_string(),
     "topic" => "topic".to_string(),
     "decode" => "decode".to_string(),
@@ -353,7 +337,6 @@ ReservedKeyword: String = {
     "null" => "null".to_string(),
     "properties" => "properties".to_string(),
     "metadata" => "metadata".to_string(),
-    "raw_payload" => "raw_payload".to_string(),
 };
 
 StringLiteral: String = {

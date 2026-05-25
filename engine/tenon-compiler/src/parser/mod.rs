@@ -65,7 +65,7 @@ mod tests {
             on topic "sensor/+/data"
             decode payload as json into p
             guard p.temp > 30 && topic[1] == "room1"
-            emit to raw_kafka, local-log {
+            emit to raw_kafka, local-log, "raw.kafka", "dev/kafka" {
               "topic": topic[1],
               "payload": p,
               "first_value": p.values[0],
@@ -85,7 +85,10 @@ mod tests {
         );
         assert_eq!(rule.decode.format, PayloadFormatAst::Json);
         assert_eq!(rule.decode.alias, "p");
-        assert_eq!(rule.emit.destinations, vec!["raw_kafka", "local-log"]);
+        assert_eq!(
+            rule.emit.destinations,
+            vec!["raw_kafka", "local-log", "raw.kafka", "dev/kafka"]
+        );
         assert_eq!(rule.emit.projection.len(), 5);
         assert_eq!(rule.emit.projection[1].name, "payload");
         assert!(matches!(rule.emit.projection[1].expr.kind, ExprKindAst::VariableRoot(ref name) if name == "p"));
@@ -258,6 +261,57 @@ mod tests {
         assert_eq!(err.kind, ParseErrorKind::ReservedKeyword);
         let span = err.span.expect("error span");
         assert_eq!(&source[span.start..span.end], "topic");
+    }
+
+    #[test]
+    fn accepts_raw_payload_as_decode_alias() {
+        let source = r#"
+                on topic "data"
+                decode payload as json into raw_payload
+                emit to local_log {
+                  "payload": raw_payload
+                }
+                "#;
+        let rules = parse_rules(source).expect("raw_payload is not reserved");
+        assert_eq!(rules[0].decode.alias, "raw_payload");
+        assert!(matches!(
+            rules[0].emit.projection[0].expr.kind,
+            ExprKindAst::VariableRoot(ref name) if name == "raw_payload"
+        ));
+    }
+
+    #[test]
+    fn rejects_destination_with_trailing_hyphen() {
+        let err = parse_rules(
+            r#"
+                on topic "data"
+                decode payload as json into p
+                emit to raw- {
+                  "payload": p
+                }
+                "#,
+        )
+        .expect_err("trailing hyphen destination should fail");
+        assert_eq!(err.kind, ParseErrorKind::UnexpectedToken);
+        assert!(err.span.is_some());
+    }
+
+    #[test]
+    fn accepts_quoted_destination_with_punctuation() {
+        let rules = parse_rules(
+            r#"
+                on topic "data"
+                decode payload as json into p
+                emit to "raw-kafka-", "tenant.kafka.v1" {
+                  "payload": p
+                }
+                "#,
+        )
+        .expect("quoted destination names should parse");
+        assert_eq!(
+            rules[0].emit.destinations,
+            vec!["raw-kafka-", "tenant.kafka.v1"]
+        );
     }
 
     #[test]

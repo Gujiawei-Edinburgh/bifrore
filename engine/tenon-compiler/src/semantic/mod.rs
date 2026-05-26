@@ -314,13 +314,14 @@ fn validate_topic_filter(filter: &str, span: Span) -> Result<(), SemanticError> 
             "topic filter cannot contain null character",
         ));
     }
-    if filter.contains("$SYS") || filter.contains("$sys") {
+    let lower_filter = filter.to_ascii_lowercase();
+    if lower_filter.contains("$sys") {
         return Err(invalid_topic_filter(
             span,
             "topic filter cannot use reserved $SYS namespace",
         ));
     }
-    if filter.contains("$share") {
+    if lower_filter.contains("$share") {
         return Err(invalid_topic_filter(
             span,
             "topic filter cannot use MQTT shared subscription namespace",
@@ -485,10 +486,14 @@ mod tests {
         for topic_filter in [
             "$SYS/broker",
             "$sys/broker",
+            "$sYs/broker",
             "tenant/$SYS/broker",
             "tenant/$sys/broker",
+            "tenant/$sYs/broker",
             "$share/group/data",
+            "$sHaRE/group/data",
             "tenant/$share/group/data",
+            "tenant/$sHaRE/group/data",
         ] {
             let rules = parse_rules(&format!(
                 r#"

@@ -1,7 +1,30 @@
 apiVersion: tenon.apache.org/v1alpha1
+kind: MqttSource
+metadata:
+  name: sensor-mqtt
+  version: v1
+spec:
+  broker:
+    host: 127.0.0.1
+    port: 1883
+  auth:
+    script:
+      inline: |
+        function credentials(ctx)
+          return {
+            username = "dev",
+            password = "dev"
+          }
+        end
+  subscriptions:
+    - topic: sensor/+/data
+      decode: json
+---
+apiVersion: tenon.apache.org/v1alpha1
 kind: Script
 metadata:
   name: sensor-processor
+  version: v1
 spec:
   runtime: lua
   entry: main.lua
@@ -36,35 +59,43 @@ spec:
       end
 ---
 apiVersion: tenon.apache.org/v1alpha1
+kind: IpcEgress
+metadata:
+  name: sensor-batches
+  version: v1
+spec:
+  channels:
+    - sensor-batches
+---
+apiVersion: tenon.apache.org/v1alpha1
+kind: Process
+metadata:
+  name: sensor-process
+  version: v1
+spec:
+  runtime: script
+  scriptRef:
+    name: sensor-processor
+    version: v1
+    entry: main.lua
+---
+apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline
 metadata:
   name: sensor-ingest
+  version: v1
 spec:
   execution:
     mode: intra-proc
-  source:
-    mqtt:
-      broker:
-        host: 127.0.0.1
-        port: 1883
-      auth:
-        script:
-          inline: |
-            function credentials(ctx)
-              return {
-                username = "dev",
-                password = "dev"
-              }
-            end
-      subscriptions:
-        - topic: sensor/+/data
-          decode: json
-  process:
-    script:
-      scriptRef:
-        name: sensor-processor
-        entry: main.lua
-  egress:
-    ipc:
-      channels:
-        - sensor-batches
+  sourceRef:
+    kind: MqttSource
+    name: sensor-mqtt
+    version: v1
+  processRef:
+    kind: Process
+    name: sensor-process
+    version: v1
+  egressRef:
+    kind: IpcEgress
+    name: sensor-batches
+    version: v1

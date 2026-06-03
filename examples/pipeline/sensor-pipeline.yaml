@@ -1,0 +1,70 @@
+apiVersion: tenon.apache.org/v1alpha1
+kind: Script
+metadata:
+  name: sensor-processor
+spec:
+  runtime: lua
+  entry: main.lua
+  files:
+    main.lua: |
+      function on_message(ctx, msg)
+        local payload = msg.payload
+
+        if payload.temp == nil or payload.temp <= 30 then
+          return
+        end
+
+        local batch = ctx.state:get("batch") or {}
+        batch[#batch + 1] = {
+          topic = msg.topic.raw,
+          device = msg.topic[2],
+          temp = payload.temp,
+          hum = payload.hum,
+          qos = msg.metadata.qos
+        }
+
+        if #batch < 100 then
+          ctx.state:set("batch", batch)
+          return
+        end
+
+        ctx.emit("sensor-batches", {
+          count = #batch,
+          items = batch
+        })
+        ctx.state:delete("batch")
+      end
+---
+apiVersion: tenon.apache.org/v1alpha1
+kind: Pipeline
+metadata:
+  name: sensor-ingest
+spec:
+  execution:
+    mode: intra-proc
+  source:
+    mqtt:
+      broker:
+        host: 127.0.0.1
+        port: 1883
+      auth:
+        script:
+          inline: |
+            function credentials(ctx)
+              return {
+                username = "dev",
+                password = "dev"
+              }
+            end
+      subscriptions:
+        - topic: sensor/+/data
+          decode: json
+  process:
+    script:
+      scriptRef:
+        name: sensor-processor
+        entry: main.lua
+  egress:
+    ipc:
+      channels:
+        - sensor-batches

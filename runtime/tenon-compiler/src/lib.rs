@@ -1,4 +1,6 @@
-pub mod parser;
-pub(crate) mod ir;
-pub(crate) mod optimizer;
-pub(crate) mod semantic;
+pub mod lua;
+
+mod error;
+
+pub use error::{CompileError, CompileErrorKind};
+pub use lua::{Compiler, LuaFile, LuaModule, ValidatedLuaModule};

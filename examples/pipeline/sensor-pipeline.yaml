@@ -1,14 +1,15 @@
 apiVersion: tenon.apache.org/v1alpha1
 kind: MqttSource
 metadata:
-  name: sensor-mqtt
+  name: sensor-mqtt-edge
   version: v1
 spec:
   broker:
     host: 127.0.0.1
     port: 1883
   auth:
-    script:
+    module:
+      runtime: lua
       inline: |
         function credentials(ctx)
           return {
@@ -21,7 +22,30 @@ spec:
       decode: json
 ---
 apiVersion: tenon.apache.org/v1alpha1
-kind: Script
+kind: MqttSource
+metadata:
+  name: sensor-mqtt-cloud
+  version: v1
+spec:
+  broker:
+    host: 127.0.0.1
+    port: 1884
+  auth:
+    module:
+      runtime: lua
+      inline: |
+        function credentials(ctx)
+          return {
+            username = "dev",
+            password = "dev"
+          }
+        end
+  subscriptions:
+    - topic: factory/+/sensor/+/data
+      decode: json
+---
+apiVersion: tenon.apache.org/v1alpha1
+kind: Module
 metadata:
   name: sensor-processor
   version: v1
@@ -39,6 +63,7 @@ spec:
 
         local batch = ctx.state:get("batch") or {}
         batch[#batch + 1] = {
+          source = msg.source.name,
           topic = msg.topic.raw,
           device = msg.topic[2],
           temp = payload.temp,
@@ -73,8 +98,7 @@ metadata:
   name: sensor-process
   version: v1
 spec:
-  runtime: script
-  scriptRef:
+  moduleRef:
     name: sensor-processor
     version: v1
     entry: main.lua
@@ -87,10 +111,13 @@ metadata:
 spec:
   execution:
     mode: intra-proc
-  sourceRef:
-    kind: MqttSource
-    name: sensor-mqtt
-    version: v1
+  sourceRefs:
+    - kind: MqttSource
+      name: sensor-mqtt-edge
+      version: v1
+    - kind: MqttSource
+      name: sensor-mqtt-cloud
+      version: v1
   processRef:
     kind: Process
     name: sensor-process

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
-RUST_DIR="$ROOT_DIR/engine"
+RUST_DIR="$ROOT_DIR/runtime"
 TENON_VERSION="${TENON_VERSION:-0.1.0}"
 
 OS_NAME="$(uname -s)"

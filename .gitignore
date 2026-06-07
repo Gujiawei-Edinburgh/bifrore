@@ -1,5 +1,5 @@
 target/
-engine/target/
+runtime/target/
 build/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/

@@ -10,7 +10,7 @@ spec:
   auth:
     module:
       runtime: lua
-      inline: |
+      source: |
         function credentials(ctx)
           return {
             username = "dev",
@@ -33,7 +33,7 @@ spec:
   auth:
     module:
       runtime: lua
-      inline: |
+      source: |
         function credentials(ctx)
           return {
             username = "dev",
@@ -51,46 +51,43 @@ metadata:
   version: v1
 spec:
   runtime: lua
-  entry: main.lua
-  files:
-    main.lua: |
-      function on_message(ctx, msg)
-        local payload = msg.payload
+  source: |
+    function on_message(ctx, msg)
+      local payload = msg.payload
 
-        if payload.temp == nil or payload.temp <= 30 then
-          return
-        end
-
-        local batch = ctx.state:get("batch") or {}
-        batch[#batch + 1] = {
-          source = msg.source.name,
-          topic = msg.topic.raw,
-          device = msg.topic[2],
-          temp = payload.temp,
-          hum = payload.hum,
-          qos = msg.metadata.qos
-        }
-
-        if #batch < 100 then
-          ctx.state:set("batch", batch)
-          return
-        end
-
-        ctx.emit("sensor-batches", {
-          count = #batch,
-          items = batch
-        })
-        ctx.state:delete("batch")
+      if payload.temp == nil or payload.temp <= 30 then
+        return
       end
+
+      local batch = ctx.state:get("batch") or {}
+      batch[#batch + 1] = {
+        source = msg.source.name,
+        topic = msg.topic.raw,
+        device = msg.topic[2],
+        temp = payload.temp,
+        hum = payload.hum,
+        qos = msg.metadata.qos
+      }
+
+      if #batch < 100 then
+        ctx.state:set("batch", batch)
+        return
+      end
+
+      ctx.emit("sensor-batches", {
+        count = #batch,
+        items = batch
+      })
+      ctx.state:delete("batch")
+    end
 ---
 apiVersion: tenon.apache.org/v1alpha1
-kind: IpcEgress
+kind: Egress
 metadata:
   name: sensor-batches
   version: v1
 spec:
-  channels:
-    - sensor-batches
+  channel: sensor-batches
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Process
@@ -101,7 +98,6 @@ spec:
   moduleRef:
     name: sensor-processor
     version: v1
-    entry: main.lua
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline
@@ -123,6 +119,6 @@ spec:
     name: sensor-process
     version: v1
   egressRef:
-    kind: IpcEgress
+    kind: Egress
     name: sensor-batches
     version: v1

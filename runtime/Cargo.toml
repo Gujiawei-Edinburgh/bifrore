@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "tenon-core",
-  "tenon-compiler",
+  "tenon-loader",
   "tenon-coordinator",
   "tenon-oss",
   "tenon-test-mqtt",

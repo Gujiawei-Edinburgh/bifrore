@@ -2,23 +2,23 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentPlan {
-    pub(crate) id: ResourceId,
-    pub(crate) execution: ExecutionMode,
-    pub(crate) sources: Vec<MqttSourcePlan>,
-    pub(crate) process: ProcessPlan,
-    pub(crate) egress: EgressPlan,
+    pub id: ResourceId,
+    pub execution: ExecutionMode,
+    pub sources: Vec<MqttSourcePlan>,
+    pub process: ProcessPlan,
+    pub egress: EgressPlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResourceId {
-    pub(crate) kind: ResourceKind,
-    pub(crate) name: String,
-    pub(crate) version: String,
+pub struct ResourceId {
+    pub kind: ResourceKind,
+    pub name: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub(crate) enum ResourceKind {
+pub enum ResourceKind {
     MqttSource,
     Module,
     Egress,
@@ -39,26 +39,26 @@ impl std::fmt::Display for ResourceKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExecutionMode {
+pub enum ExecutionMode {
     IntraProc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MqttSourcePlan {
-    pub(crate) id: ResourceId,
-    pub(crate) broker: MqttBrokerPlan,
-    pub(crate) auth: AuthPlan,
-    pub(crate) subscriptions: Vec<MqttSubscriptionPlan>,
+pub struct MqttSourcePlan {
+    pub id: ResourceId,
+    pub broker: MqttBrokerPlan,
+    pub auth: AuthPlan,
+    pub subscriptions: Vec<MqttSubscriptionPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MqttBrokerPlan {
-    pub(crate) host: String,
-    pub(crate) port: u16,
+pub struct MqttBrokerPlan {
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AuthPlan {
+pub enum AuthPlan {
     None,
     Static {
         username: String,
@@ -70,42 +70,42 @@ pub(crate) enum AuthPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MqttSubscriptionPlan {
-    pub(crate) topic: String,
-    pub(crate) decode: PayloadDecodePlan,
+pub struct MqttSubscriptionPlan {
+    pub topic: String,
+    pub decode: PayloadDecodePlan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PayloadDecodePlan {
+pub enum PayloadDecodePlan {
     Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProcessPlan {
-    pub(crate) id: ResourceId,
-    pub(crate) module: ModulePlan,
+pub struct ProcessPlan {
+    pub id: ResourceId,
+    pub module: ModulePlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ModulePlan {
-    pub(crate) id: ResourceId,
-    pub(crate) runtime: ModuleRuntime,
-    pub(crate) source: String,
+pub struct ModulePlan {
+    pub id: ResourceId,
+    pub runtime: ModuleRuntime,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModuleRuntime {
+pub enum ModuleRuntime {
     Lua,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EgressPlan {
-    pub(crate) id: ResourceId,
-    pub(crate) channel: String,
+pub struct EgressPlan {
+    pub id: ResourceId,
+    pub channel: String,
 }
 
 impl DeploymentPlan {
-    pub(crate) fn new(
+    pub fn new(
         id: ResourceId,
         execution: ExecutionMode,
         sources: Vec<MqttSourcePlan>,

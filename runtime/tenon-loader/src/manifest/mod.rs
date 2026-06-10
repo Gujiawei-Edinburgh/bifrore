@@ -11,8 +11,7 @@ use spec::{
 
 use crate::{
     AuthPlan, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError, LoaderErrorKind, ModulePlan,
-    ModuleRuntime, MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, PayloadDecodePlan,
-    ProcessPlan, ResourceId, ResourceKind,
+    MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, ProcessPlan, ResourceId, ResourceKind,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";

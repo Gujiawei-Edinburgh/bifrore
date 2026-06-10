@@ -50,15 +50,15 @@ pub(crate) fn resolve_deployment_plan(
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourceDocument {
-    pub api_version: String,
-    pub kind: ResourceKind,
-    pub metadata: ResourceMetadata,
-    pub spec: serde_yaml::Value,
+pub(crate) struct ResourceDocument {
+    pub(crate) api_version: String,
+    pub(crate) kind: ResourceKind,
+    pub(crate) metadata: ResourceMetadata,
+    pub(crate) spec: serde_yaml::Value,
 }
 
 impl ResourceDocument {
-    pub fn id(&self) -> ResourceId {
+    pub(crate) fn id(&self) -> ResourceId {
         ResourceId {
             kind: self.kind,
             name: self.metadata.name.clone(),
@@ -85,9 +85,9 @@ impl ResourceDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ResourceMetadata {
-    pub name: String,
-    pub version: String,
+pub(crate) struct ResourceMetadata {
+    pub(crate) name: String,
+    pub(crate) version: String,
 }
 
 fn validate_spec(resource: &ResourceDocument) -> Result<(), LoaderError> {

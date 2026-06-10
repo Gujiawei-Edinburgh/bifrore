@@ -6,10 +6,6 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct Loader;
 
-pub fn load(manifest: &str) -> Result<DeploymentPlan, LoaderError> {
-    Loader.load(manifest)
-}
-
 impl Loader {
     pub fn load(&self, manifest: &str) -> Result<DeploymentPlan, LoaderError> {
         if manifest.trim().is_empty() {

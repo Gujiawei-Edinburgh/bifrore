@@ -1,9 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-  "tenon-core",
+  "tenon-extension",
+  "tenon-cp",
   "tenon-loader",
-  "tenon-coordinator",
+  "tenon-daemon",
+  "tenon-worker",
   "tenon-oss",
-  "tenon-test-mqtt",
 ]

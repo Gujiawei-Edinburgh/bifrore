@@ -1,0 +1,4 @@
+[package]
+name = "tenon-extension"
+version = "0.1.0"
+edition = "2021"

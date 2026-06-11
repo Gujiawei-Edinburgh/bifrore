@@ -13,6 +13,7 @@ spec:
       source: |
         function credentials(ctx)
           return {
+            type = "username-password",
             username = "dev",
             password = "dev"
           }
@@ -36,6 +37,7 @@ spec:
       source: |
         function credentials(ctx)
           return {
+            type = "username-password",
             username = "dev",
             password = "dev"
           }

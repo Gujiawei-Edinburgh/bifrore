@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
 use crate::{
     LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
@@ -75,7 +76,7 @@ impl InlineModuleSpec {
     fn validate(&self) -> Result<(), LoaderError> {
         match self.runtime {
             ModuleRuntimeSpec::Lua => {
-                validate_lua_function("auth.module.source", &self.source, "credentials")
+                validate_lua_function("auth.module.source", &self.source, AUTH_CREDENTIALS_FN)
             }
         }
     }
@@ -121,7 +122,7 @@ impl ModuleSpec {
         match self.runtime {
             ModuleRuntimeSpec::Lua => {}
         }
-        validate_lua_function("Module.spec.source", &self.source, "on_message")
+        validate_lua_function("Module.spec.source", &self.source, PROCESS_ON_MESSAGE_FN)
     }
 }
 

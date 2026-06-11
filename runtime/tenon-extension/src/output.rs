@@ -18,6 +18,24 @@ impl AuthResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case")]
+pub enum StateMutation {
+    Set {
+        key: String,
+        value: ExtensionValue,
+    },
+    Delete {
+        key: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct InvocationOutcome {
+    pub state_delta: Vec<StateMutation>,
+    pub emits: Vec<EmitRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmitRecord {
     pub channel: String,
     pub payload: ExtensionValue,

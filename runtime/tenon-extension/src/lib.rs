@@ -3,10 +3,10 @@ mod error;
 mod message;
 mod output;
 
-pub use context::{Context, EmitBuffer, State};
+pub use context::{Context, EmitBuffer, StateSnapshot, StateView};
 pub use error::{ExtensionError, ExtensionErrorKind, ExtensionResult};
 pub use message::{Message, MqttMetadata, SourceContext, Topic};
-pub use output::{AuthResult, EmitRecord, ExtensionValue};
+pub use output::{AuthResult, EmitRecord, ExtensionValue, InvocationOutcome, StateMutation};
 
 pub const AUTH_CREDENTIALS_FN: &str = "credentials";
 pub const PROCESS_ON_MESSAGE_FN: &str = "on_message";

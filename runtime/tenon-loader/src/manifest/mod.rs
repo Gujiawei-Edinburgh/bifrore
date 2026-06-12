@@ -5,8 +5,8 @@ use serde::Deserialize;
 mod spec;
 
 use spec::{
-    require_non_empty, require_ref_kind, resource_error, AuthSpec, EgressSpec, ModuleRef,
-    ModuleSpec, MqttSourceSpec, PipelineSpec, ProcessSpec, ResourceRef,
+    require_non_empty, require_ref_kind, resource_error, AuthSpec, EgressSpec, ModuleSpec,
+    MqttSourceSpec, PipelineSpec, ProcessSpec, ResourceRef,
 };
 
 use crate::{
@@ -243,20 +243,12 @@ impl ResourceRegistry {
         })
     }
 
-    fn resolve_module(&self, reference: &ModuleRef) -> Result<ModulePlan, LoaderError> {
+    fn resolve_module(&self, reference: &ResourceRef) -> Result<ModulePlan, LoaderError> {
+        require_ref_kind(reference, ResourceKind::Module, "Process.moduleRef")?;
         let resource = self
             .modules
-            .get(&ResourceKey::new(
-                ResourceKind::Module,
-                &reference.name,
-                &reference.version,
-            ))
-            .ok_or_else(|| {
-                reference_error(format!(
-                    "missing Module {}/{}",
-                    reference.name, reference.version
-                ))
-            })?;
+            .get(&ResourceKey::from_ref(ResourceKind::Module, reference))
+            .ok_or_else(|| reference_error(format!("missing Module {}", reference.display())))?;
         let spec = parse_spec::<ModuleSpec>(resource)?;
         Ok(ModulePlan {
             id: resource.id(),

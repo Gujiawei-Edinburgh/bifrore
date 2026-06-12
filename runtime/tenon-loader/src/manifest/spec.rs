@@ -172,20 +172,14 @@ impl From<DeliveryModeSpec> for DeliveryMode {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProcessSpec {
-    pub(crate) module_ref: ModuleRef,
+    pub(crate) module_ref: ResourceRef,
 }
 
 impl ProcessSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        require_non_empty("Process.moduleRef.name", &self.module_ref.name)?;
-        require_non_empty("Process.moduleRef.version", &self.module_ref.version)
+        self.module_ref.validate("Process.moduleRef")?;
+        require_ref_kind(&self.module_ref, ResourceKind::Module, "Process.moduleRef")
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ModuleRef {
-    pub(crate) name: String,
-    pub(crate) version: String,
 }
 
 #[derive(Debug, Deserialize)]

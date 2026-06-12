@@ -2,7 +2,7 @@ use serde::Deserialize;
 use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
 use crate::{
-    LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
+    DeliveryMode, LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
 };
 
 #[derive(Debug, Deserialize)]
@@ -142,12 +142,30 @@ impl From<ModuleRuntimeSpec> for ModuleRuntime {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct EgressSpec {
-    pub(crate) channel: String,
+    pub(crate) delivery: DeliveryModeSpec,
 }
 
 impl EgressSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        require_non_empty("Egress.channel", &self.channel)
+        match self.delivery {
+            DeliveryModeSpec::Single | DeliveryModeSpec::Broadcast => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DeliveryModeSpec {
+    Single,
+    Broadcast,
+}
+
+impl From<DeliveryModeSpec> for DeliveryMode {
+    fn from(value: DeliveryModeSpec) -> Self {
+        match value {
+            DeliveryModeSpec::Single => DeliveryMode::Single,
+            DeliveryModeSpec::Broadcast => DeliveryMode::Broadcast,
+        }
     }
 }
 

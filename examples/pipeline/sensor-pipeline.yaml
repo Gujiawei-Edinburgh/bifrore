@@ -76,7 +76,7 @@ spec:
         return
       end
 
-      ctx.emit("sensor-batches", {
+      ctx.emit({
         count = #batch,
         items = batch
       })
@@ -89,7 +89,7 @@ metadata:
   name: sensor-batches
   version: v1
 spec:
-  channel: sensor-batches
+  delivery: single
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Process

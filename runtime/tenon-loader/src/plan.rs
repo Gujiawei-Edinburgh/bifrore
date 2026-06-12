@@ -101,7 +101,13 @@ pub enum ModuleRuntime {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressPlan {
     pub id: ResourceId,
-    pub channel: String,
+    pub delivery: DeliveryMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryMode {
+    Single,
+    Broadcast,
 }
 
 impl DeploymentPlan {

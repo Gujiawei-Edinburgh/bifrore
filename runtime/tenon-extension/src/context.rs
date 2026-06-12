@@ -61,12 +61,8 @@ impl Context {
         self.state.delete(key)
     }
 
-    pub fn emit(
-        &mut self,
-        channel: impl Into<String>,
-        payload: ExtensionValue,
-    ) -> ExtensionResult<()> {
-        self.emitter.emit(EmitRecord::new(channel, payload))
+    pub fn emit(&mut self, payload: ExtensionValue) -> ExtensionResult<()> {
+        self.emitter.emit(EmitRecord::new(payload))
     }
 }
 
@@ -183,9 +179,6 @@ impl EmitBuffer {
 
 impl EmitBuffer {
     pub fn emit(&mut self, record: EmitRecord) -> ExtensionResult<()> {
-        if record.channel.is_empty() {
-            return Err(ExtensionError::invalid_argument("emit channel is empty"));
-        }
         self.records.push(record);
         Ok(())
     }

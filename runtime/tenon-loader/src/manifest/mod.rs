@@ -274,7 +274,7 @@ impl ResourceRegistry {
         let spec = parse_spec::<EgressSpec>(resource)?;
         Ok(EgressPlan {
             id: resource.id(),
-            channel: spec.channel,
+            delivery: spec.delivery.into(),
         })
     }
 }

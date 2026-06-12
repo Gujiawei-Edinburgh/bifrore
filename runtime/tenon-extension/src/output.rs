@@ -37,15 +37,11 @@ pub struct InvocationOutcome {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmitRecord {
-    pub channel: String,
     pub payload: ExtensionValue,
 }
 
 impl EmitRecord {
-    pub fn new(channel: impl Into<String>, payload: ExtensionValue) -> Self {
-        Self {
-            channel: channel.into(),
-            payload,
-        }
+    pub fn new(payload: ExtensionValue) -> Self {
+        Self { payload }
     }
 }

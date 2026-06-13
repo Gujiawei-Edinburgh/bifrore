@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use tenon_extension::{
+    Context, Message, MqttMetadata, ScriptApi, SourceContext, StateView, Topic,
+};
 use tree_sitter::{Node, Parser, Tree};
 
 pub(crate) fn validate_extension_function(
@@ -295,30 +298,30 @@ fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<
     let field = field.utf8_text(source).unwrap_or_default();
     match table_ty {
         StaticType::Ctx => match field {
-            "state" => Ok(StaticType::State),
-            "source" => Ok(StaticType::Source),
-            "emit" => Ok(StaticType::EmitFn),
+            field if field == script_field::<Context>("state") => Ok(StaticType::State),
+            field if field == script_field::<Context>("source") => Ok(StaticType::Source),
+            field if field == script_field::<Context>("emit") => Ok(StaticType::EmitFn),
             _ => Err(format!("invalid ctx field: {field}")),
         },
         StaticType::Msg => match field {
-            "source" => Ok(StaticType::Source),
-            "topic" => Ok(StaticType::Topic),
-            "payload" => Ok(StaticType::JsonValue),
-            "raw_payload" => Ok(StaticType::JsonValue),
-            "metadata" => Ok(StaticType::Metadata),
-            "properties" => Ok(StaticType::Properties),
+            field if field == script_field::<Message>("source") => Ok(StaticType::Source),
+            field if field == script_field::<Message>("topic") => Ok(StaticType::Topic),
+            field if field == script_field::<Message>("payload") => Ok(StaticType::JsonValue),
+            field if field == script_field::<Message>("raw_payload") => Ok(StaticType::JsonValue),
+            field if field == script_field::<Message>("metadata") => Ok(StaticType::Metadata),
+            field if field == script_field::<Message>("properties") => Ok(StaticType::Properties),
             _ => Err(format!("invalid msg field: {field}")),
         },
         StaticType::Source => match field {
-            "name" | "version" => Ok(StaticType::JsonValue),
+            field if SourceContext::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
             _ => Err(format!("invalid source field: {field}")),
         },
         StaticType::Topic => match field {
-            "raw" | "levels" => Ok(StaticType::JsonValue),
+            field if Topic::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
             _ => Err(format!("invalid topic field: {field}")),
         },
         StaticType::Metadata => match field {
-            "pkid" | "qos" | "retain" | "dup" => Ok(StaticType::JsonValue),
+            field if MqttMetadata::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
             _ => Err(format!("invalid metadata field: {field}")),
         },
         StaticType::State => Err(format!("invalid state field: {field}; use state:get/set/delete")),
@@ -338,12 +341,17 @@ fn infer_method_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Resu
     let method = method.utf8_text(source).unwrap_or_default();
     match table_ty {
         StaticType::State => match method {
-            "get" | "set" | "delete" => Ok(StaticType::Unknown),
+            method if StateView::METHODS.contains(&method) => Ok(StaticType::Unknown),
             _ => Err(format!("invalid state method: {method}")),
         },
         StaticType::Unknown => Ok(StaticType::Unknown),
         _ => Err(format!("invalid method call on known Tenon type: {method}")),
     }
+}
+
+fn script_field<T: ScriptApi>(field: &'static str) -> &'static str {
+    debug_assert!(T::FIELDS.contains(&field));
+    field
 }
 
 fn infer_bracket_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {

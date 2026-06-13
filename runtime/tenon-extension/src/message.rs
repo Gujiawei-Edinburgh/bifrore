@@ -1,4 +1,4 @@
-use crate::ExtensionValue;
+use crate::{ExtensionValue, ScriptApi};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,6 +15,10 @@ impl SourceContext {
             version: version.into(),
         }
     }
+}
+
+impl ScriptApi for SourceContext {
+    const FIELDS: &'static [&'static str] = &["name", "version"];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +42,10 @@ impl Topic {
     }
 }
 
+impl ScriptApi for Topic {
+    const FIELDS: &'static [&'static str] = &["raw", "levels"];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MqttMetadata {
     pub pkid: u16,
@@ -55,6 +63,10 @@ impl MqttMetadata {
             dup,
         }
     }
+}
+
+impl ScriptApi for MqttMetadata {
+    const FIELDS: &'static [&'static str] = &["pkid", "qos", "retain", "dup"];
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,4 +97,15 @@ impl Message {
             properties,
         }
     }
+}
+
+impl ScriptApi for Message {
+    const FIELDS: &'static [&'static str] = &[
+        "source",
+        "topic",
+        "payload",
+        "raw_payload",
+        "metadata",
+        "properties",
+    ];
 }

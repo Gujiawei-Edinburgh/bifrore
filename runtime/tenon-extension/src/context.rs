@@ -1,6 +1,6 @@
 use crate::{
     EmitRecord, ExtensionError, ExtensionResult, ExtensionValue, InvocationOutcome, SourceContext,
-    StateMutation,
+    StateMutation, ScriptApi,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,6 +64,10 @@ impl Context {
     pub fn emit(&mut self, payload: ExtensionValue) -> ExtensionResult<()> {
         self.emitter.emit(EmitRecord::new(payload))
     }
+}
+
+impl ScriptApi for Context {
+    const FIELDS: &'static [&'static str] = &["state", "source", "emit"];
 }
 
 impl Context {
@@ -160,6 +164,10 @@ impl StateView {
         });
         Ok(())
     }
+}
+
+impl ScriptApi for StateView {
+    const METHODS: &'static [&'static str] = &["get", "set", "delete"];
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

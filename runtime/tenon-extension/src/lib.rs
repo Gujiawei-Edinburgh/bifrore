@@ -8,18 +8,16 @@ pub use error::{ExtensionError, ExtensionErrorKind, ExtensionResult};
 pub use message::{Message, MqttMetadata, SourceContext, Topic};
 pub use output::{AuthResult, EmitRecord, ExtensionValue, InvocationOutcome, StateMutation};
 
+pub trait ScriptApi {
+    const FIELDS: &'static [&'static str] = &[];
+    const METHODS: &'static [&'static str] = &[];
+}
+
 pub const AUTH_CREDENTIALS_FN: &str = "credentials";
 pub const PROCESS_ON_MESSAGE_FN: &str = "on_message";
 
 pub const CONTEXT_ARG: &str = "ctx";
 pub const MESSAGE_ARG: &str = "msg";
-
-pub const CONTEXT_STATE_FIELD: &str = "state";
-pub const CONTEXT_EMIT_FN: &str = "emit";
-
-pub const STATE_GET_FN: &str = "get";
-pub const STATE_SET_FN: &str = "set";
-pub const STATE_DELETE_FN: &str = "delete";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionPoint {

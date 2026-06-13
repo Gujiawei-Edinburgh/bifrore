@@ -1,5 +1,6 @@
 mod error;
 mod loader;
+mod lua;
 mod manifest;
 mod plan;
 

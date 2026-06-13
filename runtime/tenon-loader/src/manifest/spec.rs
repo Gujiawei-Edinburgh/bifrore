@@ -2,7 +2,7 @@ use serde::Deserialize;
 use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
 use crate::{
-    DeliveryMode, LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
+    lua, DeliveryMode, LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
 };
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +76,7 @@ impl InlineModuleSpec {
     fn validate(&self) -> Result<(), LoaderError> {
         match self.runtime {
             ModuleRuntimeSpec::Lua => {
-                validate_lua_function("auth.module.source", &self.source, AUTH_CREDENTIALS_FN)
+                validate_lua_function("auth.module.source", &self.source, AUTH_CREDENTIALS_FN, 1)
             }
         }
     }
@@ -122,7 +122,7 @@ impl ModuleSpec {
         match self.runtime {
             ModuleRuntimeSpec::Lua => {}
         }
-        validate_lua_function("Module.spec.source", &self.source, PROCESS_ON_MESSAGE_FN)
+        validate_lua_function("Module.spec.source", &self.source, PROCESS_ON_MESSAGE_FN, 2)
     }
 }
 
@@ -278,16 +278,11 @@ fn validate_lua_function(
     field: &str,
     source: &str,
     function_name: &str,
+    expected_arity: usize,
 ) -> Result<(), LoaderError> {
     if source.trim().is_empty() {
         return Err(module_error(format!("{field} must not be empty")));
     }
-    let named_function = format!("function {function_name}");
-    let assigned_function = format!("{function_name} = function");
-    if source.contains(&named_function) || source.contains(&assigned_function) {
-        return Ok(());
-    }
-    Err(module_error(format!(
-        "{field} must define Lua function {function_name}"
-    )))
+    lua::validate_extension_function(source, function_name, expected_arity)
+        .map_err(|error| module_error(format!("{field}: {error}")))
 }

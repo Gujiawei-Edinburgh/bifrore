@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser, Tree};
 
 pub(crate) fn validate_extension_function(
@@ -23,6 +24,8 @@ pub(crate) fn validate_extension_function(
             "Lua function {function_name} expects {expected_arity} args, got {arity}"
         ));
     }
+
+    validate_extension_usage(function, source.as_bytes(), expected_arity)?;
 
     Ok(())
 }
@@ -105,27 +108,260 @@ fn function_node(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn function_arity(function: Node<'_>, source: &[u8]) -> Option<usize> {
+    Some(function_parameters(function, source)?.len())
+}
+
+fn function_parameters(function: Node<'_>, source: &[u8]) -> Option<Vec<String>> {
     let parameters = find_first_node_kind(function, "parameters")
         .or_else(|| find_first_node_kind(function, "parameter_list"))?;
-
-    let mut count = 0;
+    let mut names = Vec::new();
     let mut cursor = parameters.walk();
     for child in parameters.children(&mut cursor) {
         if !child.is_named() {
             continue;
         }
         match child.kind() {
-            "identifier" | "variable_name" => count += 1,
-            "vararg_expression" | "..." => count += 1,
+            "identifier" | "variable_name" => {
+                names.push(child.utf8_text(source).ok()?.to_string());
+            }
+            "vararg_expression" | "..." => names.push("...".to_string()),
             _ => {
-                let text = child.utf8_text(source).unwrap_or_default();
-                if !text.trim().is_empty() && text.trim() != "," {
-                    count += 1;
+                let text = child.utf8_text(source).ok()?.trim().to_string();
+                if !text.is_empty() && text != "," {
+                    names.push(text);
                 }
             }
         }
     }
-    Some(count)
+    Some(names)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaticType {
+    Unknown,
+    Ctx,
+    Msg,
+    State,
+    Source,
+    Topic,
+    Metadata,
+    Properties,
+    JsonValue,
+    EmitFn,
+}
+
+#[derive(Debug)]
+struct TypeEnv {
+    variables: HashMap<String, StaticType>,
+}
+
+impl TypeEnv {
+    fn new(function: Node<'_>, source: &[u8], expected_arity: usize) -> Result<Self, String> {
+        let params = function_parameters(function, source)
+            .ok_or_else(|| "failed to inspect Lua extension function parameters".to_string())?;
+        let mut variables = HashMap::new();
+        if expected_arity >= 1 {
+            variables.insert(params[0].clone(), StaticType::Ctx);
+        }
+        if expected_arity >= 2 {
+            variables.insert(params[1].clone(), StaticType::Msg);
+        }
+        Ok(Self { variables })
+    }
+
+    fn get(&self, name: &str) -> StaticType {
+        self.variables
+            .get(name)
+            .copied()
+            .unwrap_or(StaticType::Unknown)
+    }
+
+    fn set(&mut self, name: String, ty: StaticType) {
+        self.variables.insert(name, ty);
+    }
+}
+
+fn validate_extension_usage(function: Node<'_>, source: &[u8], expected_arity: usize) -> Result<(), String> {
+    let mut env = TypeEnv::new(function, source, expected_arity)?;
+    analyze_node(function, source, &mut env)
+}
+
+fn analyze_node(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<(), String> {
+    match node.kind() {
+        "assignment_statement" => {
+            analyze_assignment(node, source, env)?;
+            return Ok(());
+        }
+        "function_call" => validate_function_call(node, source, env)?,
+        "dot_index_expression" => {
+            infer_expr_type(node, source, env)?;
+        }
+        "method_index_expression" => {
+            infer_expr_type(node, source, env)?;
+        }
+        "bracket_index_expression" => {
+            infer_expr_type(node, source, env)?;
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        analyze_node(child, source, env)?;
+    }
+    Ok(())
+}
+
+fn analyze_assignment(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<(), String> {
+    let variables = find_first_node_kind(node, "variable_list");
+    let expressions = find_first_node_kind(node, "expression_list");
+
+    if let Some(expressions) = expressions {
+        let mut cursor = expressions.walk();
+        for child in expressions.children(&mut cursor) {
+            if child.is_named() {
+                analyze_node(child, source, env)?;
+            }
+        }
+    }
+
+    let Some(variables) = variables else {
+        return Ok(());
+    };
+    let Some(expressions) = expressions else {
+        return Ok(());
+    };
+    let names = direct_named_children(variables)
+        .into_iter()
+        .filter(|child| child.kind() == "identifier" || child.kind() == "variable_name")
+        .collect::<Vec<_>>();
+    let values = direct_named_children(expressions);
+
+    for (name, value) in names.into_iter().zip(values.into_iter()) {
+        let name = name.utf8_text(source).unwrap_or_default().to_string();
+        let ty = infer_expr_type(value, source, env)?;
+        env.set(name, ty);
+    }
+    Ok(())
+}
+
+fn validate_function_call(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<(), String> {
+    let Some(name) = node.child_by_field_name("name") else {
+        return Ok(());
+    };
+    let ty = infer_expr_type(name, source, env)?;
+    if ty == StaticType::EmitFn {
+        let args = function_call_arg_count(node);
+        if args != 1 {
+            return Err(format!("ctx.emit expects 1 arg, got {args}"));
+        }
+    }
+    Ok(())
+}
+
+fn function_call_arg_count(node: Node<'_>) -> usize {
+    let Some(arguments) = find_first_node_kind(node, "arguments") else {
+        return 0;
+    };
+    let mut count = 0;
+    let mut cursor = arguments.walk();
+    for child in arguments.children(&mut cursor) {
+        if !child.is_named() {
+            continue;
+        }
+        count += 1;
+    }
+    count
+}
+
+fn infer_expr_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+    match node.kind() {
+        "identifier" | "variable_name" => Ok(env.get(node.utf8_text(source).unwrap_or_default())),
+        "dot_index_expression" => infer_dot_index_type(node, source, env),
+        "method_index_expression" => infer_method_index_type(node, source, env),
+        "bracket_index_expression" => infer_bracket_index_type(node, source, env),
+        _ => Ok(StaticType::Unknown),
+    }
+}
+
+fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+    let Some(table) = node.child_by_field_name("table") else {
+        return Ok(StaticType::Unknown);
+    };
+    let Some(field) = node.child_by_field_name("field") else {
+        return Ok(StaticType::Unknown);
+    };
+    let table_ty = infer_expr_type(table, source, env)?;
+    let field = field.utf8_text(source).unwrap_or_default();
+    match table_ty {
+        StaticType::Ctx => match field {
+            "state" => Ok(StaticType::State),
+            "source" => Ok(StaticType::Source),
+            "emit" => Ok(StaticType::EmitFn),
+            _ => Err(format!("invalid ctx field: {field}")),
+        },
+        StaticType::Msg => match field {
+            "source" => Ok(StaticType::Source),
+            "topic" => Ok(StaticType::Topic),
+            "payload" => Ok(StaticType::JsonValue),
+            "raw_payload" => Ok(StaticType::JsonValue),
+            "metadata" => Ok(StaticType::Metadata),
+            "properties" => Ok(StaticType::Properties),
+            _ => Err(format!("invalid msg field: {field}")),
+        },
+        StaticType::Source => match field {
+            "name" | "version" => Ok(StaticType::JsonValue),
+            _ => Err(format!("invalid source field: {field}")),
+        },
+        StaticType::Topic => match field {
+            "raw" | "levels" => Ok(StaticType::JsonValue),
+            _ => Err(format!("invalid topic field: {field}")),
+        },
+        StaticType::Metadata => match field {
+            "pkid" | "qos" | "retain" | "dup" => Ok(StaticType::JsonValue),
+            _ => Err(format!("invalid metadata field: {field}")),
+        },
+        StaticType::State => Err(format!("invalid state field: {field}; use state:get/set/delete")),
+        StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
+        StaticType::Unknown | StaticType::EmitFn => Ok(StaticType::Unknown),
+    }
+}
+
+fn infer_method_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+    let Some(table) = node.child_by_field_name("table") else {
+        return Ok(StaticType::Unknown);
+    };
+    let Some(method) = node.child_by_field_name("method") else {
+        return Ok(StaticType::Unknown);
+    };
+    let table_ty = infer_expr_type(table, source, env)?;
+    let method = method.utf8_text(source).unwrap_or_default();
+    match table_ty {
+        StaticType::State => match method {
+            "get" | "set" | "delete" => Ok(StaticType::Unknown),
+            _ => Err(format!("invalid state method: {method}")),
+        },
+        StaticType::Unknown => Ok(StaticType::Unknown),
+        _ => Err(format!("invalid method call on known Tenon type: {method}")),
+    }
+}
+
+fn infer_bracket_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+    let Some(table) = node.child_by_field_name("table") else {
+        return Ok(StaticType::Unknown);
+    };
+    match infer_expr_type(table, source, env)? {
+        StaticType::Topic | StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
+        StaticType::Unknown => Ok(StaticType::Unknown),
+        known => Err(format!("invalid bracket access on {known:?}")),
+    }
+}
+
+fn direct_named_children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .filter(|child| child.is_named())
+        .collect()
 }
 
 fn find_first_node_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
@@ -203,5 +439,91 @@ mod tests {
         let error = validate_extension_function("function on_message(ctx) end", PROCESS_ON_MESSAGE_FN, 2)
             .expect_err("wrong arity");
         assert!(error.contains("expects 2 args"));
+    }
+
+    #[test]
+    fn validates_ctx_msg_usage_with_aliases() {
+        validate_extension_function(
+            r#"
+function on_message(c, m)
+  local state = c.state
+  local payload = m.payload
+  local topic = m.topic
+  local source = m.source
+  local metadata = m.metadata
+  local properties = m.properties
+  local temp = payload.temp
+  local first = topic[1]
+  local raw = topic.raw
+  local name = source.name
+  local qos = metadata.qos
+  local prop = properties["x"]
+  state:set("last", temp)
+  c.emit({ temp = temp, first = first, raw = raw, name = name, qos = qos, prop = prop })
+end
+"#,
+            PROCESS_ON_MESSAGE_FN,
+            2,
+        )
+        .expect("valid Tenon extension usage");
+    }
+
+    #[test]
+    fn rejects_invalid_ctx_field_after_aliasing() {
+        let error = validate_extension_function(
+            r#"
+function on_message(ctx, msg)
+  local a = ctx
+  local x = a.device
+end
+"#,
+            PROCESS_ON_MESSAGE_FN,
+            2,
+        )
+        .expect_err("invalid ctx field");
+        assert!(error.contains("invalid ctx field: device"));
+    }
+
+    #[test]
+    fn rejects_invalid_msg_field_after_aliasing() {
+        let error = validate_extension_function(
+            r#"
+function on_message(ctx, msg)
+  local m = msg
+  local x = m.device
+end
+"#,
+            PROCESS_ON_MESSAGE_FN,
+            2,
+        )
+        .expect_err("invalid msg field");
+        assert!(error.contains("invalid msg field: device"));
+    }
+
+    #[test]
+    fn rejects_invalid_state_method() {
+        let error = validate_extension_function(
+            r#"
+function on_message(ctx, msg)
+  local s = ctx.state
+  s:put("a", "b")
+end
+"#,
+            PROCESS_ON_MESSAGE_FN,
+            2,
+        )
+        .expect_err("invalid state method");
+        assert!(error.contains("invalid state method: put"));
+    }
+
+    #[test]
+    fn rejects_wrong_emit_arity() {
+        let error = validate_extension_function(
+            "function on_message(ctx, msg) ctx.emit('a', msg.payload) end",
+            PROCESS_ON_MESSAGE_FN,
+            2,
+        )
+        .expect_err("wrong emit arity");
+        assert!(error.contains("ctx.emit expects 1 arg"));
     }
 }

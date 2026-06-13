@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package tenon.daemon.v1;
+
+message ResourceId {
+  string kind = 1;
+  string name = 2;
+  string version = 3;
+}
+
+message DeploymentPlan {
+  ResourceId id = 1;
+  ExecutionMode execution = 2;
+  repeated MqttSourcePlan sources = 3;
+  ProcessPlan process = 4;
+  EgressPlan egress = 5;
+}
+
+enum ExecutionMode {
+  EXECUTION_MODE_UNSPECIFIED = 0;
+  EXECUTION_MODE_INTRA_PROC = 1;
+}
+
+message MqttSourcePlan {
+  ResourceId id = 1;
+  MqttBrokerPlan broker = 2;
+  AuthPlan auth = 3;
+  repeated MqttSubscriptionPlan subscriptions = 4;
+}
+
+message MqttBrokerPlan {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message AuthPlan {
+  oneof kind {
+    NoAuth none = 1;
+    UsernamePasswordAuth username_password = 2;
+    ModulePlan module = 3;
+  }
+}
+
+message NoAuth {}
+
+message UsernamePasswordAuth {
+  string username = 1;
+  string password = 2;
+}
+
+message MqttSubscriptionPlan {
+  string topic = 1;
+  PayloadDecodePlan decode = 2;
+}
+
+enum PayloadDecodePlan {
+  PAYLOAD_DECODE_PLAN_UNSPECIFIED = 0;
+  PAYLOAD_DECODE_PLAN_JSON = 1;
+}
+
+message ProcessPlan {
+  ResourceId id = 1;
+  ModulePlan module = 2;
+}
+
+message ModulePlan {
+  ResourceId id = 1;
+  ModuleRuntime runtime = 2;
+  string source = 3;
+}
+
+enum ModuleRuntime {
+  MODULE_RUNTIME_UNSPECIFIED = 0;
+  MODULE_RUNTIME_LUA = 1;
+}
+
+message EgressPlan {
+  ResourceId id = 1;
+  DeliveryMode delivery = 2;
+}
+
+enum DeliveryMode {
+  DELIVERY_MODE_UNSPECIFIED = 0;
+  DELIVERY_MODE_SINGLE = 1;
+  DELIVERY_MODE_BROADCAST = 2;
+}
+
+message StartWorkerRequest {
+  DeploymentPlan plan = 1;
+}
+
+message WorkerEnvelope {
+  oneof payload {
+    StartWorkerRequest start_worker = 1;
+    StateLoadRequest state_load = 2;
+    StateCommitRequest state_commit = 3;
+    EmitRequest emit = 4;
+    Heartbeat heartbeat = 5;
+  }
+}
+
+message StateLoadRequest {
+  string scope = 1;
+  repeated string keys = 2;
+}
+
+message StateCommitRequest {
+  string scope = 1;
+  repeated StateMutation mutations = 2;
+}
+
+message StateMutation {
+  oneof op {
+    StateSet set = 1;
+    StateDelete delete = 2;
+  }
+}
+
+message StateSet {
+  string key = 1;
+  bytes value_json = 2;
+}
+
+message StateDelete {
+  string key = 1;
+}
+
+message EmitRequest {
+  bytes payload_json = 1;
+}
+
+message Heartbeat {
+  uint64 timestamp_millis = 1;
+}
+
+message DaemonEnvelope {
+  oneof payload {
+    StateLoadResponse state_load = 1;
+    StateCommitResponse state_commit = 2;
+    Ack ack = 3;
+    Error error = 4;
+  }
+}
+
+message StateLoadResponse {
+  repeated StateEntry entries = 1;
+}
+
+message StateEntry {
+  string key = 1;
+  bytes value_json = 2;
+}
+
+message StateCommitResponse {
+  bool applied = 1;
+}
+
+message Ack {}
+
+message Error {
+  string code = 1;
+  string message = 2;
+}

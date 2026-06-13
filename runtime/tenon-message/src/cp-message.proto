@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package tenon.cp.v1;
+
+message ApplyManifestRequest {
+  string manifest = 1;
+}
+
+message ApplyManifestResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message GetPipelineRequest {
+  string name = 1;
+}
+
+message GetPipelineResponse {
+  string manifest = 1;
+}
+
+message ControlPlaneEnvelope {
+  oneof payload {
+    ApplyManifestRequest apply_manifest = 1;
+    ApplyManifestResponse apply_manifest_response = 2;
+    GetPipelineRequest get_pipeline = 3;
+    GetPipelineResponse get_pipeline_response = 4;
+    Error error = 5;
+  }
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+}

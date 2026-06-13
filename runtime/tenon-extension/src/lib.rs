@@ -3,10 +3,12 @@ mod error;
 mod message;
 mod output;
 
-pub use context::{Context, EmitBuffer, StateSnapshot, StateView};
+pub use context::{Context, EmitBuffer, StateView};
 pub use error::{ExtensionError, ExtensionErrorKind, ExtensionResult};
 pub use message::{Message, MqttMetadata, SourceContext, Topic};
-pub use output::{AuthResult, EmitRecord, ExtensionValue, InvocationOutcome, StateMutation};
+pub use output::{
+    AuthResult, EmitRecord, ExtensionValue, InvocationOutcome, StateMutation, StateSnapshot,
+};
 
 pub trait ScriptApi {
     const FIELDS: &'static [&'static str] = &[];

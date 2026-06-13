@@ -1,8 +1,8 @@
 use crate::{
     EmitRecord, ExtensionError, ExtensionResult, ExtensionValue, InvocationOutcome, SourceContext,
-    StateMutation, ScriptApi,
+    StateMutation, StateSnapshot, ScriptApi,
 };
-use serde::{Deserialize, Serialize};
+use tenon_message::state::{state_mutation, StateDelete, StateSet};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -83,37 +83,6 @@ impl Context {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct StateSnapshot {
-    values: HashMap<String, ExtensionValue>,
-}
-
-impl StateSnapshot {
-    pub fn new(values: HashMap<String, ExtensionValue>) -> Self {
-        Self { values }
-    }
-
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    pub fn values(&self) -> &HashMap<String, ExtensionValue> {
-        &self.values
-    }
-
-    pub fn get(&self, key: &str) -> Option<&ExtensionValue> {
-        self.values.get(key)
-    }
-
-    pub fn into_inner(self) -> HashMap<String, ExtensionValue> {
-        self.values
-    }
-
-    pub fn into_view(self) -> StateView {
-        StateView::from_snapshot(self)
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StateView {
     values: HashMap<String, ExtensionValue>,
@@ -122,8 +91,17 @@ pub struct StateView {
 
 impl StateView {
     pub fn from_snapshot(snapshot: StateSnapshot) -> Self {
+        let values = snapshot
+            .entries
+            .into_iter()
+            .filter_map(|entry| {
+                serde_json::from_slice(&entry.value_json)
+                    .ok()
+                    .map(|value| (entry.key, value))
+            })
+            .collect();
         Self {
-            values: snapshot.into_inner(),
+            values,
             delta: Vec::new(),
         }
     }
@@ -149,8 +127,12 @@ impl StateView {
         if key.is_empty() {
             return Err(ExtensionError::invalid_argument("state key is empty"));
         }
+        let value_json = serde_json::to_vec(&value)
+            .map_err(|error| ExtensionError::state(format!("failed to encode state value: {error}")))?;
         self.values.insert(key.clone(), value.clone());
-        self.delta.push(StateMutation::Set { key, value });
+        self.delta.push(StateMutation {
+            op: Some(state_mutation::Op::Set(StateSet { key, value_json })),
+        });
         Ok(())
     }
 
@@ -159,8 +141,10 @@ impl StateView {
             return Err(ExtensionError::invalid_argument("state key is empty"));
         }
         self.values.remove(key);
-        self.delta.push(StateMutation::Delete {
-            key: key.to_string(),
+        self.delta.push(StateMutation {
+            op: Some(state_mutation::Op::Delete(StateDelete {
+                key: key.to_string(),
+            })),
         });
         Ok(())
     }

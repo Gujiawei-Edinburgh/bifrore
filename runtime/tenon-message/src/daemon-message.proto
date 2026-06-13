@@ -94,8 +94,7 @@ message WorkerEnvelope {
     StartWorkerRequest start_worker = 1;
     StateLoadRequest state_load = 2;
     StateCommitRequest state_commit = 3;
-    EmitRequest emit = 4;
-    Heartbeat heartbeat = 5;
+    Heartbeat heartbeat = 4;
   }
 }
 
@@ -107,6 +106,15 @@ message StateLoadRequest {
 message StateCommitRequest {
   string scope = 1;
   repeated StateMutation mutations = 2;
+}
+
+message StateSnapshot {
+  repeated StateEntry entries = 1;
+}
+
+message StateEntry {
+  string key = 1;
+  bytes value_json = 2;
 }
 
 message StateMutation {
@@ -125,10 +133,6 @@ message StateDelete {
   string key = 1;
 }
 
-message EmitRequest {
-  bytes payload_json = 1;
-}
-
 message Heartbeat {
   uint64 timestamp_millis = 1;
 }
@@ -143,12 +147,7 @@ message DaemonEnvelope {
 }
 
 message StateLoadResponse {
-  repeated StateEntry entries = 1;
-}
-
-message StateEntry {
-  string key = 1;
-  bytes value_json = 2;
+  StateSnapshot snapshot = 1;
 }
 
 message StateCommitResponse {

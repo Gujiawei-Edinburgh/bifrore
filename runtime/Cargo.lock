@@ -411,6 +411,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tenon-message",
 ]
 
 [[package]]
@@ -430,6 +431,8 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "prost-build",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

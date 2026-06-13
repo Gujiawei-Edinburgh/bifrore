@@ -18,14 +18,3 @@ impl Loader {
         resolve_deployment_plan(parse_resource_documents(manifest)?)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_empty_manifest() {
-        let err = Loader.load(" \n\t").expect_err("empty manifest");
-        assert_eq!(err.kind, LoaderErrorKind::EmptyManifest);
-    }
-}

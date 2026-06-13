@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn validates_named_extension_functions() {
         validate_extension_function(
-            "function credentials(ctx) return { username = 'u', password = 'p' } end",
+            "function credentials(ctx) return { type = 'username-password', username = 'u', password = 'p' } end",
             AUTH_CREDENTIALS_FN,
             1,
         )
@@ -405,6 +405,85 @@ mod tests {
             2,
         )
         .expect("process function");
+    }
+
+    #[test]
+    fn validates_credentials_username_password_shape() {
+        validate_extension_function(
+            r#"
+function credentials(ctx)
+  return {
+    type = "username-password",
+    username = "dev",
+    password = "dev"
+  }
+end
+"#,
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect("username/password credentials");
+    }
+
+    #[test]
+    fn validates_credentials_bearer_token_shape() {
+        validate_extension_function(
+            r#"
+function credentials(ctx)
+  local token = "token-" .. "value"
+  return {
+    type = "bearer-token",
+    token = token
+  }
+end
+"#,
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect("bearer-token credentials");
+    }
+
+    #[test]
+    fn validates_credentials_client_certificate_shape() {
+        validate_extension_function(
+            r#"
+function credentials(ctx)
+  return {
+    type = "client-certificate",
+    cert_path = "/etc/tenon/certs/client.crt",
+    key_path = "/etc/tenon/certs/client.key",
+    ca_path = "/etc/tenon/certs/ca.crt"
+  }
+end
+"#,
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect("client certificate credentials");
+    }
+
+    #[test]
+    fn validates_credentials_custom_dynamic_shape() {
+        validate_extension_function(
+            r#"
+function credentials(ctx)
+  local ts = "1770000000"
+  local signature = "sig-" .. ts
+  return {
+    type = "custom",
+    username = "device",
+    password = signature,
+    properties = {
+      timestamp = ts,
+      signature = signature
+    }
+  }
+end
+"#,
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect("custom dynamic credentials");
     }
 
     #[test]

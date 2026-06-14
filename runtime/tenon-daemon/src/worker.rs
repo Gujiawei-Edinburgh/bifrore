@@ -9,8 +9,12 @@ pub struct WorkerHandle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerStatus {
+    Init,
+    Starting,
     Running,
+    Stopping,
     Stopped,
+    Error,
 }
 
 pub trait WorkerLauncher {

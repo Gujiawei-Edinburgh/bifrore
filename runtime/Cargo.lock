@@ -405,6 +405,7 @@ version = "0.1.0"
 name = "tenon-daemon"
 version = "0.1.0"
 dependencies = [
+ "prost",
  "tenon-message",
 ]
 

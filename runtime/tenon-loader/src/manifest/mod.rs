@@ -10,11 +10,48 @@ use spec::{
 };
 
 use crate::{
-    AuthPlan, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError, LoaderErrorKind, ModulePlan,
-    MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, ProcessPlan, ResourceId, ResourceKind,
+    auth_plan, AuthPlan, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError,
+    LoaderErrorKind, ModulePlan, ModuleRuntime, MqttBrokerPlan, MqttSourcePlan,
+    MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan, ResourceId,
+    ResourceKind as PlanResourceKind,
+    UsernamePasswordAuth,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) enum ManifestResourceKind {
+    MqttSource,
+    Module,
+    Egress,
+    Process,
+    Pipeline,
+}
+
+impl ManifestResourceKind {
+    fn into_plan_kind(self) -> PlanResourceKind {
+        match self {
+            Self::MqttSource => PlanResourceKind::MqttSource,
+            Self::Module => PlanResourceKind::Module,
+            Self::Egress => PlanResourceKind::Egress,
+            Self::Process => PlanResourceKind::Process,
+            Self::Pipeline => PlanResourceKind::Pipeline,
+        }
+    }
+}
+
+impl std::fmt::Display for ManifestResourceKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MqttSource => "MqttSource",
+            Self::Module => "Module",
+            Self::Egress => "Egress",
+            Self::Process => "Process",
+            Self::Pipeline => "Pipeline",
+        })
+    }
+}
 
 pub(crate) fn parse_resource_documents(
     manifest: &str,
@@ -58,7 +95,7 @@ pub(crate) fn resolve_deployment_plan(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceDocument {
     pub(crate) api_version: String,
-    pub(crate) kind: ResourceKind,
+    pub(crate) kind: ManifestResourceKind,
     pub(crate) metadata: ResourceMetadata,
     pub(crate) spec: serde_yaml::Value,
 }
@@ -66,7 +103,7 @@ pub(crate) struct ResourceDocument {
 impl ResourceDocument {
     pub(crate) fn id(&self) -> ResourceId {
         ResourceId {
-            kind: self.kind,
+            kind: self.kind.into_plan_kind() as i32,
             name: self.metadata.name.clone(),
             version: self.metadata.version.clone(),
         }
@@ -98,11 +135,11 @@ pub(crate) struct ResourceMetadata {
 
 fn validate_spec(resource: &ResourceDocument) -> Result<(), LoaderError> {
     match resource.kind {
-        ResourceKind::MqttSource => parse_spec::<MqttSourceSpec>(resource)?.validate(),
-        ResourceKind::Module => parse_spec::<ModuleSpec>(resource)?.validate(),
-        ResourceKind::Egress => parse_spec::<EgressSpec>(resource)?.validate(),
-        ResourceKind::Process => parse_spec::<ProcessSpec>(resource)?.validate(),
-        ResourceKind::Pipeline => parse_spec::<PipelineSpec>(resource)?.validate(),
+        ManifestResourceKind::MqttSource => parse_spec::<MqttSourceSpec>(resource)?.validate(),
+        ManifestResourceKind::Module => parse_spec::<ModuleSpec>(resource)?.validate(),
+        ManifestResourceKind::Egress => parse_spec::<EgressSpec>(resource)?.validate(),
+        ManifestResourceKind::Process => parse_spec::<ProcessSpec>(resource)?.validate(),
+        ManifestResourceKind::Pipeline => parse_spec::<PipelineSpec>(resource)?.validate(),
     }
 }
 
@@ -126,7 +163,11 @@ impl ResourceRegistry {
         let mut seen = HashMap::new();
 
         for resource in resources {
-            let key = ResourceKey::from_id(&resource.id());
+            let key = ResourceKey::new(
+                resource.kind,
+                &resource.metadata.name,
+                &resource.metadata.version,
+            );
             if seen.insert(key.clone(), ()).is_some() {
                 return Err(resource_error(format!(
                     "duplicate resource {}",
@@ -134,19 +175,19 @@ impl ResourceRegistry {
                 )));
             }
             match resource.kind {
-                ResourceKind::MqttSource => {
+                ManifestResourceKind::MqttSource => {
                     registry.sources.insert(key, resource);
                 }
-                ResourceKind::Module => {
+                ManifestResourceKind::Module => {
                     registry.modules.insert(key, resource);
                 }
-                ResourceKind::Process => {
+                ManifestResourceKind::Process => {
                     registry.processes.insert(key, resource);
                 }
-                ResourceKind::Egress => {
+                ManifestResourceKind::Egress => {
                     registry.egresses.insert(key, resource);
                 }
-                ResourceKind::Pipeline => {
+                ManifestResourceKind::Pipeline => {
                     registry.pipelines.push(resource);
                 }
             }
@@ -172,35 +213,35 @@ impl ResourceRegistry {
         let process = self.resolve_process(&spec.process_ref)?;
         let egress = self.resolve_egress(&spec.egress_ref)?;
 
-        Ok(DeploymentPlan::new(
-            pipeline.id(),
-            ExecutionMode::IntraProc,
+        Ok(DeploymentPlan {
+            id: Some(pipeline.id()),
+            execution: ExecutionMode::IntraProc as i32,
             sources,
-            process,
-            egress,
-        ))
+            process: Some(process),
+            egress: Some(egress),
+        })
     }
 
     fn resolve_source(&self, reference: &ResourceRef) -> Result<MqttSourcePlan, LoaderError> {
-        require_ref_kind(reference, ResourceKind::MqttSource, "Pipeline.sourceRefs")?;
+        require_ref_kind(reference, ManifestResourceKind::MqttSource, "Pipeline.sourceRefs")?;
         let resource = self
             .sources
-            .get(&ResourceKey::from_ref(ResourceKind::MqttSource, reference))
+            .get(&ResourceKey::from_ref(ManifestResourceKind::MqttSource, reference))
             .ok_or_else(|| reference_error(format!("missing MqttSource {}", reference.display())))?;
         let spec = parse_spec::<MqttSourceSpec>(resource)?;
         Ok(MqttSourcePlan {
-            id: resource.id(),
-            broker: MqttBrokerPlan {
+            id: Some(resource.id()),
+            broker: Some(MqttBrokerPlan {
                 host: spec.broker.host,
-                port: spec.broker.port,
-            },
-            auth: self.resolve_auth(&resource.id(), spec.auth)?,
+                port: spec.broker.port as u32,
+            }),
+            auth: Some(self.resolve_auth(&resource.id(), spec.auth)?),
             subscriptions: spec
                 .subscriptions
                 .into_iter()
                 .map(|subscription| MqttSubscriptionPlan {
                     topic: subscription.topic,
-                    decode: subscription.decode.into(),
+                    decode: PayloadDecodePlan::Json as i32,
                 })
                 .collect(),
         })
@@ -212,74 +253,79 @@ impl ResourceRegistry {
         auth: Option<AuthSpec>,
     ) -> Result<AuthPlan, LoaderError> {
         match auth {
-            None => Ok(AuthPlan::None),
-            Some(AuthSpec::Static { username, password }) => {
-                Ok(AuthPlan::Static { username, password })
-            }
-            Some(AuthSpec::Module { module }) => Ok(AuthPlan::Module {
-                module: ModulePlan {
-                    id: ResourceId {
-                        kind: ResourceKind::Module,
+            None => Ok(AuthPlan {
+                kind: Some(auth_plan::Kind::None(NoAuth {})),
+            }),
+            Some(AuthSpec::Static { username, password }) => Ok(AuthPlan {
+                kind: Some(auth_plan::Kind::UsernamePassword(UsernamePasswordAuth {
+                    username,
+                    password,
+                })),
+            }),
+            Some(AuthSpec::Module { module }) => Ok(AuthPlan {
+                kind: Some(auth_plan::Kind::Module(ModulePlan {
+                    id: Some(ResourceId {
+                        kind: PlanResourceKind::Module as i32,
                         name: format!("{}-auth", source_id.name),
                         version: source_id.version.clone(),
-                    },
-                    runtime: module.runtime.into(),
+                    }),
+                    runtime: ModuleRuntime::Lua as i32,
                     source: module.source,
-                },
+                })),
             }),
         }
     }
 
     fn resolve_process(&self, reference: &ResourceRef) -> Result<ProcessPlan, LoaderError> {
-        require_ref_kind(reference, ResourceKind::Process, "Pipeline.processRef")?;
+        require_ref_kind(reference, ManifestResourceKind::Process, "Pipeline.processRef")?;
         let resource = self
             .processes
-            .get(&ResourceKey::from_ref(ResourceKind::Process, reference))
+            .get(&ResourceKey::from_ref(ManifestResourceKind::Process, reference))
             .ok_or_else(|| reference_error(format!("missing Process {}", reference.display())))?;
         let spec = parse_spec::<ProcessSpec>(resource)?;
         Ok(ProcessPlan {
-            id: resource.id(),
-            module: self.resolve_module(&spec.module_ref)?,
+            id: Some(resource.id()),
+            module: Some(self.resolve_module(&spec.module_ref)?),
         })
     }
 
     fn resolve_module(&self, reference: &ResourceRef) -> Result<ModulePlan, LoaderError> {
-        require_ref_kind(reference, ResourceKind::Module, "Process.moduleRef")?;
+        require_ref_kind(reference, ManifestResourceKind::Module, "Process.moduleRef")?;
         let resource = self
             .modules
-            .get(&ResourceKey::from_ref(ResourceKind::Module, reference))
+            .get(&ResourceKey::from_ref(ManifestResourceKind::Module, reference))
             .ok_or_else(|| reference_error(format!("missing Module {}", reference.display())))?;
         let spec = parse_spec::<ModuleSpec>(resource)?;
         Ok(ModulePlan {
-            id: resource.id(),
-            runtime: spec.runtime.into(),
+            id: Some(resource.id()),
+            runtime: ModuleRuntime::Lua as i32,
             source: spec.source,
         })
     }
 
     fn resolve_egress(&self, reference: &ResourceRef) -> Result<EgressPlan, LoaderError> {
-        require_ref_kind(reference, ResourceKind::Egress, "Pipeline.egressRef")?;
+        require_ref_kind(reference, ManifestResourceKind::Egress, "Pipeline.egressRef")?;
         let resource = self
             .egresses
-            .get(&ResourceKey::from_ref(ResourceKind::Egress, reference))
+            .get(&ResourceKey::from_ref(ManifestResourceKind::Egress, reference))
             .ok_or_else(|| reference_error(format!("missing Egress {}", reference.display())))?;
         let spec = parse_spec::<EgressSpec>(resource)?;
         Ok(EgressPlan {
-            id: resource.id(),
-            delivery: spec.delivery.into(),
+            id: Some(resource.id()),
+            delivery: i32::from(DeliveryMode::from(spec.delivery)),
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ResourceKey {
-    kind: ResourceKind,
+    kind: ManifestResourceKind,
     name: String,
     version: String,
 }
 
 impl ResourceKey {
-    fn new(kind: ResourceKind, name: &str, version: &str) -> Self {
+    fn new(kind: ManifestResourceKind, name: &str, version: &str) -> Self {
         Self {
             kind,
             name: name.to_string(),
@@ -287,11 +333,7 @@ impl ResourceKey {
         }
     }
 
-    fn from_id(id: &ResourceId) -> Self {
-        Self::new(id.kind, &id.name, &id.version)
-    }
-
-    fn from_ref(kind: ResourceKind, reference: &ResourceRef) -> Self {
+    fn from_ref(kind: ManifestResourceKind, reference: &ResourceRef) -> Self {
         Self::new(kind, &reference.name, &reference.version)
     }
 }

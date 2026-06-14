@@ -11,4 +11,5 @@ pub mod cp {
 }
 
 pub mod codec;
+pub mod plan;
 pub mod state;

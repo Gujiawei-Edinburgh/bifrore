@@ -3,9 +3,18 @@ syntax = "proto3";
 package tenon.daemon.v1;
 
 message ResourceId {
-  string kind = 1;
+  ResourceKind kind = 1;
   string name = 2;
   string version = 3;
+}
+
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_MQTT_SOURCE = 1;
+  RESOURCE_KIND_MODULE = 2;
+  RESOURCE_KIND_EGRESS = 3;
+  RESOURCE_KIND_PROCESS = 4;
+  RESOURCE_KIND_PIPELINE = 5;
 }
 
 message DeploymentPlan {

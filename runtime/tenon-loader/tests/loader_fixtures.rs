@@ -33,12 +33,21 @@ fn loads_sensor_pipeline_fixture() {
         .load(fixture("pipelines/sensor-pipeline.yaml"))
         .expect("valid sensor pipeline");
 
-    assert_eq!(plan.id.kind, ResourceKind::Pipeline);
-    assert_eq!(plan.id.name, "sensor-ingest");
+    let id = plan.id.as_ref().expect("plan id");
+    assert_eq!(ResourceKind::try_from(id.kind), Ok(ResourceKind::Pipeline));
+    assert_eq!(id.name, "sensor-ingest");
     assert_eq!(plan.sources.len(), 2);
-    assert_eq!(plan.process.id.name, "sensor-process");
-    assert_eq!(plan.process.module.id.name, "sensor-processor");
-    assert_eq!(plan.egress.delivery, DeliveryMode::Single);
+
+    let process = plan.process.as_ref().expect("process plan");
+    let process_id = process.id.as_ref().expect("process id");
+    assert_eq!(process_id.name, "sensor-process");
+
+    let module = process.module.as_ref().expect("process module");
+    let module_id = module.id.as_ref().expect("module id");
+    assert_eq!(module_id.name, "sensor-processor");
+
+    let egress = plan.egress.as_ref().expect("egress plan");
+    assert_eq!(DeliveryMode::try_from(egress.delivery), Ok(DeliveryMode::Single));
 }
 
 #[test]

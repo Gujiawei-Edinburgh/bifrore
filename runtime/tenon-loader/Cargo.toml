@@ -7,5 +7,6 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 tenon-extension = { path = "../tenon-extension" }
+tenon-message = { path = "../tenon-message" }
 tree-sitter = "0.26"
 tree-sitter-lua = "0.5"

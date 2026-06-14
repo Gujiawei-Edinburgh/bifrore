@@ -404,6 +404,9 @@ version = "0.1.0"
 [[package]]
 name = "tenon-daemon"
 version = "0.1.0"
+dependencies = [
+ "tenon-message",
+]
 
 [[package]]
 name = "tenon-extension"
@@ -421,6 +424,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tenon-extension",
+ "tenon-message",
  "tree-sitter",
  "tree-sitter-lua",
 ]

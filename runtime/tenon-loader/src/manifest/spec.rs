@@ -1,9 +1,9 @@
 use serde::Deserialize;
 use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
-use crate::{
-    lua, DeliveryMode, LoaderError, LoaderErrorKind, ModuleRuntime, PayloadDecodePlan, ResourceKind,
-};
+use crate::{lua, DeliveryMode, LoaderError, LoaderErrorKind};
+
+use super::ManifestResourceKind;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,14 +103,6 @@ pub(crate) enum PayloadDecodeSpec {
     Json,
 }
 
-impl From<PayloadDecodeSpec> for PayloadDecodePlan {
-    fn from(value: PayloadDecodeSpec) -> Self {
-        match value {
-            PayloadDecodeSpec::Json => PayloadDecodePlan::Json,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct ModuleSpec {
     pub(crate) runtime: ModuleRuntimeSpec,
@@ -130,14 +122,6 @@ impl ModuleSpec {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ModuleRuntimeSpec {
     Lua,
-}
-
-impl From<ModuleRuntimeSpec> for ModuleRuntime {
-    fn from(value: ModuleRuntimeSpec) -> Self {
-        match value {
-            ModuleRuntimeSpec::Lua => ModuleRuntime::Lua,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,7 +162,11 @@ pub(crate) struct ProcessSpec {
 impl ProcessSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
         self.module_ref.validate("Process.moduleRef")?;
-        require_ref_kind(&self.module_ref, ResourceKind::Module, "Process.moduleRef")
+        require_ref_kind(
+            &self.module_ref,
+            ManifestResourceKind::Module,
+            "Process.moduleRef",
+        )
     }
 }
 
@@ -218,7 +206,7 @@ pub(crate) struct ExecutionSpec {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResourceRef {
-    pub(crate) kind: Option<ResourceKind>,
+    pub(crate) kind: Option<ManifestResourceKind>,
     pub(crate) name: String,
     pub(crate) version: String,
 }
@@ -243,7 +231,7 @@ impl ResourceRef {
 
 pub(crate) fn require_ref_kind(
     reference: &ResourceRef,
-    expected: ResourceKind,
+    expected: ManifestResourceKind,
     field: &str,
 ) -> Result<(), LoaderError> {
     if reference.kind == Some(expected) {

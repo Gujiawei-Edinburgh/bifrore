@@ -1,12 +1,11 @@
-mod state;
+mod store;
 mod worker;
 
-pub use state::{MemoryStateStore, StateStore};
+pub use store::{InMemoryPlanStore, PlanStore};
 pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerLauncher, WorkerStatus};
 
 use std::collections::HashMap;
 use tenon_message::plan::{DeploymentPlan, ResourceId};
-use tenon_message::state::{StateMutation, StateSnapshot};
 
 pub type DaemonResult<T> = Result<T, DaemonError>;
 
@@ -19,7 +18,7 @@ pub struct DaemonError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonErrorKind {
     Worker,
-    State,
+    Store,
     InvalidState,
     NotFound,
 }
@@ -36,8 +35,8 @@ impl DaemonError {
         Self::new(DaemonErrorKind::Worker, message)
     }
 
-    pub fn state(message: impl Into<String>) -> Self {
-        Self::new(DaemonErrorKind::State, message)
+    pub fn store(message: impl Into<String>) -> Self {
+        Self::new(DaemonErrorKind::Store, message)
     }
 
     pub fn invalid_state(message: impl Into<String>) -> Self {
@@ -84,33 +83,33 @@ impl DeploymentKey {
     }
 }
 
-pub struct TenonDaemon<L, S> {
+pub struct TenonDaemon<L, P> {
     worker_launcher: L,
-    state_store: S,
+    plan_store: P,
     deployments: HashMap<DeploymentKey, ActiveDeployment>,
 }
 
-impl TenonDaemon<NoopWorkerLauncher, MemoryStateStore> {
+impl TenonDaemon<NoopWorkerLauncher, InMemoryPlanStore> {
     pub fn new() -> Self {
-        Self::with_components(NoopWorkerLauncher::default(), MemoryStateStore::default())
+        Self::with_components(NoopWorkerLauncher::default(), InMemoryPlanStore::default())
     }
 }
 
-impl Default for TenonDaemon<NoopWorkerLauncher, MemoryStateStore> {
+impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryPlanStore> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<L, S> TenonDaemon<L, S>
+impl<L, P> TenonDaemon<L, P>
 where
     L: WorkerLauncher,
-    S: StateStore,
+    P: PlanStore,
 {
-    pub fn with_components(worker_launcher: L, state_store: S) -> Self {
+    pub fn with_components(worker_launcher: L, plan_store: P) -> Self {
         Self {
             worker_launcher,
-            state_store,
+            plan_store,
             deployments: HashMap::new(),
         }
     }
@@ -125,7 +124,7 @@ where
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
         let key = DeploymentKey::from_id(&id);
-        self.state_store.save_plan(&key, plan.clone()).await?;
+        self.plan_store.save_plan(&key, plan.clone()).await?;
         self.stop_worker_by_key(&key)?;
 
         let worker = self.worker_launcher.start(plan)?;
@@ -146,19 +145,7 @@ where
 
     pub async fn load_plan(&self, id: &ResourceId) -> DaemonResult<Option<DeploymentPlan>> {
         let key = DeploymentKey::from_id(id);
-        self.state_store.load_plan(&key).await
-    }
-
-    pub async fn load_state(&self, scope: &str, keys: &[String]) -> DaemonResult<StateSnapshot> {
-        self.state_store.load(scope, keys).await
-    }
-
-    pub async fn commit_state(
-        &mut self,
-        scope: &str,
-        mutations: Vec<StateMutation>,
-    ) -> DaemonResult<()> {
-        self.state_store.commit(scope, mutations).await
+        self.plan_store.load_plan(&key).await
     }
 
     pub fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {

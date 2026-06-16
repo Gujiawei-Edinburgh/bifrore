@@ -101,45 +101,8 @@ message StartWorkerRequest {
 message WorkerEnvelope {
   oneof payload {
     StartWorkerRequest start_worker = 1;
-    StateLoadRequest state_load = 2;
-    StateCommitRequest state_commit = 3;
-    Heartbeat heartbeat = 4;
+    Heartbeat heartbeat = 2;
   }
-}
-
-message StateLoadRequest {
-  string scope = 1;
-  repeated string keys = 2;
-}
-
-message StateCommitRequest {
-  string scope = 1;
-  repeated StateMutation mutations = 2;
-}
-
-message StateSnapshot {
-  repeated StateEntry entries = 1;
-}
-
-message StateEntry {
-  string key = 1;
-  bytes value_json = 2;
-}
-
-message StateMutation {
-  oneof op {
-    StateSet set = 1;
-    StateDelete delete = 2;
-  }
-}
-
-message StateSet {
-  string key = 1;
-  bytes value_json = 2;
-}
-
-message StateDelete {
-  string key = 1;
 }
 
 message Heartbeat {
@@ -148,19 +111,9 @@ message Heartbeat {
 
 message DaemonEnvelope {
   oneof payload {
-    StateLoadResponse state_load = 1;
-    StateCommitResponse state_commit = 2;
-    Ack ack = 3;
-    Error error = 4;
+    Ack ack = 1;
+    Error error = 2;
   }
-}
-
-message StateLoadResponse {
-  StateSnapshot snapshot = 1;
-}
-
-message StateCommitResponse {
-  bool applied = 1;
 }
 
 message Ack {}

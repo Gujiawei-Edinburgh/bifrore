@@ -61,7 +61,7 @@ spec:
         return
       end
 
-      local batch = ctx.state:get("batch") or {}
+      local batch = ctx.memory:get("batch") or {}
       batch[#batch + 1] = {
         source = msg.source.name,
         topic = msg.topic.raw,
@@ -72,7 +72,7 @@ spec:
       }
 
       if #batch < 100 then
-        ctx.state:set("batch", batch)
+        ctx.memory:set("batch", batch)
         return
       end
 
@@ -80,7 +80,7 @@ spec:
         count = #batch,
         items = batch
       })
-      ctx.state:delete("batch")
+      ctx.memory:delete("batch")
     end
 ---
 apiVersion: tenon.apache.org/v1alpha1

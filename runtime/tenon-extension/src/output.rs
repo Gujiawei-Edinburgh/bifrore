@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub use tenon_message::state::{StateMutation, StateSnapshot};
-
 pub type ExtensionValue = serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,7 +60,6 @@ impl AuthResult {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InvocationOutcome {
-    pub state_delta: Vec<StateMutation>,
     pub emits: Vec<EmitRecord>,
 }
 

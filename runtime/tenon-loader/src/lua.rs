@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tenon_extension::{
-    Context, Message, MqttMetadata, ScriptApi, SourceContext, StateView, Topic,
+    Context, MemoryView, Message, MqttMetadata, ScriptApi, SourceContext, Topic,
 };
 use tree_sitter::{Node, Parser, Tree};
 
@@ -144,7 +144,7 @@ enum StaticType {
     Unknown,
     Ctx,
     Msg,
-    State,
+    Memory,
     Source,
     Topic,
     Metadata,
@@ -298,7 +298,7 @@ fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<
     let field = field.utf8_text(source).unwrap_or_default();
     match table_ty {
         StaticType::Ctx => match field {
-            field if field == script_field::<Context>("state") => Ok(StaticType::State),
+            field if field == script_field::<Context>("memory") => Ok(StaticType::Memory),
             field if field == script_field::<Context>("source") => Ok(StaticType::Source),
             field if field == script_field::<Context>("emit") => Ok(StaticType::EmitFn),
             _ => Err(format!("invalid ctx field: {field}")),
@@ -324,7 +324,9 @@ fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<
             field if MqttMetadata::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
             _ => Err(format!("invalid metadata field: {field}")),
         },
-        StaticType::State => Err(format!("invalid state field: {field}; use state:get/set/delete")),
+        StaticType::Memory => Err(format!(
+            "invalid memory field: {field}; use memory:get/set/delete"
+        )),
         StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
         StaticType::Unknown | StaticType::EmitFn => Ok(StaticType::Unknown),
     }
@@ -340,9 +342,9 @@ fn infer_method_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Resu
     let table_ty = infer_expr_type(table, source, env)?;
     let method = method.utf8_text(source).unwrap_or_default();
     match table_ty {
-        StaticType::State => match method {
-            method if StateView::METHODS.contains(&method) => Ok(StaticType::Unknown),
-            _ => Err(format!("invalid state method: {method}")),
+        StaticType::Memory => match method {
+            method if MemoryView::METHODS.contains(&method) => Ok(StaticType::Unknown),
+            _ => Err(format!("invalid memory method: {method}")),
         },
         StaticType::Unknown => Ok(StaticType::Unknown),
         _ => Err(format!("invalid method call on known Tenon type: {method}")),
@@ -533,7 +535,7 @@ end
         validate_extension_function(
             r#"
 function on_message(c, m)
-  local state = c.state
+  local memory = c.memory
   local payload = m.payload
   local topic = m.topic
   local source = m.source
@@ -545,7 +547,7 @@ function on_message(c, m)
   local name = source.name
   local qos = metadata.qos
   local prop = properties["x"]
-  state:set("last", temp)
+  memory:set("last", temp)
   c.emit({ temp = temp, first = first, raw = raw, name = name, qos = qos, prop = prop })
 end
 "#,
@@ -588,19 +590,19 @@ end
     }
 
     #[test]
-    fn rejects_invalid_state_method() {
+    fn rejects_invalid_memory_method() {
         let error = validate_extension_function(
             r#"
 function on_message(ctx, msg)
-  local s = ctx.state
-  s:put("a", "b")
+  local m = ctx.memory
+  m:put("a", "b")
 end
 "#,
             PROCESS_ON_MESSAGE_FN,
             2,
         )
-        .expect_err("invalid state method");
-        assert!(error.contains("invalid state method: put"));
+        .expect_err("invalid memory method");
+        assert!(error.contains("invalid memory method: put"));
     }
 
     #[test]

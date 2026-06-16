@@ -9,7 +9,7 @@ pub struct ExtensionError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionErrorKind {
     InvalidArgument,
-    State,
+    Memory,
     Emit,
     Script,
 }
@@ -26,8 +26,8 @@ impl ExtensionError {
         Self::new(ExtensionErrorKind::InvalidArgument, message)
     }
 
-    pub fn state(message: impl Into<String>) -> Self {
-        Self::new(ExtensionErrorKind::State, message)
+    pub fn memory(message: impl Into<String>) -> Self {
+        Self::new(ExtensionErrorKind::Memory, message)
     }
 
     pub fn emit(message: impl Into<String>) -> Self {

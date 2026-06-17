@@ -1,6 +1,6 @@
 pub use crate::daemon::v1::{
     auth_plan, AuthPlan, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, ModulePlan,
-    ModuleRuntime, MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
+    ModuleRuntime, MqttBrokerPlan, MqttClientIds, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
     PayloadDecodePlan, ProcessPlan, ResourceId, ResourceKind, UsernamePasswordAuth,
 };
 

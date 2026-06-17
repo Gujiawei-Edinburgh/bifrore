@@ -244,6 +244,7 @@ impl ResourceRegistry {
                     decode: PayloadDecodePlan::Json as i32,
                 })
                 .collect(),
+            client_count: spec.client_count,
         })
     }
 

@@ -9,6 +9,8 @@ use super::ManifestResourceKind;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MqttSourceSpec {
     pub(crate) broker: MqttBrokerSpec,
+    #[serde(default = "default_client_count")]
+    pub(crate) client_count: u32,
     #[serde(default)]
     pub(crate) auth: Option<AuthSpec>,
     pub(crate) subscriptions: Vec<MqttSubscriptionSpec>,
@@ -19,6 +21,9 @@ impl MqttSourceSpec {
         require_non_empty("broker.host", &self.broker.host)?;
         if self.broker.port == 0 {
             return Err(resource_error("broker.port must be greater than 0"));
+        }
+        if self.client_count == 0 {
+            return Err(resource_error("clientCount must be greater than 0"));
         }
         if self.subscriptions.is_empty() {
             return Err(resource_error("MqttSource must declare at least one subscription"));
@@ -31,6 +36,10 @@ impl MqttSourceSpec {
         }
         Ok(())
     }
+}
+
+fn default_client_count() -> u32 {
+    1
 }
 
 #[derive(Debug, Deserialize)]

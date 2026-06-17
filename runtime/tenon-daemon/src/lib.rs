@@ -1,7 +1,7 @@
 mod store;
 mod worker;
 
-pub use store::{InMemoryPlanStore, PlanStore};
+pub use store::{DaemonStore, InMemoryDaemonStore};
 pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerLauncher, WorkerStatus};
 
 use std::collections::HashMap;
@@ -63,13 +63,13 @@ pub struct ActiveDeployment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeploymentKey {
+pub struct ResourceKey {
     pub kind: i32,
     pub name: String,
     pub version: String,
 }
 
-impl DeploymentKey {
+impl ResourceKey {
     pub fn from_id(id: &ResourceId) -> Self {
         Self {
             kind: id.kind,
@@ -79,23 +79,43 @@ impl DeploymentKey {
     }
 
     pub fn as_store_key(&self) -> String {
-        format!("{}/{}/{}", self.kind, self.name, self.version)
+        format!(
+            "{}:{}:{}",
+            resource_kind_label(self.kind),
+            self.name,
+            self.version
+        )
+    }
+}
+
+pub type DeploymentKey = ResourceKey;
+
+fn resource_kind_label(kind: i32) -> String {
+    match tenon_message::plan::ResourceKind::try_from(kind) {
+        Ok(tenon_message::plan::ResourceKind::MqttSource) => "mqtt_source".to_string(),
+        Ok(tenon_message::plan::ResourceKind::Module) => "module".to_string(),
+        Ok(tenon_message::plan::ResourceKind::Egress) => "egress".to_string(),
+        Ok(tenon_message::plan::ResourceKind::Process) => "process".to_string(),
+        Ok(tenon_message::plan::ResourceKind::Pipeline) => "pipeline".to_string(),
+        Ok(tenon_message::plan::ResourceKind::Unspecified) | Err(_) => {
+            format!("kind_{}", kind)
+        }
     }
 }
 
 pub struct TenonDaemon<L, P> {
     worker_launcher: L,
-    plan_store: P,
+    store: P,
     deployments: HashMap<DeploymentKey, ActiveDeployment>,
 }
 
-impl TenonDaemon<NoopWorkerLauncher, InMemoryPlanStore> {
+impl TenonDaemon<NoopWorkerLauncher, InMemoryDaemonStore> {
     pub fn new() -> Self {
-        Self::with_components(NoopWorkerLauncher::default(), InMemoryPlanStore::default())
+        Self::with_components(NoopWorkerLauncher::default(), InMemoryDaemonStore::default())
     }
 }
 
-impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryPlanStore> {
+impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryDaemonStore> {
     fn default() -> Self {
         Self::new()
     }
@@ -104,12 +124,12 @@ impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryPlanStore> {
 impl<L, P> TenonDaemon<L, P>
 where
     L: WorkerLauncher,
-    P: PlanStore,
+    P: DaemonStore,
 {
-    pub fn with_components(worker_launcher: L, plan_store: P) -> Self {
+    pub fn with_components(worker_launcher: L, store: P) -> Self {
         Self {
             worker_launcher,
-            plan_store,
+            store,
             deployments: HashMap::new(),
         }
     }
@@ -124,7 +144,7 @@ where
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
         let key = DeploymentKey::from_id(&id);
-        self.plan_store.save_plan(&key, plan.clone()).await?;
+        self.store.save_plan(&key, plan.clone()).await?;
         self.stop_worker_by_key(&key)?;
 
         let worker = self.worker_launcher.start(plan)?;
@@ -145,7 +165,7 @@ where
 
     pub async fn load_plan(&self, id: &ResourceId) -> DaemonResult<Option<DeploymentPlan>> {
         let key = DeploymentKey::from_id(id);
-        self.plan_store.load_plan(&key).await
+        self.store.load_plan(&key).await
     }
 
     pub fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {

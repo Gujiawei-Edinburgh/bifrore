@@ -73,6 +73,11 @@ message MqttSourcePlan {
   MqttBrokerPlan broker = 2;
   AuthPlan auth = 3;
   repeated MqttSubscriptionPlan subscriptions = 4;
+  uint32 client_count = 5;
+}
+
+message MqttClientIds {
+  repeated string client_ids = 1;
 }
 
 message MqttBrokerPlan {

@@ -25,6 +25,44 @@ message DeploymentPlan {
   EgressPlan egress = 5;
 }
 
+message ApplyDeploymentRequest {
+  DeploymentPlan plan = 1;
+}
+
+message ApplyDeploymentResponse {
+  bool accepted = 1;
+  ResourceId active_plan = 2;
+  ApplyMode mode = 3;
+  string message = 4;
+}
+
+enum ApplyMode {
+  APPLY_MODE_UNSPECIFIED = 0;
+  APPLY_MODE_STARTED = 1;
+  APPLY_MODE_HOT_RELOAD = 2;
+  APPLY_MODE_REJECTED_RESTART_REQUIRED = 3;
+  APPLY_MODE_REJECTED_WORKER_ERROR = 4;
+}
+
+message DeploymentUpdate {
+  ResourceId from_plan = 1;
+  ResourceId to_plan = 2;
+  oneof update {
+    ProcessUpdate process = 3;
+  }
+}
+
+message DeploymentUpdateResponse {
+  bool accepted = 1;
+  ResourceId active_plan = 2;
+  ApplyMode mode = 3;
+  string message = 4;
+}
+
+message ProcessUpdate {
+  ProcessPlan process = 1;
+}
+
 enum ExecutionMode {
   EXECUTION_MODE_UNSPECIFIED = 0;
   EXECUTION_MODE_INTRA_PROC = 1;
@@ -111,14 +149,9 @@ message Heartbeat {
 
 message DaemonEnvelope {
   oneof payload {
-    Ack ack = 1;
-    Error error = 2;
+    ApplyDeploymentRequest apply_deployment = 3;
+    ApplyDeploymentResponse apply_deployment_response = 4;
+    DeploymentUpdate deployment_update = 5;
+    DeploymentUpdateResponse deployment_update_response = 6;
   }
-}
-
-message Ack {}
-
-message Error {
-  string code = 1;
-  string message = 2;
 }

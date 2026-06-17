@@ -2,13 +2,37 @@ syntax = "proto3";
 
 package tenon.cp.v1;
 
+import "daemon-message.proto";
+
 message ApplyManifestRequest {
   string manifest = 1;
 }
 
 message ApplyManifestResponse {
   bool accepted = 1;
-  string message = 2;
+  tenon.daemon.v1.ResourceId active_plan = 2;
+  ApplyManifestMode mode = 3;
+  string message = 4;
+}
+
+enum ApplyManifestMode {
+  APPLY_MANIFEST_MODE_UNSPECIFIED = 0;
+  APPLY_MANIFEST_MODE_STARTED = 1;
+  APPLY_MANIFEST_MODE_HOT_RELOAD = 2;
+  APPLY_MANIFEST_MODE_REJECTED_RESTART_REQUIRED = 3;
+  APPLY_MANIFEST_MODE_REJECTED_WORKER_ERROR = 4;
+  APPLY_MANIFEST_MODE_REJECTED_INVALID_MANIFEST = 5;
+}
+
+message ApplyDeploymentRequest {
+  tenon.daemon.v1.DeploymentPlan plan = 1;
+}
+
+message ApplyDeploymentResponse {
+  bool accepted = 1;
+  tenon.daemon.v1.ResourceId active_plan = 2;
+  ApplyManifestMode mode = 3;
+  string message = 4;
 }
 
 message GetPipelineRequest {
@@ -16,7 +40,9 @@ message GetPipelineRequest {
 }
 
 message GetPipelineResponse {
-  string manifest = 1;
+  bool found = 1;
+  string manifest = 2;
+  string message = 3;
 }
 
 message ControlPlaneEnvelope {
@@ -25,11 +51,7 @@ message ControlPlaneEnvelope {
     ApplyManifestResponse apply_manifest_response = 2;
     GetPipelineRequest get_pipeline = 3;
     GetPipelineResponse get_pipeline_response = 4;
-    Error error = 5;
+    ApplyDeploymentRequest apply_deployment = 6;
+    ApplyDeploymentResponse apply_deployment_response = 7;
   }
-}
-
-message Error {
-  string code = 1;
-  string message = 2;
 }

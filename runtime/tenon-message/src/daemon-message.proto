@@ -25,6 +25,14 @@ message DeploymentPlan {
   EgressPlan egress = 5;
 }
 
+message StoredDeploymentPlan {
+  ResourceId id = 1;
+  ExecutionMode execution = 2;
+  repeated ResourceId source_refs = 3;
+  ResourceId process_ref = 4;
+  ResourceId egress_ref = 5;
+}
+
 message ApplyDeploymentRequest {
   DeploymentPlan plan = 1;
 }

@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 prost = "0.14"
 tenon-message = { path = "../tenon-message" }
+
+[dev-dependencies]
+futures = "0.3"

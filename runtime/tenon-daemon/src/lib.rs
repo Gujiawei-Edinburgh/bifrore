@@ -144,7 +144,7 @@ where
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
         let key = DeploymentKey::from_id(&id);
-        self.store.save_plan(&key, plan.clone()).await?;
+        self.store.save_plan(plan.clone()).await?;
         self.stop_worker_by_key(&key)?;
 
         let worker = self.worker_launcher.start(plan)?;

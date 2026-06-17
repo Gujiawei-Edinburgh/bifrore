@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use tenon_message::plan::{
     DeploymentPlan, EgressPlan, MqttClientIds, MqttSourcePlan, ProcessPlan, ResourceId,
-    ResourceKind,
+    ResourceKind, StoredDeploymentPlan,
 };
 
 const PLAN_LABEL: &str = "deployment plan";
@@ -20,7 +20,6 @@ const MQTT_CLIENT_IDS_KEY_PREFIX: &[u8] = b"mqtt_source_client_ids";
 pub trait DaemonStore {
     fn save_plan<'a>(
         &'a mut self,
-        key: &'a ResourceKey,
         plan: DeploymentPlan,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
 
@@ -70,11 +69,12 @@ impl InMemoryDaemonStore {
 impl DaemonStore for InMemoryDaemonStore {
     fn save_plan<'a>(
         &'a mut self,
-        key: &'a ResourceKey,
         plan: DeploymentPlan,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a {
         async move {
-            self.save_message(plan_key(key), &plan);
+            let key = resource_key_from_required_id(plan.id.as_ref(), ResourceKind::Pipeline)?;
+            let stored_plan = stored_plan_from_deployment_plan(&plan)?;
+            self.save_message(plan_key(&key), &stored_plan);
             self.save_plan_resources(&plan)?;
             Ok(())
         }
@@ -84,7 +84,14 @@ impl DaemonStore for InMemoryDaemonStore {
         &'a self,
         key: &'a ResourceKey,
     ) -> impl Future<Output = DaemonResult<Option<DeploymentPlan>>> + Send + 'a {
-        async move { self.load_message(&plan_key(key), PLAN_LABEL) }
+        async move {
+            let Some(stored_plan) =
+                self.load_message::<StoredDeploymentPlan>(&plan_key(key), PLAN_LABEL)?
+            else {
+                return Ok(None);
+            };
+            self.resolve_stored_plan(stored_plan).map(Some)
+        }
     }
 
     fn load_mqtt_source<'a>(
@@ -133,6 +140,52 @@ impl DaemonStore for InMemoryDaemonStore {
 }
 
 impl InMemoryDaemonStore {
+    fn resolve_stored_plan(&self, stored_plan: StoredDeploymentPlan) -> DaemonResult<DeploymentPlan> {
+        let sources = stored_plan
+            .source_refs
+            .iter()
+            .map(|source_id| {
+                self.load_required_resource::<MqttSourcePlan>(
+                    Some(source_id),
+                    ResourceKind::MqttSource,
+                    MQTT_SOURCE_LABEL,
+                )
+            })
+            .collect::<DaemonResult<Vec<_>>>()?;
+        let process = self.load_required_resource::<ProcessPlan>(
+            stored_plan.process_ref.as_ref(),
+            ResourceKind::Process,
+            PROCESS_LABEL,
+        )?;
+        let egress = self.load_required_resource::<EgressPlan>(
+            stored_plan.egress_ref.as_ref(),
+            ResourceKind::Egress,
+            EGRESS_LABEL,
+        )?;
+
+        Ok(DeploymentPlan {
+            id: stored_plan.id,
+            execution: stored_plan.execution,
+            sources,
+            process: Some(process),
+            egress: Some(egress),
+        })
+    }
+
+    fn load_required_resource<M>(
+        &self,
+        id: Option<&ResourceId>,
+        expected_kind: ResourceKind,
+        label: &str,
+    ) -> DaemonResult<M>
+    where
+        M: Message + Default,
+    {
+        let key = resource_key_from_required_id(id, expected_kind)?;
+        self.load_message::<M>(&resource_key(&key), label)?
+            .ok_or_else(|| DaemonError::not_found(format!("missing {label} {}", key.as_store_key())))
+    }
+
     fn save_plan_resources(&mut self, plan: &DeploymentPlan) -> DaemonResult<()> {
         for source in &plan.sources {
             let key = resource_key_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)?;
@@ -189,6 +242,55 @@ fn resource_key_from_required_id(
     Ok(ResourceKey::from_id(id))
 }
 
+fn stored_plan_from_deployment_plan(plan: &DeploymentPlan) -> DaemonResult<StoredDeploymentPlan> {
+    let source_refs = plan
+        .sources
+        .iter()
+        .map(|source| {
+            resource_id_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)
+                .map(ToOwned::to_owned)
+        })
+        .collect::<DaemonResult<Vec<_>>>()?;
+    let process_ref = Some(
+        resource_id_from_required_id(
+            plan.process.as_ref().and_then(|process| process.id.as_ref()),
+            ResourceKind::Process,
+        )?
+        .clone(),
+    );
+    let egress_ref = Some(
+        resource_id_from_required_id(
+            plan.egress.as_ref().and_then(|egress| egress.id.as_ref()),
+            ResourceKind::Egress,
+        )?
+        .clone(),
+    );
+
+    Ok(StoredDeploymentPlan {
+        id: plan.id.clone(),
+        execution: plan.execution,
+        source_refs,
+        process_ref,
+        egress_ref,
+    })
+}
+
+fn resource_id_from_required_id(
+    id: Option<&ResourceId>,
+    expected_kind: ResourceKind,
+) -> DaemonResult<&ResourceId> {
+    let id = id.ok_or_else(|| {
+        DaemonError::invalid_state(format!("{expected_kind} resource id is missing"))
+    })?;
+    if ResourceKind::try_from(id.kind) != Ok(expected_kind) {
+        return Err(DaemonError::invalid_state(format!(
+            "expected {expected_kind} resource id, got kind {}",
+            id.kind
+        )));
+    }
+    Ok(id)
+}
+
 fn plan_key(key: &ResourceKey) -> Vec<u8> {
     store_key(PLAN_KEY_PREFIX, key)
 }
@@ -207,4 +309,205 @@ fn store_key(prefix: &[u8], key: &ResourceKey) -> Vec<u8> {
     bytes.push(b':');
     bytes.extend_from_slice(key.as_store_key().as_bytes());
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::executor::block_on;
+    use tenon_message::plan::{
+        DeliveryMode, ExecutionMode, MqttBrokerPlan, ModulePlan, ModuleRuntime,
+        PayloadDecodePlan, MqttSubscriptionPlan,
+    };
+
+    #[test]
+    fn builds_readable_byte_keys() {
+        let key = key(ResourceKind::MqttSource, "sensor", "v1");
+
+        assert_eq!(
+            plan_key(&key),
+            b"plan:mqtt_source:sensor:v1".to_vec()
+        );
+        assert_eq!(
+            resource_key(&key),
+            b"resource:mqtt_source:sensor:v1".to_vec()
+        );
+        assert_eq!(
+            client_ids_key(&key),
+            b"mqtt_source_client_ids:mqtt_source:sensor:v1".to_vec()
+        );
+    }
+
+    #[test]
+    fn saves_plan_and_component_resources() {
+        block_on(async {
+            let mut store = InMemoryDaemonStore::new();
+            let plan = plan();
+            let plan_key = key(ResourceKind::Pipeline, "sensor-pipeline", "v2");
+
+            store
+                .save_plan(plan.clone())
+                .await
+                .expect("save plan");
+
+            let stored_plan = StoredDeploymentPlan::decode(
+                store
+                    .entries
+                    .get(&super::plan_key(&plan_key))
+                    .expect("stored plan bytes")
+                    .as_slice(),
+            )
+            .expect("stored plan");
+            assert_eq!(stored_plan.source_refs.len(), 1);
+            let loaded_plan = store
+                .load_plan(&plan_key)
+                .await
+                .expect("load plan")
+                .expect("plan");
+            assert_eq!(loaded_plan, plan);
+
+            let source_id = loaded_plan.sources[0].id.as_ref().expect("source id");
+            let process_id = loaded_plan
+                .process
+                .as_ref()
+                .and_then(|process| process.id.as_ref())
+                .expect("process id");
+            let egress_id = loaded_plan
+                .egress
+                .as_ref()
+                .and_then(|egress| egress.id.as_ref())
+                .expect("egress id");
+
+            assert_eq!(stored_plan.source_refs[0], *source_id);
+            assert_eq!(stored_plan.process_ref.as_ref(), Some(process_id));
+            assert_eq!(stored_plan.egress_ref.as_ref(), Some(egress_id));
+
+            assert_eq!(
+                store
+                    .load_mqtt_source(&ResourceKey::from_id(source_id))
+                    .await
+                    .expect("load source")
+                    .expect("source")
+                    .client_count,
+                3
+            );
+            assert_eq!(
+                store
+                    .load_process(&ResourceKey::from_id(process_id))
+                    .await
+                    .expect("load process")
+                    .expect("process")
+                    .module
+                    .expect("module")
+                    .source,
+                "function on_message(ctx, msg) end"
+            );
+            assert_eq!(
+                store
+                    .load_egress(&ResourceKey::from_id(egress_id))
+                    .await
+                    .expect("load egress")
+                    .expect("egress")
+                    .delivery,
+                DeliveryMode::Single as i32
+            );
+        });
+    }
+
+    #[test]
+    fn saves_and_loads_mqtt_client_ids() {
+        block_on(async {
+            let mut store = InMemoryDaemonStore::new();
+            let source_key = key(ResourceKind::MqttSource, "sensor-source", "v1");
+
+            assert!(
+                store
+                    .load_mqtt_client_ids(&source_key)
+                    .await
+                    .expect("load missing ids")
+                    .is_empty()
+            );
+
+            store
+                .save_mqtt_client_ids(
+                    &source_key,
+                    vec!["client-0".to_string(), "client-1".to_string()],
+                )
+                .await
+                .expect("save ids");
+
+            assert_eq!(
+                store
+                    .load_mqtt_client_ids(&source_key)
+                    .await
+                    .expect("load ids"),
+                vec!["client-0".to_string(), "client-1".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_plan_with_wrong_resource_kind() {
+        block_on(async {
+            let mut store = InMemoryDaemonStore::new();
+            let mut plan = plan();
+            plan.sources[0].id = Some(id(ResourceKind::Process, "sensor-source", "v1"));
+
+            let error = store
+                .save_plan(plan)
+                .await
+                .expect_err("save should reject wrong kind");
+
+            assert_eq!(error.kind, crate::DaemonErrorKind::InvalidState);
+            assert!(error.message.contains("expected MqttSource resource id"));
+        });
+    }
+
+    fn plan() -> DeploymentPlan {
+        DeploymentPlan {
+            id: Some(id(ResourceKind::Pipeline, "sensor-pipeline", "v2")),
+            execution: ExecutionMode::IntraProc as i32,
+            sources: vec![MqttSourcePlan {
+                id: Some(id(ResourceKind::MqttSource, "sensor-source", "v1")),
+                broker: Some(MqttBrokerPlan {
+                    host: "127.0.0.1".to_string(),
+                    port: 1883,
+                }),
+                auth: None,
+                subscriptions: vec![MqttSubscriptionPlan {
+                    topic: "sensor/+/data".to_string(),
+                    decode: PayloadDecodePlan::Json as i32,
+                }],
+                client_count: 3,
+            }],
+            process: Some(ProcessPlan {
+                id: Some(id(ResourceKind::Process, "sensor-process", "v5")),
+                module: Some(ModulePlan {
+                    id: Some(id(ResourceKind::Module, "sensor-module", "v5")),
+                    runtime: ModuleRuntime::Lua as i32,
+                    source: "function on_message(ctx, msg) end".to_string(),
+                }),
+            }),
+            egress: Some(EgressPlan {
+                id: Some(id(ResourceKind::Egress, "sensor-egress", "v1")),
+                delivery: DeliveryMode::Single as i32,
+            }),
+        }
+    }
+
+    fn key(kind: ResourceKind, name: &str, version: &str) -> ResourceKey {
+        ResourceKey {
+            kind: kind as i32,
+            name: name.to_string(),
+            version: version.to_string(),
+        }
+    }
+
+    fn id(kind: ResourceKind, name: &str, version: &str) -> ResourceId {
+        ResourceId {
+            kind: kind as i32,
+            name: name.to_string(),
+            version: version.to_string(),
+        }
+    }
 }

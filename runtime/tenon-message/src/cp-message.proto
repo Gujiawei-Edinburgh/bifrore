@@ -24,13 +24,13 @@ enum ApplyManifestMode {
   APPLY_MANIFEST_MODE_REJECTED_INVALID_MANIFEST = 5;
 }
 
-message ApplyDeploymentRequest {
-  tenon.daemon.v1.DeploymentPlan plan = 1;
+message PutResourceRequest {
+  tenon.daemon.v1.Resource resource = 1;
 }
 
-message ApplyDeploymentResponse {
+message PutResourceResponse {
   bool accepted = 1;
-  tenon.daemon.v1.ResourceId active_plan = 2;
+  tenon.daemon.v1.ResourceId id = 2;
   ApplyManifestMode mode = 3;
   string message = 4;
 }
@@ -51,7 +51,7 @@ message ControlPlaneEnvelope {
     ApplyManifestResponse apply_manifest_response = 2;
     GetPipelineRequest get_pipeline = 3;
     GetPipelineResponse get_pipeline_response = 4;
-    ApplyDeploymentRequest apply_deployment = 6;
-    ApplyDeploymentResponse apply_deployment_response = 7;
+    PutResourceRequest put_resource = 6;
+    PutResourceResponse put_resource_response = 7;
   }
 }

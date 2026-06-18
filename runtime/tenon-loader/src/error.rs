@@ -11,7 +11,7 @@ pub enum LoaderErrorKind {
     ManifestParsing,
     ResourceValidation,
     ReferenceResolution,
-    ModuleValidation,
+    ScriptValidation,
 }
 
 impl LoaderError {

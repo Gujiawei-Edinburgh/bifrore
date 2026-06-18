@@ -5,16 +5,15 @@ use serde::Deserialize;
 mod spec;
 
 use spec::{
-    require_non_empty, require_ref_kind, resource_error, AuthSpec, EgressSpec, ModuleSpec,
-    MqttSourceSpec, PipelineSpec, ProcessSpec, ResourceRef,
+    require_non_empty, require_ref_kind, resource_error, AuthSpec, EgressSpec, MqttSourceSpec,
+    PipelineSpec, ProcessSpec, ResourceRef,
 };
 
 use crate::{
     auth_plan, AuthPlan, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError,
-    LoaderErrorKind, ModulePlan, ModuleRuntime, MqttBrokerPlan, MqttSourcePlan,
-    MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan, ResourceId,
-    ResourceKind as PlanResourceKind,
-    UsernamePasswordAuth,
+    LoaderErrorKind, MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
+    PayloadDecodePlan, ProcessPlan, ResourceId, ResourceKind as PlanResourceKind, ScriptModule,
+    ScriptRuntime, UsernamePasswordAuth,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";
@@ -23,7 +22,6 @@ const API_VERSION: &str = "tenon.apache.org/v1alpha1";
 #[serde(rename_all = "PascalCase")]
 pub(crate) enum ManifestResourceKind {
     MqttSource,
-    Module,
     Egress,
     Process,
     Pipeline,
@@ -33,7 +31,6 @@ impl ManifestResourceKind {
     fn into_plan_kind(self) -> PlanResourceKind {
         match self {
             Self::MqttSource => PlanResourceKind::MqttSource,
-            Self::Module => PlanResourceKind::Module,
             Self::Egress => PlanResourceKind::Egress,
             Self::Process => PlanResourceKind::Process,
             Self::Pipeline => PlanResourceKind::Pipeline,
@@ -45,7 +42,6 @@ impl std::fmt::Display for ManifestResourceKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::MqttSource => "MqttSource",
-            Self::Module => "Module",
             Self::Egress => "Egress",
             Self::Process => "Process",
             Self::Pipeline => "Pipeline",
@@ -136,7 +132,6 @@ pub(crate) struct ResourceMetadata {
 fn validate_spec(resource: &ResourceDocument) -> Result<(), LoaderError> {
     match resource.kind {
         ManifestResourceKind::MqttSource => parse_spec::<MqttSourceSpec>(resource)?.validate(),
-        ManifestResourceKind::Module => parse_spec::<ModuleSpec>(resource)?.validate(),
         ManifestResourceKind::Egress => parse_spec::<EgressSpec>(resource)?.validate(),
         ManifestResourceKind::Process => parse_spec::<ProcessSpec>(resource)?.validate(),
         ManifestResourceKind::Pipeline => parse_spec::<PipelineSpec>(resource)?.validate(),
@@ -145,7 +140,6 @@ fn validate_spec(resource: &ResourceDocument) -> Result<(), LoaderError> {
 
 struct ResourceRegistry {
     sources: HashMap<ResourceKey, ResourceDocument>,
-    modules: HashMap<ResourceKey, ResourceDocument>,
     processes: HashMap<ResourceKey, ResourceDocument>,
     egresses: HashMap<ResourceKey, ResourceDocument>,
     pipelines: Vec<ResourceDocument>,
@@ -155,7 +149,6 @@ impl ResourceRegistry {
     fn new(resources: Vec<ResourceDocument>) -> Result<Self, LoaderError> {
         let mut registry = Self {
             sources: HashMap::new(),
-            modules: HashMap::new(),
             processes: HashMap::new(),
             egresses: HashMap::new(),
             pipelines: Vec::new(),
@@ -177,9 +170,6 @@ impl ResourceRegistry {
             match resource.kind {
                 ManifestResourceKind::MqttSource => {
                     registry.sources.insert(key, resource);
-                }
-                ManifestResourceKind::Module => {
-                    registry.modules.insert(key, resource);
                 }
                 ManifestResourceKind::Process => {
                     registry.processes.insert(key, resource);
@@ -235,7 +225,7 @@ impl ResourceRegistry {
                 host: spec.broker.host,
                 port: spec.broker.port as u32,
             }),
-            auth: Some(self.resolve_auth(&resource.id(), spec.auth)?),
+            auth: Some(self.resolve_auth(spec.auth)?),
             subscriptions: spec
                 .subscriptions
                 .into_iter()
@@ -248,11 +238,7 @@ impl ResourceRegistry {
         })
     }
 
-    fn resolve_auth(
-        &self,
-        source_id: &ResourceId,
-        auth: Option<AuthSpec>,
-    ) -> Result<AuthPlan, LoaderError> {
+    fn resolve_auth(&self, auth: Option<AuthSpec>) -> Result<AuthPlan, LoaderError> {
         match auth {
             None => Ok(AuthPlan {
                 kind: Some(auth_plan::Kind::None(NoAuth {})),
@@ -263,15 +249,10 @@ impl ResourceRegistry {
                     password,
                 })),
             }),
-            Some(AuthSpec::Module { module }) => Ok(AuthPlan {
-                kind: Some(auth_plan::Kind::Module(ModulePlan {
-                    id: Some(ResourceId {
-                        kind: PlanResourceKind::Module as i32,
-                        name: format!("{}-auth", source_id.name),
-                        version: source_id.version.clone(),
-                    }),
-                    runtime: ModuleRuntime::Lua as i32,
-                    source: module.source,
+            Some(AuthSpec::Script { script }) => Ok(AuthPlan {
+                kind: Some(auth_plan::Kind::Script(ScriptModule {
+                    runtime: ScriptRuntime::Lua as i32,
+                    source: script.source,
                 })),
             }),
         }
@@ -286,20 +267,7 @@ impl ResourceRegistry {
         let spec = parse_spec::<ProcessSpec>(resource)?;
         Ok(ProcessPlan {
             id: Some(resource.id()),
-            module: Some(self.resolve_module(&spec.module_ref)?),
-        })
-    }
-
-    fn resolve_module(&self, reference: &ResourceRef) -> Result<ModulePlan, LoaderError> {
-        require_ref_kind(reference, ManifestResourceKind::Module, "Process.moduleRef")?;
-        let resource = self
-            .modules
-            .get(&ResourceKey::from_ref(ManifestResourceKind::Module, reference))
-            .ok_or_else(|| reference_error(format!("missing Module {}", reference.display())))?;
-        let spec = parse_spec::<ModuleSpec>(resource)?;
-        Ok(ModulePlan {
-            id: Some(resource.id()),
-            runtime: ModuleRuntime::Lua as i32,
+            runtime: ScriptRuntime::Lua as i32,
             source: spec.source,
         })
     }

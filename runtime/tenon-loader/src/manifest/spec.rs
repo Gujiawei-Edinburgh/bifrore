@@ -55,8 +55,8 @@ pub(crate) enum AuthSpec {
         username: String,
         password: String,
     },
-    Module {
-        module: InlineModuleSpec,
+    Script {
+        script: InlineScriptSpec,
     },
 }
 
@@ -67,8 +67,8 @@ impl AuthSpec {
                 require_non_empty("auth.username", username)?;
                 require_non_empty("auth.password", password)
             }
-            Self::Module { module } => {
-                module.validate()?;
+            Self::Script { script } => {
+                script.validate()?;
                 Ok(())
             }
         }
@@ -76,16 +76,16 @@ impl AuthSpec {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct InlineModuleSpec {
-    pub(crate) runtime: ModuleRuntimeSpec,
+pub(crate) struct InlineScriptSpec {
+    pub(crate) runtime: ScriptRuntimeSpec,
     pub(crate) source: String,
 }
 
-impl InlineModuleSpec {
+impl InlineScriptSpec {
     fn validate(&self) -> Result<(), LoaderError> {
         match self.runtime {
-            ModuleRuntimeSpec::Lua => {
-                validate_lua_function("auth.module.source", &self.source, AUTH_CREDENTIALS_FN, 1)
+            ScriptRuntimeSpec::Lua => {
+                validate_lua_function("auth.script.source", &self.source, AUTH_CREDENTIALS_FN, 1)
             }
         }
     }
@@ -112,24 +112,9 @@ pub(crate) enum PayloadDecodeSpec {
     Json,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ModuleSpec {
-    pub(crate) runtime: ModuleRuntimeSpec,
-    pub(crate) source: String,
-}
-
-impl ModuleSpec {
-    pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        match self.runtime {
-            ModuleRuntimeSpec::Lua => {}
-        }
-        validate_lua_function("Module.spec.source", &self.source, PROCESS_ON_MESSAGE_FN, 2)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum ModuleRuntimeSpec {
+pub(crate) enum ScriptRuntimeSpec {
     Lua,
 }
 
@@ -165,17 +150,16 @@ impl From<DeliveryModeSpec> for DeliveryMode {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProcessSpec {
-    pub(crate) module_ref: ResourceRef,
+    pub(crate) runtime: ScriptRuntimeSpec,
+    pub(crate) source: String,
 }
 
 impl ProcessSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        self.module_ref.validate("Process.moduleRef")?;
-        require_ref_kind(
-            &self.module_ref,
-            ManifestResourceKind::Module,
-            "Process.moduleRef",
-        )
+        match self.runtime {
+            ScriptRuntimeSpec::Lua => {}
+        }
+        validate_lua_function("Process.spec.source", &self.source, PROCESS_ON_MESSAGE_FN, 2)
     }
 }
 
@@ -267,8 +251,8 @@ fn reference_error(message: impl Into<String>) -> LoaderError {
     LoaderError::new(LoaderErrorKind::ReferenceResolution, message)
 }
 
-fn module_error(message: impl Into<String>) -> LoaderError {
-    LoaderError::new(LoaderErrorKind::ModuleValidation, message)
+fn script_error(message: impl Into<String>) -> LoaderError {
+    LoaderError::new(LoaderErrorKind::ScriptValidation, message)
 }
 
 fn validate_lua_function(
@@ -278,8 +262,8 @@ fn validate_lua_function(
     expected_arity: usize,
 ) -> Result<(), LoaderError> {
     if source.trim().is_empty() {
-        return Err(module_error(format!("{field} must not be empty")));
+        return Err(script_error(format!("{field} must not be empty")));
     }
     lua::validate_extension_function(source, function_name, expected_arity)
-        .map_err(|error| module_error(format!("{field}: {error}")))
+        .map_err(|error| script_error(format!("{field}: {error}")))
 }

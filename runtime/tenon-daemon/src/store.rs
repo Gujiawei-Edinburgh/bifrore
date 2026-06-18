@@ -3,8 +3,8 @@ use prost::Message;
 use std::collections::HashMap;
 use std::future::Future;
 use tenon_message::plan::{
-    DeploymentPlan, EgressPlan, MqttClientIds, MqttSourcePlan, ProcessPlan, ResourceId,
-    ResourceKind, ResourceReferences, StoredDeploymentPlan,
+    resource, DeploymentPlan, EgressPlan, MqttClientIds, MqttSourcePlan, ProcessPlan, Resource,
+    ResourceId, ResourceKind, ResourceReferences, StoredDeploymentPlan,
 };
 
 const PLAN_LABEL: &str = "deployment plan";
@@ -25,25 +25,20 @@ pub trait DaemonStore {
         plan: DeploymentPlan,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
 
+    fn save_resource<'a>(
+        &'a mut self,
+        resource: Resource,
+    ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
+
     fn load_plan<'a>(
         &'a self,
         key: &'a ResourceKey,
     ) -> impl Future<Output = DaemonResult<Option<DeploymentPlan>>> + Send + 'a;
 
-    fn load_mqtt_source<'a>(
+    fn load_resource<'a>(
         &'a self,
         key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<MqttSourcePlan>>> + Send + 'a;
-
-    fn load_process<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<ProcessPlan>>> + Send + 'a;
-
-    fn load_egress<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<EgressPlan>>> + Send + 'a;
+    ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a;
 
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
@@ -60,6 +55,11 @@ pub trait DaemonStore {
         &'a self,
         key: &'a ResourceKey,
     ) -> impl Future<Output = DaemonResult<Vec<ResourceId>>> + Send + 'a;
+
+    fn delete_resource<'a>(
+        &'a mut self,
+        key: &'a ResourceKey,
+    ) -> impl Future<Output = DaemonResult<bool>> + Send + 'a;
 }
 
 #[derive(Debug, Default)]
@@ -81,9 +81,51 @@ impl DaemonStore for InMemoryDaemonStore {
         async move {
             let key = resource_key_from_required_id(plan.id.as_ref(), ResourceKind::Pipeline)?;
             let stored_plan = stored_plan_from_deployment_plan(&plan)?;
+            if let Some(previous_plan) =
+                self.load_message::<StoredDeploymentPlan>(&plan_key(&key), PLAN_LABEL)?
+            {
+                self.remove_plan_reverse_refs(&previous_plan)?;
+            }
             self.save_message(plan_key(&key), &stored_plan);
             self.save_plan_resources(&plan)?;
             self.save_plan_reverse_refs(&stored_plan)?;
+            Ok(())
+        }
+    }
+
+    fn save_resource<'a>(
+        &'a mut self,
+        resource: Resource,
+    ) -> impl Future<Output = DaemonResult<()>> + Send + 'a {
+        async move {
+            match resource.kind {
+                Some(resource::Kind::Pipeline(pipeline)) => {
+                    let key =
+                        resource_key_from_required_id(pipeline.id.as_ref(), ResourceKind::Pipeline)?;
+                    if let Some(previous_plan) =
+                        self.load_message::<StoredDeploymentPlan>(&plan_key(&key), PLAN_LABEL)?
+                    {
+                        self.remove_plan_reverse_refs(&previous_plan)?;
+                    }
+                    self.save_message(plan_key(&key), &pipeline);
+                    self.save_plan_reverse_refs(&pipeline)?;
+                }
+                Some(resource::Kind::MqttSource(source)) => {
+                    let key =
+                        resource_key_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)?;
+                    self.save_message(resource_key(&key), &source);
+                }
+                Some(resource::Kind::Process(process)) => {
+                    let key =
+                        resource_key_from_required_id(process.id.as_ref(), ResourceKind::Process)?;
+                    self.save_message(resource_key(&key), &process);
+                }
+                Some(resource::Kind::Egress(egress)) => {
+                    let key = resource_key_from_required_id(egress.id.as_ref(), ResourceKind::Egress)?;
+                    self.save_message(resource_key(&key), &egress);
+                }
+                None => return Err(DaemonError::invalid_state("resource payload is missing")),
+            }
             Ok(())
         }
     }
@@ -102,25 +144,38 @@ impl DaemonStore for InMemoryDaemonStore {
         }
     }
 
-    fn load_mqtt_source<'a>(
+    fn load_resource<'a>(
         &'a self,
         key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<MqttSourcePlan>>> + Send + 'a {
-        async move { self.load_message(&resource_key(key), MQTT_SOURCE_LABEL) }
-    }
-
-    fn load_process<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<ProcessPlan>>> + Send + 'a {
-        async move { self.load_message(&resource_key(key), PROCESS_LABEL) }
-    }
-
-    fn load_egress<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<EgressPlan>>> + Send + 'a {
-        async move { self.load_message(&resource_key(key), EGRESS_LABEL) }
+    ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a {
+        async move {
+            match ResourceKind::try_from(key.kind) {
+                Ok(ResourceKind::Pipeline) => Ok(self
+                    .load_message::<StoredDeploymentPlan>(&plan_key(key), PLAN_LABEL)?
+                    .map(|pipeline| Resource {
+                        kind: Some(resource::Kind::Pipeline(pipeline)),
+                    })),
+                Ok(ResourceKind::MqttSource) => Ok(self
+                    .load_message::<MqttSourcePlan>(&resource_key(key), MQTT_SOURCE_LABEL)?
+                    .map(|mqtt_source| Resource {
+                        kind: Some(resource::Kind::MqttSource(mqtt_source)),
+                    })),
+                Ok(ResourceKind::Process) => Ok(self
+                    .load_message::<ProcessPlan>(&resource_key(key), PROCESS_LABEL)?
+                    .map(|process| Resource {
+                        kind: Some(resource::Kind::Process(process)),
+                    })),
+                Ok(ResourceKind::Egress) => Ok(self
+                    .load_message::<EgressPlan>(&resource_key(key), EGRESS_LABEL)?
+                    .map(|egress| Resource {
+                        kind: Some(resource::Kind::Egress(egress)),
+                    })),
+                _ => Err(DaemonError::invalid_state(format!(
+                    "unsupported resource kind {}",
+                    key.kind
+                ))),
+            }
+        }
     }
 
     fn save_mqtt_client_ids<'a>(
@@ -158,6 +213,26 @@ impl DaemonStore for InMemoryDaemonStore {
                 )?
                 .map(|references| references.pipeline_refs)
                 .unwrap_or_default())
+        }
+    }
+
+    fn delete_resource<'a>(
+        &'a mut self,
+        key: &'a ResourceKey,
+    ) -> impl Future<Output = DaemonResult<bool>> + Send + 'a {
+        async move {
+            if ResourceKind::try_from(key.kind) == Ok(ResourceKind::Pipeline) {
+                let Some(stored_plan) =
+                    self.load_message::<StoredDeploymentPlan>(&plan_key(key), PLAN_LABEL)?
+                else {
+                    return Ok(false);
+                };
+                self.remove_plan_reverse_refs(&stored_plan)?;
+                return Ok(self.entries.remove(&plan_key(key)).is_some());
+            }
+
+            self.entries.remove(&client_ids_key(key));
+            Ok(self.entries.remove(&resource_key(key)).is_some())
         }
     }
 }
@@ -249,6 +324,27 @@ impl InMemoryDaemonStore {
         Ok(())
     }
 
+    fn remove_plan_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
+        let pipeline_id =
+            resource_id_from_required_id(stored_plan.id.as_ref(), ResourceKind::Pipeline)?;
+
+        for source_ref in &stored_plan.source_refs {
+            self.remove_reverse_ref(Some(source_ref), ResourceKind::MqttSource, pipeline_id)?;
+        }
+        self.remove_reverse_ref(
+            stored_plan.process_ref.as_ref(),
+            ResourceKind::Process,
+            pipeline_id,
+        )?;
+        self.remove_reverse_ref(
+            stored_plan.egress_ref.as_ref(),
+            ResourceKind::Egress,
+            pipeline_id,
+        )?;
+
+        Ok(())
+    }
+
     fn add_reverse_ref(
         &mut self,
         resource_id: Option<&ResourceId>,
@@ -263,6 +359,30 @@ impl InMemoryDaemonStore {
 
         if !references.pipeline_refs.iter().any(|id| id == pipeline_id) {
             references.pipeline_refs.push(pipeline_id.clone());
+            self.save_message(storage_key, &references);
+        }
+
+        Ok(())
+    }
+
+    fn remove_reverse_ref(
+        &mut self,
+        resource_id: Option<&ResourceId>,
+        expected_kind: ResourceKind,
+        pipeline_id: &ResourceId,
+    ) -> DaemonResult<()> {
+        let key = resource_key_from_required_id(resource_id, expected_kind)?;
+        let storage_key = resource_references_key(&key);
+        let Some(mut references) =
+            self.load_message::<ResourceReferences>(&storage_key, RESOURCE_REFERENCES_LABEL)?
+        else {
+            return Ok(());
+        };
+
+        references.pipeline_refs.retain(|id| id != pipeline_id);
+        if references.pipeline_refs.is_empty() {
+            self.entries.remove(&storage_key);
+        } else {
             self.save_message(storage_key, &references);
         }
 
@@ -384,8 +504,8 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
     use tenon_message::plan::{
-        DeliveryMode, ExecutionMode, MqttBrokerPlan, ModulePlan, ModuleRuntime,
-        PayloadDecodePlan, MqttSubscriptionPlan,
+        resource, DeliveryMode, ExecutionMode, MqttBrokerPlan, PayloadDecodePlan,
+        MqttSubscriptionPlan, ScriptRuntime,
     };
 
     #[test]
@@ -455,32 +575,36 @@ mod tests {
             assert_eq!(stored_plan.egress_ref.as_ref(), Some(egress_id));
 
             assert_eq!(
-                store
-                    .load_mqtt_source(&ResourceKey::from_id(source_id))
-                    .await
-                    .expect("load source")
-                    .expect("source")
-                    .client_count,
+                loaded_mqtt_source(
+                    store
+                        .load_resource(&ResourceKey::from_id(source_id))
+                        .await
+                        .expect("load source")
+                        .expect("source")
+                )
+                .client_count,
                 3
             );
             assert_eq!(
-                store
-                    .load_process(&ResourceKey::from_id(process_id))
-                    .await
-                    .expect("load process")
-                    .expect("process")
-                    .module
-                    .expect("module")
-                    .source,
+                loaded_process(
+                    store
+                        .load_resource(&ResourceKey::from_id(process_id))
+                        .await
+                        .expect("load process")
+                        .expect("process")
+                )
+                .source,
                 "function on_message(ctx, msg) end"
             );
             assert_eq!(
-                store
-                    .load_egress(&ResourceKey::from_id(egress_id))
-                    .await
-                    .expect("load egress")
-                    .expect("egress")
-                    .delivery,
+                loaded_egress(
+                    store
+                        .load_resource(&ResourceKey::from_id(egress_id))
+                        .await
+                        .expect("load egress")
+                        .expect("egress")
+                )
+                .delivery,
                 DeliveryMode::Single as i32
             );
             assert_eq!(
@@ -595,11 +719,8 @@ mod tests {
             }],
             process: Some(ProcessPlan {
                 id: Some(id(ResourceKind::Process, "sensor-process", "v5")),
-                module: Some(ModulePlan {
-                    id: Some(id(ResourceKind::Module, "sensor-module", "v5")),
-                    runtime: ModuleRuntime::Lua as i32,
-                    source: "function on_message(ctx, msg) end".to_string(),
-                }),
+                runtime: ScriptRuntime::Lua as i32,
+                source: "function on_message(ctx, msg) end".to_string(),
             }),
             egress: Some(EgressPlan {
                 id: Some(id(ResourceKind::Egress, "sensor-egress", "v1")),
@@ -621,6 +742,27 @@ mod tests {
             kind: kind as i32,
             name: name.to_string(),
             version: version.to_string(),
+        }
+    }
+
+    fn loaded_mqtt_source(resource: Resource) -> MqttSourcePlan {
+        match resource.kind {
+            Some(resource::Kind::MqttSource(source)) => source,
+            _ => panic!("expected MQTT source resource"),
+        }
+    }
+
+    fn loaded_process(resource: Resource) -> ProcessPlan {
+        match resource.kind {
+            Some(resource::Kind::Process(process)) => process,
+            _ => panic!("expected process resource"),
+        }
+    }
+
+    fn loaded_egress(resource: Resource) -> EgressPlan {
+        match resource.kind {
+            Some(resource::Kind::Egress(egress)) => egress,
+            _ => panic!("expected egress resource"),
         }
     }
 }

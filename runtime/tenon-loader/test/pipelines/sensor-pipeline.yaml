@@ -9,7 +9,7 @@ spec:
     port: 1883
   clientCount: 2
   auth:
-    module:
+    script:
       runtime: lua
       source: |
         function credentials(ctx)
@@ -34,7 +34,7 @@ spec:
     port: 1884
   clientCount: 1
   auth:
-    module:
+    script:
       runtime: lua
       source: |
         function credentials(ctx)
@@ -49,9 +49,9 @@ spec:
       decode: json
 ---
 apiVersion: tenon.apache.org/v1alpha1
-kind: Module
+kind: Process
 metadata:
-  name: sensor-processor
+  name: sensor-process
   version: v1
 spec:
   runtime: lua
@@ -92,17 +92,6 @@ metadata:
   version: v1
 spec:
   delivery: single
----
-apiVersion: tenon.apache.org/v1alpha1
-kind: Process
-metadata:
-  name: sensor-process
-  version: v1
-spec:
-  moduleRef:
-    kind: Module
-    name: sensor-processor
-    version: v1
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline

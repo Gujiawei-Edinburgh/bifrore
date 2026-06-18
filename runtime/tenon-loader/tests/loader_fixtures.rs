@@ -5,8 +5,8 @@ fn fixture(path: &str) -> &'static str {
         "pipelines/sensor-pipeline.yaml" => {
             include_str!("../test/pipelines/sensor-pipeline.yaml")
         }
-        "pipelines/invalid/missing-module.yaml" => {
-            include_str!("../test/pipelines/invalid/missing-module.yaml")
+        "pipelines/invalid/missing-process.yaml" => {
+            include_str!("../test/pipelines/invalid/missing-process.yaml")
         }
         "pipelines/invalid/missing-on-message.yaml" => {
             include_str!("../test/pipelines/invalid/missing-on-message.yaml")
@@ -42,31 +42,29 @@ fn loads_sensor_pipeline_fixture() {
     let process_id = process.id.as_ref().expect("process id");
     assert_eq!(process_id.name, "sensor-process");
 
-    let module = process.module.as_ref().expect("process module");
-    let module_id = module.id.as_ref().expect("module id");
-    assert_eq!(module_id.name, "sensor-processor");
+    assert!(process.source.contains("function on_message"));
 
     let egress = plan.egress.as_ref().expect("egress plan");
     assert_eq!(DeliveryMode::try_from(egress.delivery), Ok(DeliveryMode::Single));
 }
 
 #[test]
-fn rejects_missing_module_reference() {
+fn rejects_missing_process_reference() {
     let error = Loader
-        .load(fixture("pipelines/invalid/missing-module.yaml"))
-        .expect_err("missing module");
+        .load(fixture("pipelines/invalid/missing-process.yaml"))
+        .expect_err("missing process");
 
     assert_eq!(error.kind, LoaderErrorKind::ReferenceResolution);
-    assert!(error.message.contains("missing Module"));
+    assert!(error.message.contains("missing Process"));
 }
 
 #[test]
-fn rejects_module_without_on_message() {
+fn rejects_process_script_without_on_message() {
     let error = Loader
         .load(fixture("pipelines/invalid/missing-on-message.yaml"))
         .expect_err("missing on_message");
 
-    assert_eq!(error.kind, LoaderErrorKind::ModuleValidation);
+    assert_eq!(error.kind, LoaderErrorKind::ScriptValidation);
     assert!(error.message.contains("on_message"));
 }
 
@@ -76,7 +74,7 @@ fn rejects_invalid_lua_extension_api_usage() {
         .load(fixture("pipelines/invalid/invalid-lua-api.yaml"))
         .expect_err("invalid Lua API usage");
 
-    assert_eq!(error.kind, LoaderErrorKind::ModuleValidation);
+    assert_eq!(error.kind, LoaderErrorKind::ScriptValidation);
     assert!(error.message.contains("invalid msg field: device"));
 }
 

@@ -1,6 +1,8 @@
+mod service;
 mod store;
 mod worker;
 
+pub use service::DaemonService;
 pub use store::{DaemonStore, InMemoryDaemonStore};
 pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerLauncher, WorkerStatus};
 
@@ -93,7 +95,6 @@ pub type DeploymentKey = ResourceKey;
 fn resource_kind_label(kind: i32) -> String {
     match tenon_message::plan::ResourceKind::try_from(kind) {
         Ok(tenon_message::plan::ResourceKind::MqttSource) => "mqtt_source".to_string(),
-        Ok(tenon_message::plan::ResourceKind::Module) => "module".to_string(),
         Ok(tenon_message::plan::ResourceKind::Egress) => "egress".to_string(),
         Ok(tenon_message::plan::ResourceKind::Process) => "process".to_string(),
         Ok(tenon_message::plan::ResourceKind::Pipeline) => "pipeline".to_string(),

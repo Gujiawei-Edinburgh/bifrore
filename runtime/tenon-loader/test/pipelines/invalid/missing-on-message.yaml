@@ -12,9 +12,9 @@ spec:
       decode: json
 ---
 apiVersion: tenon.apache.org/v1alpha1
-kind: Module
+kind: Process
 metadata:
-  name: module
+  name: process
   version: v1
 spec:
   runtime: lua
@@ -29,17 +29,6 @@ metadata:
   version: v1
 spec:
   delivery: single
----
-apiVersion: tenon.apache.org/v1alpha1
-kind: Process
-metadata:
-  name: process
-  version: v1
-spec:
-  moduleRef:
-    kind: Module
-    name: module
-    version: v1
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline

@@ -11,7 +11,6 @@ message ResourceId {
 enum ResourceKind {
   RESOURCE_KIND_UNSPECIFIED = 0;
   RESOURCE_KIND_MQTT_SOURCE = 1;
-  RESOURCE_KIND_MODULE = 2;
   RESOURCE_KIND_EGRESS = 3;
   RESOURCE_KIND_PROCESS = 4;
   RESOURCE_KIND_PIPELINE = 5;
@@ -33,15 +32,54 @@ message StoredDeploymentPlan {
   ResourceId egress_ref = 5;
 }
 
-message ApplyDeploymentRequest {
-  DeploymentPlan plan = 1;
+message Resource {
+  oneof kind {
+    StoredDeploymentPlan pipeline = 1;
+    MqttSourcePlan mqtt_source = 2;
+    ProcessPlan process = 3;
+    EgressPlan egress = 4;
+  }
 }
 
-message ApplyDeploymentResponse {
+message PutResourceRequest {
+  Resource resource = 1;
+}
+
+message PutResourceResponse {
   bool accepted = 1;
-  ResourceId active_plan = 2;
+  ResourceId id = 2;
   ApplyMode mode = 3;
   string message = 4;
+}
+
+message GetResourceRequest {
+  ResourceId id = 1;
+}
+
+message GetResourceResponse {
+  bool found = 1;
+  Resource resource = 2;
+  string message = 3;
+}
+
+message UpdateResourceRequest {
+  ResourceId previous_id = 1;
+  Resource resource = 2;
+}
+
+message UpdateResourceResponse {
+  bool accepted = 1;
+  repeated ResourceId affected_pipelines = 2;
+  string message = 3;
+}
+
+message DeleteResourceRequest {
+  ResourceId id = 1;
+}
+
+message DeleteResourceResponse {
+  bool deleted = 1;
+  string message = 2;
 }
 
 enum ApplyMode {
@@ -50,25 +88,6 @@ enum ApplyMode {
   APPLY_MODE_HOT_RELOAD = 2;
   APPLY_MODE_REJECTED_RESTART_REQUIRED = 3;
   APPLY_MODE_REJECTED_WORKER_ERROR = 4;
-}
-
-message DeploymentUpdate {
-  ResourceId from_plan = 1;
-  ResourceId to_plan = 2;
-  oneof update {
-    ProcessUpdate process = 3;
-  }
-}
-
-message DeploymentUpdateResponse {
-  bool accepted = 1;
-  ResourceId active_plan = 2;
-  ApplyMode mode = 3;
-  string message = 4;
-}
-
-message ProcessUpdate {
-  ProcessPlan process = 1;
 }
 
 enum ExecutionMode {
@@ -101,7 +120,7 @@ message AuthPlan {
   oneof kind {
     NoAuth none = 1;
     UsernamePasswordAuth username_password = 2;
-    ModulePlan module = 3;
+    ScriptModule script = 3;
   }
 }
 
@@ -124,18 +143,18 @@ enum PayloadDecodePlan {
 
 message ProcessPlan {
   ResourceId id = 1;
-  ModulePlan module = 2;
-}
-
-message ModulePlan {
-  ResourceId id = 1;
-  ModuleRuntime runtime = 2;
+  ScriptRuntime runtime = 2;
   string source = 3;
 }
 
-enum ModuleRuntime {
-  MODULE_RUNTIME_UNSPECIFIED = 0;
-  MODULE_RUNTIME_LUA = 1;
+message ScriptModule {
+  ScriptRuntime runtime = 1;
+  string source = 2;
+}
+
+enum ScriptRuntime {
+  SCRIPT_RUNTIME_UNSPECIFIED = 0;
+  SCRIPT_RUNTIME_LUA = 1;
 }
 
 message EgressPlan {
@@ -166,9 +185,13 @@ message Heartbeat {
 
 message DaemonEnvelope {
   oneof payload {
-    ApplyDeploymentRequest apply_deployment = 3;
-    ApplyDeploymentResponse apply_deployment_response = 4;
-    DeploymentUpdate deployment_update = 5;
-    DeploymentUpdateResponse deployment_update_response = 6;
+    PutResourceRequest put_resource = 3;
+    PutResourceResponse put_resource_response = 4;
+    GetResourceRequest get_resource = 7;
+    GetResourceResponse get_resource_response = 8;
+    UpdateResourceRequest update_resource = 9;
+    UpdateResourceResponse update_resource_response = 10;
+    DeleteResourceRequest delete_resource = 11;
+    DeleteResourceResponse delete_resource_response = 12;
   }
 }

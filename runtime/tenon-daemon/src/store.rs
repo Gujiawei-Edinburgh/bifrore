@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use tenon_message::plan::{
     DeploymentPlan, EgressPlan, MqttClientIds, MqttSourcePlan, ProcessPlan, ResourceId,
-    ResourceKind, StoredDeploymentPlan,
+    ResourceKind, ResourceReferences, StoredDeploymentPlan,
 };
 
 const PLAN_LABEL: &str = "deployment plan";
@@ -12,10 +12,12 @@ const MQTT_SOURCE_LABEL: &str = "MQTT source";
 const PROCESS_LABEL: &str = "process";
 const EGRESS_LABEL: &str = "egress";
 const MQTT_CLIENT_IDS_LABEL: &str = "MQTT client ids";
+const RESOURCE_REFERENCES_LABEL: &str = "resource references";
 
 const PLAN_KEY_PREFIX: &[u8] = b"plan";
 const RESOURCE_KEY_PREFIX: &[u8] = b"resource";
 const MQTT_CLIENT_IDS_KEY_PREFIX: &[u8] = b"mqtt_source_client_ids";
+const RESOURCE_REFERENCES_KEY_PREFIX: &[u8] = b"resource_refs";
 
 pub trait DaemonStore {
     fn save_plan<'a>(
@@ -53,6 +55,11 @@ pub trait DaemonStore {
         &'a self,
         key: &'a ResourceKey,
     ) -> impl Future<Output = DaemonResult<Vec<String>>> + Send + 'a;
+
+    fn load_referencing_plans<'a>(
+        &'a self,
+        key: &'a ResourceKey,
+    ) -> impl Future<Output = DaemonResult<Vec<ResourceId>>> + Send + 'a;
 }
 
 #[derive(Debug, Default)]
@@ -76,6 +83,7 @@ impl DaemonStore for InMemoryDaemonStore {
             let stored_plan = stored_plan_from_deployment_plan(&plan)?;
             self.save_message(plan_key(&key), &stored_plan);
             self.save_plan_resources(&plan)?;
+            self.save_plan_reverse_refs(&stored_plan)?;
             Ok(())
         }
     }
@@ -134,6 +142,21 @@ impl DaemonStore for InMemoryDaemonStore {
             Ok(self
                 .load_message::<MqttClientIds>(&client_ids_key(key), MQTT_CLIENT_IDS_LABEL)?
                 .map(|client_ids| client_ids.client_ids)
+                .unwrap_or_default())
+        }
+    }
+
+    fn load_referencing_plans<'a>(
+        &'a self,
+        key: &'a ResourceKey,
+    ) -> impl Future<Output = DaemonResult<Vec<ResourceId>>> + Send + 'a {
+        async move {
+            Ok(self
+                .load_message::<ResourceReferences>(
+                    &resource_references_key(key),
+                    RESOURCE_REFERENCES_LABEL,
+                )?
+                .map(|references| references.pipeline_refs)
                 .unwrap_or_default())
         }
     }
@@ -200,6 +223,47 @@ impl InMemoryDaemonStore {
         if let Some(egress) = &plan.egress {
             let key = resource_key_from_required_id(egress.id.as_ref(), ResourceKind::Egress)?;
             self.save_message(resource_key(&key), egress);
+        }
+
+        Ok(())
+    }
+
+    fn save_plan_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
+        let pipeline_id =
+            resource_id_from_required_id(stored_plan.id.as_ref(), ResourceKind::Pipeline)?;
+
+        for source_ref in &stored_plan.source_refs {
+            self.add_reverse_ref(Some(source_ref), ResourceKind::MqttSource, pipeline_id)?;
+        }
+        self.add_reverse_ref(
+            stored_plan.process_ref.as_ref(),
+            ResourceKind::Process,
+            pipeline_id,
+        )?;
+        self.add_reverse_ref(
+            stored_plan.egress_ref.as_ref(),
+            ResourceKind::Egress,
+            pipeline_id,
+        )?;
+
+        Ok(())
+    }
+
+    fn add_reverse_ref(
+        &mut self,
+        resource_id: Option<&ResourceId>,
+        expected_kind: ResourceKind,
+        pipeline_id: &ResourceId,
+    ) -> DaemonResult<()> {
+        let key = resource_key_from_required_id(resource_id, expected_kind)?;
+        let storage_key = resource_references_key(&key);
+        let mut references = self
+            .load_message::<ResourceReferences>(&storage_key, RESOURCE_REFERENCES_LABEL)?
+            .unwrap_or_default();
+
+        if !references.pipeline_refs.iter().any(|id| id == pipeline_id) {
+            references.pipeline_refs.push(pipeline_id.clone());
+            self.save_message(storage_key, &references);
         }
 
         Ok(())
@@ -303,6 +367,10 @@ fn client_ids_key(key: &ResourceKey) -> Vec<u8> {
     store_key(MQTT_CLIENT_IDS_KEY_PREFIX, key)
 }
 
+fn resource_references_key(key: &ResourceKey) -> Vec<u8> {
+    store_key(RESOURCE_REFERENCES_KEY_PREFIX, key)
+}
+
 fn store_key(prefix: &[u8], key: &ResourceKey) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(prefix);
@@ -336,10 +404,14 @@ mod tests {
             client_ids_key(&key),
             b"mqtt_source_client_ids:mqtt_source:sensor:v1".to_vec()
         );
+        assert_eq!(
+            resource_references_key(&key),
+            b"resource_refs:mqtt_source:sensor:v1".to_vec()
+        );
     }
 
     #[test]
-    fn saves_plan_and_component_resources() {
+    fn saves_plan_component_resources_and_reverse_refs() {
         block_on(async {
             let mut store = InMemoryDaemonStore::new();
             let plan = plan();
@@ -410,6 +482,47 @@ mod tests {
                     .expect("egress")
                     .delivery,
                 DeliveryMode::Single as i32
+            );
+            assert_eq!(
+                store
+                    .load_referencing_plans(&ResourceKey::from_id(source_id))
+                    .await
+                    .expect("load source references"),
+                vec![loaded_plan.id.clone().expect("plan id")]
+            );
+            assert_eq!(
+                store
+                    .load_referencing_plans(&ResourceKey::from_id(process_id))
+                    .await
+                    .expect("load process references"),
+                vec![loaded_plan.id.clone().expect("plan id")]
+            );
+            assert_eq!(
+                store
+                    .load_referencing_plans(&ResourceKey::from_id(egress_id))
+                    .await
+                    .expect("load egress references"),
+                vec![loaded_plan.id.clone().expect("plan id")]
+            );
+        });
+    }
+
+    #[test]
+    fn reverse_refs_are_deduplicated() {
+        block_on(async {
+            let mut store = InMemoryDaemonStore::new();
+            let plan = plan();
+            let source_id = plan.sources[0].id.clone().expect("source id");
+
+            store.save_plan(plan.clone()).await.expect("save plan");
+            store.save_plan(plan.clone()).await.expect("save plan again");
+
+            assert_eq!(
+                store
+                    .load_referencing_plans(&ResourceKey::from_id(&source_id))
+                    .await
+                    .expect("load source references"),
+                vec![plan.id.expect("plan id")]
             );
         });
     }

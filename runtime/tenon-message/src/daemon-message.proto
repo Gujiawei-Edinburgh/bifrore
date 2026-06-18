@@ -88,6 +88,10 @@ message MqttClientIds {
   repeated string client_ids = 1;
 }
 
+message ResourceReferences {
+  repeated ResourceId pipeline_refs = 1;
+}
+
 message MqttBrokerPlan {
   string host = 1;
   uint32 port = 2;

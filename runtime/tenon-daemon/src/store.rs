@@ -20,20 +20,10 @@ const MQTT_CLIENT_IDS_KEY_PREFIX: &[u8] = b"mqtt_source_client_ids";
 const RESOURCE_REFERENCES_KEY_PREFIX: &[u8] = b"resource_refs";
 
 pub trait DaemonStore {
-    fn save_plan<'a>(
-        &'a mut self,
-        plan: DeploymentPlan,
-    ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
-
     fn save_resource<'a>(
         &'a mut self,
         resource: Resource,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
-
-    fn load_plan<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<DeploymentPlan>>> + Send + 'a;
 
     fn load_resource<'a>(
         &'a self,
@@ -74,25 +64,6 @@ impl InMemoryDaemonStore {
 }
 
 impl DaemonStore for InMemoryDaemonStore {
-    fn save_plan<'a>(
-        &'a mut self,
-        plan: DeploymentPlan,
-    ) -> impl Future<Output = DaemonResult<()>> + Send + 'a {
-        async move {
-            let key = resource_key_from_required_id(plan.id.as_ref(), ResourceKind::Pipeline)?;
-            let stored_plan = stored_plan_from_deployment_plan(&plan)?;
-            if let Some(previous_plan) =
-                self.load_message::<StoredDeploymentPlan>(&plan_key(&key), PLAN_LABEL)?
-            {
-                self.remove_plan_reverse_refs(&previous_plan)?;
-            }
-            self.save_message(plan_key(&key), &stored_plan);
-            self.save_plan_resources(&plan)?;
-            self.save_plan_reverse_refs(&stored_plan)?;
-            Ok(())
-        }
-    }
-
     fn save_resource<'a>(
         &'a mut self,
         resource: Resource,
@@ -102,13 +73,19 @@ impl DaemonStore for InMemoryDaemonStore {
                 Some(resource::Kind::Pipeline(pipeline)) => {
                     let key =
                         resource_key_from_required_id(pipeline.id.as_ref(), ResourceKind::Pipeline)?;
-                    if let Some(previous_plan) =
-                        self.load_message::<StoredDeploymentPlan>(&plan_key(&key), PLAN_LABEL)?
+                    if self
+                        .load_message::<StoredDeploymentPlan>(&plan_key(&key), PLAN_LABEL)?
+                        .is_some()
                     {
-                        self.remove_plan_reverse_refs(&previous_plan)?;
+                        return Err(DaemonError::invalid_state(format!(
+                            "pipeline resource already exists: {}",
+                            key.as_store_key()
+                        )));
                     }
-                    self.save_message(plan_key(&key), &pipeline);
-                    self.save_plan_reverse_refs(&pipeline)?;
+                    let stored_plan = stored_plan_from_deployment_plan(&pipeline)?;
+                    self.save_message(plan_key(&key), &stored_plan);
+                    self.save_pipeline_resources(&pipeline)?;
+                    self.save_pipeline_reverse_refs(&stored_plan)?;
                 }
                 Some(resource::Kind::MqttSource(source)) => {
                     let key =
@@ -130,20 +107,6 @@ impl DaemonStore for InMemoryDaemonStore {
         }
     }
 
-    fn load_plan<'a>(
-        &'a self,
-        key: &'a ResourceKey,
-    ) -> impl Future<Output = DaemonResult<Option<DeploymentPlan>>> + Send + 'a {
-        async move {
-            let Some(stored_plan) =
-                self.load_message::<StoredDeploymentPlan>(&plan_key(key), PLAN_LABEL)?
-            else {
-                return Ok(None);
-            };
-            self.resolve_stored_plan(stored_plan).map(Some)
-        }
-    }
-
     fn load_resource<'a>(
         &'a self,
         key: &'a ResourceKey,
@@ -152,6 +115,8 @@ impl DaemonStore for InMemoryDaemonStore {
             match ResourceKind::try_from(key.kind) {
                 Ok(ResourceKind::Pipeline) => Ok(self
                     .load_message::<StoredDeploymentPlan>(&plan_key(key), PLAN_LABEL)?
+                    .map(|pipeline| self.resolve_stored_plan(pipeline))
+                    .transpose()?
                     .map(|pipeline| Resource {
                         kind: Some(resource::Kind::Pipeline(pipeline)),
                     })),
@@ -227,7 +192,7 @@ impl DaemonStore for InMemoryDaemonStore {
                 else {
                     return Ok(false);
                 };
-                self.remove_plan_reverse_refs(&stored_plan)?;
+                self.remove_pipeline_reverse_refs(&stored_plan)?;
                 return Ok(self.entries.remove(&plan_key(key)).is_some());
             }
 
@@ -284,7 +249,7 @@ impl InMemoryDaemonStore {
             .ok_or_else(|| DaemonError::not_found(format!("missing {label} {}", key.as_store_key())))
     }
 
-    fn save_plan_resources(&mut self, plan: &DeploymentPlan) -> DaemonResult<()> {
+    fn save_pipeline_resources(&mut self, plan: &DeploymentPlan) -> DaemonResult<()> {
         for source in &plan.sources {
             let key = resource_key_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)?;
             self.save_message(resource_key(&key), source);
@@ -303,7 +268,7 @@ impl InMemoryDaemonStore {
         Ok(())
     }
 
-    fn save_plan_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
+    fn save_pipeline_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
         let pipeline_id =
             resource_id_from_required_id(stored_plan.id.as_ref(), ResourceKind::Pipeline)?;
 
@@ -324,7 +289,7 @@ impl InMemoryDaemonStore {
         Ok(())
     }
 
-    fn remove_plan_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
+    fn remove_pipeline_reverse_refs(&mut self, stored_plan: &StoredDeploymentPlan) -> DaemonResult<()> {
         let pipeline_id =
             resource_id_from_required_id(stored_plan.id.as_ref(), ResourceKind::Pipeline)?;
 
@@ -538,7 +503,9 @@ mod tests {
             let plan_key = key(ResourceKind::Pipeline, "sensor-pipeline", "v2");
 
             store
-                .save_plan(plan.clone())
+                .save_resource(Resource {
+                    kind: Some(resource::Kind::Pipeline(plan.clone())),
+                })
                 .await
                 .expect("save plan");
 
@@ -551,11 +518,13 @@ mod tests {
             )
             .expect("stored plan");
             assert_eq!(stored_plan.source_refs.len(), 1);
-            let loaded_plan = store
-                .load_plan(&plan_key)
-                .await
-                .expect("load plan")
-                .expect("plan");
+            let loaded_plan = loaded_plan(
+                store
+                    .load_resource(&plan_key)
+                    .await
+                    .expect("load plan")
+                    .expect("plan"),
+            );
             assert_eq!(loaded_plan, plan);
 
             let source_id = loaded_plan.sources[0].id.as_ref().expect("source id");
@@ -632,15 +601,27 @@ mod tests {
     }
 
     #[test]
-    fn reverse_refs_are_deduplicated() {
+    fn rejects_duplicate_pipeline_resource() {
         block_on(async {
             let mut store = InMemoryDaemonStore::new();
             let plan = plan();
             let source_id = plan.sources[0].id.clone().expect("source id");
 
-            store.save_plan(plan.clone()).await.expect("save plan");
-            store.save_plan(plan.clone()).await.expect("save plan again");
+            store
+                .save_resource(Resource {
+                    kind: Some(resource::Kind::Pipeline(plan.clone())),
+                })
+                .await
+                .expect("save plan");
+            let error = store
+                .save_resource(Resource {
+                    kind: Some(resource::Kind::Pipeline(plan.clone())),
+                })
+                .await
+                .expect_err("duplicate plan should be rejected");
 
+            assert_eq!(error.kind, crate::DaemonErrorKind::InvalidState);
+            assert!(error.message.contains("already exists"));
             assert_eq!(
                 store
                     .load_referencing_plans(&ResourceKey::from_id(&source_id))
@@ -691,7 +672,9 @@ mod tests {
             plan.sources[0].id = Some(id(ResourceKind::Process, "sensor-source", "v1"));
 
             let error = store
-                .save_plan(plan)
+                .save_resource(Resource {
+                    kind: Some(resource::Kind::Pipeline(plan)),
+                })
                 .await
                 .expect_err("save should reject wrong kind");
 
@@ -763,6 +746,13 @@ mod tests {
         match resource.kind {
             Some(resource::Kind::Egress(egress)) => egress,
             _ => panic!("expected egress resource"),
+        }
+    }
+
+    fn loaded_plan(resource: Resource) -> DeploymentPlan {
+        match resource.kind {
+            Some(resource::Kind::Pipeline(plan)) => plan,
+            _ => panic!("expected pipeline resource"),
         }
     }
 }

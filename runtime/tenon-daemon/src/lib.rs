@@ -7,7 +7,7 @@ pub use store::{DaemonStore, InMemoryDaemonStore};
 pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerLauncher, WorkerStatus};
 
 use std::collections::HashMap;
-use tenon_message::plan::{DeploymentPlan, ResourceId};
+use tenon_message::plan::{resource, DeploymentPlan, Resource, ResourceId, ResourceKind};
 
 pub type DaemonResult<T> = Result<T, DaemonError>;
 
@@ -139,13 +139,62 @@ where
         self.deployments.values()
     }
 
-    pub async fn apply_plan(&mut self, plan: DeploymentPlan) -> DaemonResult<&ActiveDeployment> {
+    pub async fn put_resource(&mut self, resource: Resource) -> DaemonResult<ResourceId> {
+        let id = resource_id_from_resource(&resource)
+            .ok_or_else(|| DaemonError::invalid_state("resource id is missing"))?;
+        let pipeline = match &resource.kind {
+            Some(resource::Kind::Pipeline(plan)) => Some(plan.clone()),
+            Some(_) => None,
+            None => return Err(DaemonError::invalid_state("resource payload is missing")),
+        };
+
+        self.store.save_resource(resource).await?;
+        if let Some(plan) = pipeline {
+            self.apply(plan).await?;
+        }
+        Ok(id)
+    }
+
+    pub async fn get_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
+        let key = ResourceKey::from_id(id);
+        self.store.load_resource(&key).await
+    }
+
+    pub async fn update_resource(
+        &mut self,
+        previous_id: &ResourceId,
+        resource: Resource,
+    ) -> DaemonResult<Vec<ResourceId>> {
+        let previous_key = ResourceKey::from_id(previous_id);
+        let affected_pipelines = self.store.load_referencing_plans(&previous_key).await?;
+        self.store.save_resource(resource).await?;
+        Ok(affected_pipelines)
+    }
+
+    pub async fn delete_resource(&mut self, id: &ResourceId) -> DaemonResult<bool> {
+        let key = ResourceKey::from_id(id);
+
+        if ResourceKind::try_from(id.kind) == Ok(ResourceKind::Pipeline) {
+            self.stop_worker_by_key(&key)?;
+            return self.store.delete_resource(&key).await;
+        }
+
+        let references = self.store.load_referencing_plans(&key).await?;
+        if !references.is_empty() {
+            return Err(DaemonError::invalid_state(
+                "resource is still referenced by pipelines",
+            ));
+        }
+
+        self.store.delete_resource(&key).await
+    }
+
+    pub async fn apply(&mut self, plan: DeploymentPlan) -> DaemonResult<&ActiveDeployment> {
         let id = plan
             .id
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
         let key = DeploymentKey::from_id(&id);
-        self.store.save_plan(plan.clone()).await?;
         self.stop_worker_by_key(&key)?;
 
         let worker = self.worker_launcher.start(plan)?;
@@ -156,17 +205,16 @@ where
             .ok_or_else(|| DaemonError::invalid_state("deployment missing after apply"))
     }
 
+    pub async fn reload(&mut self, plan: DeploymentPlan) -> DaemonResult<&ActiveDeployment> {
+        self.apply(plan).await
+    }
+
     pub fn stop(&mut self) -> DaemonResult<()> {
         let deployments = std::mem::take(&mut self.deployments);
         for deployment in deployments.into_values() {
             self.worker_launcher.stop(deployment.worker)?;
         }
         Ok(())
-    }
-
-    pub async fn load_plan(&self, id: &ResourceId) -> DaemonResult<Option<DeploymentPlan>> {
-        let key = DeploymentKey::from_id(id);
-        self.store.load_plan(&key).await
     }
 
     pub fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
@@ -183,5 +231,15 @@ where
             self.worker_launcher.stop(deployment.worker)?;
         }
         Ok(())
+    }
+}
+
+fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
+    match &resource.kind {
+        Some(resource::Kind::Pipeline(pipeline)) => pipeline.id.clone(),
+        Some(resource::Kind::MqttSource(source)) => source.id.clone(),
+        Some(resource::Kind::Process(process)) => process.id.clone(),
+        Some(resource::Kind::Egress(egress)) => egress.id.clone(),
+        None => None,
     }
 }

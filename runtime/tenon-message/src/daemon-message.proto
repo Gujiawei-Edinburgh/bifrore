@@ -34,7 +34,7 @@ message StoredDeploymentPlan {
 
 message Resource {
   oneof kind {
-    StoredDeploymentPlan pipeline = 1;
+    DeploymentPlan pipeline = 1;
     MqttSourcePlan mqtt_source = 2;
     ProcessPlan process = 3;
     EgressPlan egress = 4;

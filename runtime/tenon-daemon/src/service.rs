@@ -1,13 +1,12 @@
 use crate::{
     DaemonError, DaemonErrorKind, DaemonResult, DaemonStore, InMemoryDaemonStore, NoopWorkerLauncher,
-    ResourceKey, TenonDaemon, WorkerLauncher,
+    TenonDaemon, WorkerLauncher,
 };
 use tenon_message::daemon::v1::{
     worker_envelope, ApplyMode, DeleteResourceRequest, DeleteResourceResponse, GetResourceRequest,
     GetResourceResponse, PutResourceRequest, PutResourceResponse, UpdateResourceRequest,
     UpdateResourceResponse, WorkerEnvelope,
 };
-use tenon_message::plan::{resource, Resource, ResourceId, ResourceKind, StoredDeploymentPlan};
 
 pub struct DaemonService<L = NoopWorkerLauncher, S = InMemoryDaemonStore> {
     daemon: TenonDaemon<L, S>,
@@ -50,31 +49,22 @@ where
             return put_rejected(ApplyMode::RejectedWorkerError, "resource is missing");
         };
 
-        match resource.kind {
-            Some(resource::Kind::Pipeline(pipeline)) => {
-                match self.put_pipeline_resource(pipeline).await {
-                    Ok(active_id) => PutResourceResponse {
-                        accepted: true,
-                        id: Some(active_id),
-                        mode: ApplyMode::Started as i32,
-                        message: String::new(),
-                    },
-                    Err(error) => put_rejected(apply_error_mode(&error), error.message),
-                }
-            },
-            Some(_) => {
-                let id = resource_id_from_resource(&resource);
-                match self.daemon.store.save_resource(resource).await {
-                    Ok(()) => PutResourceResponse {
-                        accepted: true,
-                        id,
-                        mode: ApplyMode::Unspecified as i32,
-                        message: String::new(),
-                    },
-                    Err(error) => put_rejected(apply_error_mode(&error), error.message),
-                }
+        let mode = match resource.kind {
+            Some(tenon_message::plan::resource::Kind::Pipeline(_)) => ApplyMode::Started,
+            Some(_) => ApplyMode::Unspecified,
+            None => {
+                return put_rejected(ApplyMode::RejectedWorkerError, "resource payload is missing");
             }
-            None => put_rejected(ApplyMode::RejectedWorkerError, "resource payload is missing"),
+        };
+
+        match self.daemon.put_resource(resource).await {
+            Ok(id) => PutResourceResponse {
+                accepted: true,
+                id: Some(id),
+                mode: mode as i32,
+                message: String::new(),
+            },
+            Err(error) => put_rejected(apply_error_mode(&error), error.message),
         }
     }
 
@@ -89,9 +79,7 @@ where
                 message: "resource id is missing".to_string(),
             };
         };
-        let key = ResourceKey::from_id(&id);
-
-        match self.daemon.store.load_resource(&key).await {
+        match self.daemon.get_resource(&id).await {
             Ok(Some(resource)) => GetResourceResponse {
                 found: true,
                 resource: Some(resource),
@@ -117,26 +105,15 @@ where
         let Some(previous_id) = request.previous_id else {
             return update_rejected("previous resource id is missing");
         };
-        let previous_key = ResourceKey::from_id(&previous_id);
-        let affected_pipelines = match self.daemon.store.load_referencing_plans(&previous_key).await
-        {
-            Ok(pipelines) => pipelines,
-            Err(error) => return update_rejected(error.message),
-        };
-
         let Some(resource) = request.resource else {
             return update_rejected("updated resource is missing");
         };
-        let result = match resource.kind {
-            Some(resource::Kind::MqttSource(_))
-            | Some(resource::Kind::Process(_))
-            | Some(resource::Kind::Egress(_))
-            | Some(resource::Kind::Pipeline(_)) => self.daemon.store.save_resource(resource).await,
-            None => return update_rejected("updated resource is missing"),
-        };
+        if resource.kind.is_none() {
+            return update_rejected("updated resource is missing");
+        }
 
-        match result {
-            Ok(()) => UpdateResourceResponse {
+        match self.daemon.update_resource(&previous_id, resource).await {
+            Ok(affected_pipelines) => UpdateResourceResponse {
                 accepted: true,
                 affected_pipelines,
                 message: String::new(),
@@ -152,32 +129,7 @@ where
         let Some(id) = request.id else {
             return delete_rejected("resource id is missing");
         };
-        let key = ResourceKey::from_id(&id);
-
-        if ResourceKind::try_from(id.kind) == Ok(ResourceKind::Pipeline) {
-            let _ = self.daemon.stop_worker_by_key(&key);
-            return match self.daemon.store.delete_resource(&key).await {
-                Ok(deleted) => DeleteResourceResponse {
-                    deleted,
-                    message: if deleted {
-                        String::new()
-                    } else {
-                        "resource not found".to_string()
-                    },
-                },
-                Err(error) => delete_rejected(error.message),
-            };
-        }
-
-        let references = match self.daemon.store.load_referencing_plans(&key).await {
-            Ok(references) => references,
-            Err(error) => return delete_rejected(error.message),
-        };
-        if !references.is_empty() {
-            return delete_rejected("resource is still referenced by pipelines");
-        }
-
-        match self.daemon.store.delete_resource(&key).await {
+        match self.daemon.delete_resource(&id).await {
             Ok(deleted) => DeleteResourceResponse {
                 deleted,
                 message: if deleted {
@@ -200,25 +152,6 @@ where
         }
     }
 
-    async fn put_pipeline_resource(
-        &mut self,
-        pipeline: StoredDeploymentPlan,
-    ) -> DaemonResult<ResourceId> {
-        self.daemon.store.save_resource(Resource {
-            kind: Some(resource::Kind::Pipeline(pipeline.clone())),
-        }).await?;
-        let id = pipeline
-            .id
-            .clone()
-            .ok_or_else(|| DaemonError::invalid_state("pipeline resource id is missing"))?;
-        let plan = self
-            .daemon
-            .load_plan(&id)
-            .await?
-            .ok_or_else(|| DaemonError::invalid_state("pipeline resource was not stored"))?;
-        self.daemon.apply_plan(plan).await?;
-        Ok(id)
-    }
 }
 
 fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutResourceResponse {
@@ -235,16 +168,6 @@ fn update_rejected(message: impl Into<String>) -> UpdateResourceResponse {
         accepted: false,
         affected_pipelines: Vec::new(),
         message: message.into(),
-    }
-}
-
-fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
-    match &resource.kind {
-        Some(resource::Kind::Pipeline(pipeline)) => pipeline.id.clone(),
-        Some(resource::Kind::MqttSource(source)) => source.id.clone(),
-        Some(resource::Kind::Process(process)) => process.id.clone(),
-        Some(resource::Kind::Egress(egress)) => egress.id.clone(),
-        None => None,
     }
 }
 
@@ -267,12 +190,13 @@ fn apply_error_mode(error: &DaemonError) -> ApplyMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ResourceKey;
     use futures::executor::block_on;
     use tenon_message::daemon::v1::Heartbeat;
     use tenon_message::plan::{
         resource, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan,
         MqttSourcePlan, MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, Resource,
-        ResourceId, ResourceKind, ScriptRuntime, StoredDeploymentPlan,
+        ResourceId, ResourceKind, ScriptRuntime,
     };
 
     #[test]
@@ -280,13 +204,11 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            put_plan_components(&mut service, &plan).await;
-            let pipeline = stored_pipeline(&plan);
 
             let response = service
                 .handle_put_resource(PutResourceRequest {
                     resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(pipeline)),
+                        kind: Some(resource::Kind::Pipeline(plan.clone())),
                     }),
                 })
                 .await;
@@ -323,19 +245,17 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            let expected_pipeline = stored_pipeline(&plan);
-            put_plan_components(&mut service, &plan).await;
             service
                 .handle_put_resource(PutResourceRequest {
                     resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(expected_pipeline.clone())),
+                        kind: Some(resource::Kind::Pipeline(plan.clone())),
                     }),
                 })
                 .await;
 
             let response = service
                 .handle_get_resource(GetResourceRequest {
-                    id: expected_pipeline.id.clone(),
+                    id: plan.id.clone(),
                 })
                 .await;
 
@@ -343,9 +263,36 @@ mod tests {
             assert_eq!(
                 response.resource,
                 Some(Resource {
-                    kind: Some(resource::Kind::Pipeline(expected_pipeline)),
+                    kind: Some(resource::Kind::Pipeline(plan)),
                 })
             );
+        });
+    }
+
+    #[test]
+    fn rejects_duplicate_pipeline_put() {
+        block_on(async {
+            let mut service = DaemonService::new();
+            let plan = plan();
+
+            let first = service
+                .handle_put_resource(PutResourceRequest {
+                    resource: Some(Resource {
+                        kind: Some(resource::Kind::Pipeline(plan.clone())),
+                    }),
+                })
+                .await;
+            let duplicate = service
+                .handle_put_resource(PutResourceRequest {
+                    resource: Some(Resource {
+                        kind: Some(resource::Kind::Pipeline(plan)),
+                    }),
+                })
+                .await;
+
+            assert!(first.accepted);
+            assert!(!duplicate.accepted);
+            assert!(duplicate.message.contains("already exists"));
         });
     }
 
@@ -492,7 +439,7 @@ mod tests {
         service
             .handle_put_resource(PutResourceRequest {
                 resource: Some(Resource {
-                    kind: Some(resource::Kind::Pipeline(stored_pipeline(plan))),
+                    kind: Some(resource::Kind::Pipeline(plan.clone())),
                 }),
             })
             .await;
@@ -526,20 +473,4 @@ mod tests {
             .await;
     }
 
-    fn stored_pipeline(plan: &DeploymentPlan) -> StoredDeploymentPlan {
-        StoredDeploymentPlan {
-            id: plan.id.clone(),
-            execution: plan.execution,
-            source_refs: plan
-                .sources
-                .iter()
-                .map(|source| source.id.clone().expect("source id"))
-                .collect(),
-            process_ref: plan
-                .process
-                .as_ref()
-                .and_then(|process| process.id.clone()),
-            egress_ref: plan.egress.as_ref().and_then(|egress| egress.id.clone()),
-        }
-    }
 }

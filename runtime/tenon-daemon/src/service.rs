@@ -57,11 +57,9 @@ where
             Ok(result) => PutResourceResponse {
                 accepted: true,
                 id: Some(result.id),
-                mode: result
-                    .apply_mode
-                    .map(apply_mode_from_daemon)
-                    .unwrap_or(ApplyMode::Unspecified) as i32,
+                mode: ApplyMode::Unspecified as i32,
                 message: String::new(),
+                resource_ids: result.resource_ids,
             },
             Err(error) => put_rejected(apply_error_mode(&error), error.message),
         }
@@ -143,9 +141,11 @@ where
             .revise_resource(&pipeline_id, &previous_id, resource)
             .await
         {
-            Ok(revised_pipeline_id) => ReviseResourceResponse {
+            Ok(result) => ReviseResourceResponse {
                 accepted: true,
-                revised_pipeline_id: Some(revised_pipeline_id),
+                revised_pipeline_id: Some(result.revised_pipeline_id),
+                revised_resource_id: Some(result.revised_resource_id),
+                resource_ids: result.resource_ids,
                 message: String::new(),
             },
             Err(error) => revise_rejected(error.message),
@@ -190,6 +190,7 @@ fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutResourceRespo
         id: None,
         mode: mode as i32,
         message: message.into(),
+        resource_ids: Vec::new(),
     }
 }
 
@@ -206,6 +207,8 @@ fn revise_rejected(message: impl Into<String>) -> ReviseResourceResponse {
     ReviseResourceResponse {
         accepted: false,
         revised_pipeline_id: None,
+        revised_resource_id: None,
+        resource_ids: Vec::new(),
         message: message.into(),
     }
 }
@@ -246,7 +249,7 @@ mod tests {
     };
 
     #[test]
-    fn puts_pipeline_resource_and_starts_worker() {
+    fn puts_pipeline_resource_and_returns_generated_ids() {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
@@ -260,11 +263,12 @@ mod tests {
                 .await;
 
             assert!(response.accepted);
-            assert_eq!(ApplyMode::try_from(response.mode), Ok(ApplyMode::Started));
+            assert_eq!(ApplyMode::try_from(response.mode), Ok(ApplyMode::Unspecified));
             assert_eq!(
                 response.id,
-                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "v1"))
+                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r1"))
             );
+            assert_eq!(response.resource_ids.len(), 4);
         });
     }
 
@@ -291,7 +295,7 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            service
+            let put = service
                 .handle_put_resource(PutResourceRequest {
                     resource: Some(Resource {
                         kind: Some(resource::Kind::Pipeline(plan.clone())),
@@ -301,7 +305,7 @@ mod tests {
 
             let response = service
                 .handle_get_resource(GetResourceRequest {
-                    id: plan.id.clone(),
+                    id: put.id.clone(),
                 })
                 .await;
 
@@ -309,14 +313,14 @@ mod tests {
             assert_eq!(
                 response.resource,
                 Some(Resource {
-                    kind: Some(resource::Kind::Pipeline(plan)),
+                    kind: Some(resource::Kind::Pipeline(loaded_plan_from_put(&plan))),
                 })
             );
         });
     }
 
     #[test]
-    fn rejects_duplicate_pipeline_put() {
+    fn repeated_put_advances_pipeline_revision() {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
@@ -328,7 +332,7 @@ mod tests {
                     }),
                 })
                 .await;
-            let duplicate = service
+            let second = service
                 .handle_put_resource(PutResourceRequest {
                     resource: Some(Resource {
                         kind: Some(resource::Kind::Pipeline(plan)),
@@ -337,8 +341,9 @@ mod tests {
                 .await;
 
             assert!(first.accepted);
-            assert!(!duplicate.accepted);
-            assert!(duplicate.message.contains("already exists"));
+            assert!(second.accepted);
+            assert_eq!(first.id, Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r1")));
+            assert_eq!(second.id, Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r2")));
         });
     }
 
@@ -347,18 +352,17 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            let previous_process_id = plan
+            let stored_plan = put_full_plan(&mut service, &plan).await;
+            let previous_process_id = stored_plan
                 .process
                 .as_ref()
                 .and_then(|process| process.id.clone())
                 .expect("process id");
-            put_full_plan(&mut service, &plan).await;
 
-            let mut new_process = plan.process.clone().expect("process");
-            new_process.id = Some(id(ResourceKind::Process, "sensor-process", "v2"));
+            let new_process = plan.process.clone().expect("process");
             let response = service
                 .handle_revise_resource(ReviseResourceRequest {
-                    pipeline_id: plan.id.clone(),
+                    pipeline_id: stored_plan.id.clone(),
                     previous_resource_id: Some(previous_process_id),
                     new_resource: Some(Resource {
                         kind: Some(resource::Kind::Process(new_process)),
@@ -369,7 +373,11 @@ mod tests {
             assert!(response.accepted);
             assert_eq!(
                 response.revised_pipeline_id,
-                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "v2"))
+                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r2"))
+            );
+            assert_eq!(
+                response.revised_resource_id,
+                Some(id(ResourceKind::Process, "sensor-process", "r2"))
             );
         });
     }
@@ -379,12 +387,17 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            let previous_process_id = plan
+            let stored_plan = put_full_plan(&mut service, &plan).await;
+            let previous_process_id = stored_plan
                 .process
                 .as_ref()
                 .and_then(|process| process.id.clone())
                 .expect("process id");
-            put_full_plan(&mut service, &plan).await;
+            service
+                .handle_apply_resource(ApplyResourceRequest {
+                    pipeline_id: stored_plan.id.clone(),
+                })
+                .await;
             let original_worker_id = service
                 .daemon()
                 .deployments()
@@ -394,11 +407,10 @@ mod tests {
                 .id
                 .clone();
 
-            let mut new_process = plan.process.clone().expect("process");
-            new_process.id = Some(id(ResourceKind::Process, "sensor-process", "v2"));
+            let new_process = plan.process.clone().expect("process");
             let revise = service
                 .handle_revise_resource(ReviseResourceRequest {
-                    pipeline_id: plan.id.clone(),
+                    pipeline_id: stored_plan.id.clone(),
                     previous_resource_id: Some(previous_process_id),
                     new_resource: Some(Resource {
                         kind: Some(resource::Kind::Process(new_process)),
@@ -427,18 +439,45 @@ mod tests {
     }
 
     #[test]
+    fn applies_latest_pipeline_when_revision_is_empty() {
+        block_on(async {
+            let mut service = DaemonService::new();
+            let plan = plan();
+            service
+                .handle_put_resource(PutResourceRequest {
+                    resource: Some(Resource {
+                        kind: Some(resource::Kind::Pipeline(plan)),
+                    }),
+                })
+                .await;
+
+            let apply = service
+                .handle_apply_resource(ApplyResourceRequest {
+                    pipeline_id: Some(id(ResourceKind::Pipeline, "sensor-pipeline", "")),
+                })
+                .await;
+
+            assert!(apply.accepted);
+            assert_eq!(
+                apply.active_pipeline_id,
+                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r1"))
+            );
+            assert_eq!(ApplyMode::try_from(apply.mode), Ok(ApplyMode::Started));
+        });
+    }
+
+    #[test]
     fn rejects_revise_for_non_process_resource() {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            put_full_plan(&mut service, &plan).await;
+            let stored_plan = put_full_plan(&mut service, &plan).await;
 
-            let mut egress = plan.egress.clone().expect("egress");
-            egress.id = Some(id(ResourceKind::Egress, "sensor-egress", "v2"));
+            let egress = plan.egress.clone().expect("egress");
             let response = service
                 .handle_revise_resource(ReviseResourceRequest {
-                    pipeline_id: plan.id.clone(),
-                    previous_resource_id: plan.egress.as_ref().and_then(|egress| egress.id.clone()),
+                    pipeline_id: stored_plan.id.clone(),
+                    previous_resource_id: stored_plan.egress.as_ref().and_then(|egress| egress.id.clone()),
                     new_resource: Some(Resource {
                         kind: Some(resource::Kind::Egress(egress)),
                     }),
@@ -455,8 +494,8 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            let source_id = plan.sources[0].id.clone();
-            put_full_plan(&mut service, &plan).await;
+            let stored_plan = put_full_plan(&mut service, &plan).await;
+            let source_id = stored_plan.sources[0].id.clone();
 
             let response = service
                 .handle_delete_resource(DeleteResourceRequest { id: source_id })
@@ -472,9 +511,9 @@ mod tests {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
-            let plan_id = plan.id.clone();
-            let source_id = plan.sources[0].id.clone().expect("source id");
-            put_full_plan(&mut service, &plan).await;
+            let stored_plan = put_full_plan(&mut service, &plan).await;
+            let plan_id = stored_plan.id.clone();
+            let source_id = stored_plan.sources[0].id.clone().expect("source id");
 
             let response = service
                 .handle_delete_resource(DeleteResourceRequest { id: plan_id })
@@ -560,43 +599,32 @@ mod tests {
         }
     }
 
-    async fn put_full_plan(service: &mut DaemonService, plan: &DeploymentPlan) {
-        put_plan_components(service, plan).await;
-        service
+    async fn put_full_plan(service: &mut DaemonService, plan: &DeploymentPlan) -> DeploymentPlan {
+        let put = service
             .handle_put_resource(PutResourceRequest {
                 resource: Some(Resource {
                     kind: Some(resource::Kind::Pipeline(plan.clone())),
                 }),
             })
             .await;
+        let get = service
+            .handle_get_resource(GetResourceRequest { id: put.id })
+            .await;
+        match get.resource.expect("stored pipeline").kind {
+            Some(resource::Kind::Pipeline(plan)) => plan,
+            _ => panic!("expected pipeline"),
+        }
     }
 
-    async fn put_plan_components(service: &mut DaemonService, plan: &DeploymentPlan) {
-        for source in &plan.sources {
-            service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::MqttSource(source.clone())),
-                    }),
-                })
-                .await;
-        }
-        service
-            .handle_put_resource(PutResourceRequest {
-                resource: Some(Resource {
-                    kind: Some(resource::Kind::Process(
-                        plan.process.clone().expect("process"),
-                    )),
-                }),
-            })
-            .await;
-        service
-            .handle_put_resource(PutResourceRequest {
-                resource: Some(Resource {
-                    kind: Some(resource::Kind::Egress(plan.egress.clone().expect("egress"))),
-                }),
-            })
-            .await;
+    fn loaded_plan_from_put(plan: &DeploymentPlan) -> DeploymentPlan {
+        let mut plan = plan.clone();
+        plan.id = Some(id(ResourceKind::Pipeline, "sensor-pipeline", "r1"));
+        plan.sources[0].id = Some(id(ResourceKind::MqttSource, "sensor-source", "r1"));
+        plan.process.as_mut().expect("process").id =
+            Some(id(ResourceKind::Process, "sensor-process", "r1"));
+        plan.egress.as_mut().expect("egress").id =
+            Some(id(ResourceKind::Egress, "sensor-egress", "r1"));
+        plan
     }
 
 }

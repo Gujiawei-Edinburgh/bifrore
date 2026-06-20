@@ -2,7 +2,6 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: MqttSource
 metadata:
   name: sensor-mqtt-edge
-  version: v1
 spec:
   broker:
     host: 127.0.0.1
@@ -27,7 +26,6 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: MqttSource
 metadata:
   name: sensor-mqtt-cloud
-  version: v1
 spec:
   broker:
     host: 127.0.0.1
@@ -52,7 +50,6 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: Process
 metadata:
   name: sensor-process
-  version: v1
 spec:
   runtime: lua
   source: |
@@ -89,7 +86,6 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: Egress
 metadata:
   name: sensor-batches
-  version: v1
 spec:
   delivery: single
 ---
@@ -97,22 +93,17 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline
 metadata:
   name: sensor-ingest
-  version: v1
 spec:
   execution:
     mode: intra-proc
   sourceRefs:
     - kind: MqttSource
       name: sensor-mqtt-edge
-      version: v1
     - kind: MqttSource
       name: sensor-mqtt-cloud
-      version: v1
   processRef:
     kind: Process
     name: sensor-process
-    version: v1
   egressRef:
     kind: Egress
     name: sensor-batches
-    version: v1

@@ -80,7 +80,14 @@ pub struct DaemonApplyResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonPutResult {
     pub id: ResourceId,
-    pub apply_mode: Option<DaemonApplyMode>,
+    pub resource_ids: Vec<ResourceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonReviseResult {
+    pub revised_pipeline_id: ResourceId,
+    pub revised_resource_id: ResourceId,
+    pub resource_ids: Vec<ResourceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -159,21 +166,13 @@ where
     }
 
     pub async fn put_resource(&mut self, resource: Resource) -> DaemonResult<DaemonPutResult> {
+        let resource = self.assign_resource_revisions(resource).await?;
         let id = resource_id_from_resource(&resource)
             .ok_or_else(|| DaemonError::invalid_state("resource id is missing"))?;
-        let pipeline = match &resource.kind {
-            Some(resource::Kind::Pipeline(plan)) => Some(plan.clone()),
-            Some(_) => None,
-            None => return Err(DaemonError::invalid_state("resource payload is missing")),
-        };
+        let resource_ids = resource_ids_from_resource(&resource);
 
         self.store.save_resource(resource).await?;
-        let apply_mode = if let Some(plan) = pipeline {
-            Some(self.apply(plan).await?.mode)
-        } else {
-            None
-        };
-        Ok(DaemonPutResult { id, apply_mode })
+        Ok(DaemonPutResult { id, resource_ids })
     }
 
     pub async fn get_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
@@ -186,13 +185,14 @@ where
         pipeline_id: &ResourceId,
         previous_id: &ResourceId,
         resource: Resource,
-    ) -> DaemonResult<ResourceId> {
+    ) -> DaemonResult<DaemonReviseResult> {
         if ResourceKind::try_from(previous_id.kind) != Ok(ResourceKind::Process) {
             return Err(DaemonError::invalid_state(
                 "revise currently accepts process resources only",
             ));
         }
 
+        let resource = self.assign_resource_revisions(resource).await?;
         let process = match resource.kind {
             Some(resource::Kind::Process(process)) => process,
             Some(_) => {
@@ -211,14 +211,8 @@ where
                 "revised process id must use Process kind",
             ));
         }
-        if &process_id == previous_id {
-            return Err(DaemonError::invalid_state(
-                "revised process id must advance the version",
-            ));
-        }
-
         let pipeline = self
-            .get_resource(pipeline_id)
+            .get_pipeline_resource(pipeline_id)
             .await?
             .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
         let mut plan = match pipeline.kind {
@@ -236,16 +230,9 @@ where
             ));
         }
 
-        let revised_pipeline_id = ResourceId {
-            kind: ResourceKind::Pipeline as i32,
-            name: pipeline_id.name.clone(),
-            version: process_id.version.clone(), // TODO replace it with ver generator rather than using process_id
-        };
-        if &revised_pipeline_id == pipeline_id {
-            return Err(DaemonError::invalid_state(
-                "revised pipeline id must advance the version",
-            ));
-        }
+        let revised_pipeline_id = self
+            .allocate_resource_id(ResourceKind::Pipeline, &pipeline_id.name)
+            .await?;
 
         plan.id = Some(revised_pipeline_id.clone());
         plan.process = Some(process);
@@ -254,7 +241,11 @@ where
                 kind: Some(resource::Kind::Pipeline(plan)),
             })
             .await?;
-        Ok(revised_pipeline_id)
+        Ok(DaemonReviseResult {
+            revised_pipeline_id: revised_pipeline_id.clone(),
+            revised_resource_id: process_id.clone(),
+            resource_ids: vec![revised_pipeline_id, process_id],
+        })
     }
 
     pub async fn delete_resource(&mut self, id: &ResourceId) -> DaemonResult<bool> {
@@ -277,7 +268,7 @@ where
 
     pub async fn apply_resource(&mut self, id: &ResourceId) -> DaemonResult<DaemonApplyResult> {
         let resource = self
-            .get_resource(id)
+            .get_pipeline_resource(id)
             .await?
             .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
         match resource.kind {
@@ -364,6 +355,81 @@ where
             .find(|key| key.kind == id.kind && key.name == id.name)
             .cloned()
     }
+
+    async fn get_pipeline_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
+        if ResourceKind::try_from(id.kind) != Ok(ResourceKind::Pipeline) {
+            return Err(DaemonError::invalid_state("resource is not a pipeline"));
+        }
+        if id.version.is_empty() {
+            return self
+                .store
+                .load_latest_resource(ResourceKind::Pipeline, &id.name)
+                .await;
+        }
+        self.get_resource(id).await
+    }
+
+    async fn assign_resource_revisions(&mut self, resource: Resource) -> DaemonResult<Resource> {
+        match resource.kind {
+            Some(resource::Kind::Pipeline(mut plan)) => {
+                plan.id = Some(self.assign_id(plan.id, ResourceKind::Pipeline).await?);
+                for source in &mut plan.sources {
+                    source.id = Some(self.assign_id(source.id.clone(), ResourceKind::MqttSource).await?);
+                }
+                if let Some(process) = &mut plan.process {
+                    process.id = Some(self.assign_id(process.id.clone(), ResourceKind::Process).await?);
+                }
+                if let Some(egress) = &mut plan.egress {
+                    egress.id = Some(self.assign_id(egress.id.clone(), ResourceKind::Egress).await?);
+                }
+                Ok(Resource {
+                    kind: Some(resource::Kind::Pipeline(plan)),
+                })
+            }
+            Some(resource::Kind::MqttSource(mut source)) => {
+                source.id = Some(self.assign_id(source.id, ResourceKind::MqttSource).await?);
+                Ok(Resource {
+                    kind: Some(resource::Kind::MqttSource(source)),
+                })
+            }
+            Some(resource::Kind::Process(mut process)) => {
+                process.id = Some(self.assign_id(process.id, ResourceKind::Process).await?);
+                Ok(Resource {
+                    kind: Some(resource::Kind::Process(process)),
+                })
+            }
+            Some(resource::Kind::Egress(mut egress)) => {
+                egress.id = Some(self.assign_id(egress.id, ResourceKind::Egress).await?);
+                Ok(Resource {
+                    kind: Some(resource::Kind::Egress(egress)),
+                })
+            }
+            None => Err(DaemonError::invalid_state("resource payload is missing")),
+        }
+    }
+
+    async fn assign_id(
+        &mut self,
+        id: Option<ResourceId>,
+        kind: ResourceKind,
+    ) -> DaemonResult<ResourceId> {
+        let id = id.ok_or_else(|| {
+            DaemonError::invalid_state(format!("{kind} resource id is missing"))
+        })?;
+        self.allocate_resource_id(kind, &id.name).await
+    }
+
+    async fn allocate_resource_id(
+        &mut self,
+        kind: ResourceKind,
+        name: &str,
+    ) -> DaemonResult<ResourceId> {
+        Ok(ResourceId {
+            kind: kind as i32,
+            name: name.to_string(),
+            version: self.store.allocate_revision(kind, name).await?,
+        })
+    }
 }
 
 fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
@@ -373,6 +439,35 @@ fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
         Some(resource::Kind::Process(process)) => process.id.clone(),
         Some(resource::Kind::Egress(egress)) => egress.id.clone(),
         None => None,
+    }
+}
+
+fn resource_ids_from_resource(resource: &Resource) -> Vec<ResourceId> {
+    match &resource.kind {
+        Some(resource::Kind::Pipeline(pipeline)) => {
+            let mut ids = Vec::new();
+            if let Some(id) = &pipeline.id {
+                ids.push(id.clone());
+            }
+            ids.extend(
+                pipeline
+                    .sources
+                    .iter()
+                    .filter_map(|source| source.id.clone()),
+            );
+            if let Some(process) = &pipeline.process {
+                if let Some(id) = &process.id {
+                    ids.push(id.clone());
+                }
+            }
+            if let Some(egress) = &pipeline.egress {
+                if let Some(id) = &egress.id {
+                    ids.push(id.clone());
+                }
+            }
+            ids
+        }
+        _ => resource_id_from_resource(resource).into_iter().collect(),
     }
 }
 

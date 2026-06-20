@@ -114,7 +114,6 @@ impl ResourceDocument {
             )));
         }
         require_non_empty("metadata.name", &self.metadata.name)?;
-        require_non_empty("metadata.version", &self.metadata.version)?;
         validate_spec(self)
     }
 
@@ -126,6 +125,7 @@ impl ResourceDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct ResourceMetadata {
     pub(crate) name: String,
+    #[serde(default)]
     pub(crate) version: String,
 }
 

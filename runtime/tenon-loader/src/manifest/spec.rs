@@ -201,6 +201,7 @@ pub(crate) struct ExecutionSpec {
 pub(crate) struct ResourceRef {
     pub(crate) kind: Option<ManifestResourceKind>,
     pub(crate) name: String,
+    #[serde(default)]
     pub(crate) version: String,
 }
 
@@ -211,7 +212,7 @@ impl ResourceRef {
             None => return Err(resource_error(format!("{field}.kind must not be empty"))),
         }
         require_non_empty(&format!("{field}.name"), &self.name)?;
-        require_non_empty(&format!("{field}.version"), &self.version)
+        Ok(())
     }
 
     pub(crate) fn display(&self) -> String {

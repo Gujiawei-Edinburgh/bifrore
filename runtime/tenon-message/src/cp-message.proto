@@ -33,6 +33,7 @@ message PutResourceResponse {
   tenon.daemon.v1.ResourceId id = 2;
   ApplyManifestMode mode = 3;
   string message = 4;
+  repeated tenon.daemon.v1.ResourceId resource_ids = 5;
 }
 
 message ReviseResourceRequest {
@@ -45,6 +46,8 @@ message ReviseResourceResponse {
   bool accepted = 1;
   tenon.daemon.v1.ResourceId revised_pipeline_id = 2;
   string message = 3;
+  tenon.daemon.v1.ResourceId revised_resource_id = 4;
+  repeated tenon.daemon.v1.ResourceId resource_ids = 5;
 }
 
 message ApplyResourceRequest {

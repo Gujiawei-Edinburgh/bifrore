@@ -18,8 +18,15 @@ const PLAN_KEY_PREFIX: &[u8] = b"plan";
 const RESOURCE_KEY_PREFIX: &[u8] = b"resource";
 const MQTT_CLIENT_IDS_KEY_PREFIX: &[u8] = b"mqtt_source_client_ids";
 const RESOURCE_REFERENCES_KEY_PREFIX: &[u8] = b"resource_refs";
+const LATEST_RESOURCE_KEY_PREFIX: &[u8] = b"latest_resource";
 
 pub trait DaemonStore {
+    fn allocate_revision<'a>(
+        &'a mut self,
+        kind: ResourceKind,
+        name: &'a str,
+    ) -> impl Future<Output = DaemonResult<String>> + Send + 'a;
+
     fn save_resource<'a>(
         &'a mut self,
         resource: Resource,
@@ -28,6 +35,12 @@ pub trait DaemonStore {
     fn load_resource<'a>(
         &'a self,
         key: &'a ResourceKey,
+    ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a;
+
+    fn load_latest_resource<'a>(
+        &'a self,
+        kind: ResourceKind,
+        name: &'a str,
     ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a;
 
     fn save_mqtt_client_ids<'a>(
@@ -55,6 +68,7 @@ pub trait DaemonStore {
 #[derive(Debug, Default)]
 pub struct InMemoryDaemonStore {
     entries: HashMap<Vec<u8>, Vec<u8>>,
+    revisions: HashMap<(i32, String), u64>,
 }
 
 impl InMemoryDaemonStore {
@@ -64,6 +78,24 @@ impl InMemoryDaemonStore {
 }
 
 impl DaemonStore for InMemoryDaemonStore {
+    fn allocate_revision<'a>(
+        &'a mut self,
+        kind: ResourceKind,
+        name: &'a str,
+    ) -> impl Future<Output = DaemonResult<String>> + Send + 'a {
+        async move {
+            if name.trim().is_empty() {
+                return Err(DaemonError::invalid_state("resource name is missing"));
+            }
+            let next_revision = self
+                .revisions
+                .entry((kind as i32, name.to_string()))
+                .and_modify(|revision| *revision += 1)
+                .or_insert(1);
+            Ok(format!("r{next_revision}"))
+        }
+    }
+
     fn save_resource<'a>(
         &'a mut self,
         resource: Resource,
@@ -86,24 +118,42 @@ impl DaemonStore for InMemoryDaemonStore {
                     self.save_message(plan_key(&key), &stored_plan);
                     self.save_pipeline_resources(&pipeline)?;
                     self.save_pipeline_reverse_refs(&stored_plan)?;
+                    self.save_latest_resource_id(&key, pipeline.id.as_ref());
                 }
                 Some(resource::Kind::MqttSource(source)) => {
                     let key =
                         resource_key_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)?;
                     self.save_message(resource_key(&key), &source);
+                    self.save_latest_resource_id(&key, source.id.as_ref());
                 }
                 Some(resource::Kind::Process(process)) => {
                     let key =
                         resource_key_from_required_id(process.id.as_ref(), ResourceKind::Process)?;
                     self.save_message(resource_key(&key), &process);
+                    self.save_latest_resource_id(&key, process.id.as_ref());
                 }
                 Some(resource::Kind::Egress(egress)) => {
                     let key = resource_key_from_required_id(egress.id.as_ref(), ResourceKind::Egress)?;
                     self.save_message(resource_key(&key), &egress);
+                    self.save_latest_resource_id(&key, egress.id.as_ref());
                 }
                 None => return Err(DaemonError::invalid_state("resource payload is missing")),
             }
             Ok(())
+        }
+    }
+
+    fn load_latest_resource<'a>(
+        &'a self,
+        kind: ResourceKind,
+        name: &'a str,
+    ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a {
+        async move {
+            let key = latest_resource_key(kind, name);
+            let Some(id) = self.load_message::<ResourceId>(&key, "latest resource id")? else {
+                return Ok(None);
+            };
+            self.load_resource(&ResourceKey::from_id(&id)).await
         }
     }
 
@@ -203,6 +253,12 @@ impl DaemonStore for InMemoryDaemonStore {
 }
 
 impl InMemoryDaemonStore {
+    fn save_latest_resource_id(&mut self, key: &ResourceKey, id: Option<&ResourceId>) {
+        if let Some(id) = id {
+            self.save_message(latest_resource_key_from_key(key), id);
+        }
+    }
+
     fn resolve_stored_plan(&self, stored_plan: StoredDeploymentPlan) -> DaemonResult<DeploymentPlan> {
         let sources = stored_plan
             .source_refs
@@ -253,16 +309,19 @@ impl InMemoryDaemonStore {
         for source in &plan.sources {
             let key = resource_key_from_required_id(source.id.as_ref(), ResourceKind::MqttSource)?;
             self.save_message(resource_key(&key), source);
+            self.save_latest_resource_id(&key, source.id.as_ref());
         }
 
         if let Some(process) = &plan.process {
             let key = resource_key_from_required_id(process.id.as_ref(), ResourceKind::Process)?;
             self.save_message(resource_key(&key), process);
+            self.save_latest_resource_id(&key, process.id.as_ref());
         }
 
         if let Some(egress) = &plan.egress {
             let key = resource_key_from_required_id(egress.id.as_ref(), ResourceKind::Egress)?;
             self.save_message(resource_key(&key), egress);
+            self.save_latest_resource_id(&key, egress.id.as_ref());
         }
 
         Ok(())
@@ -454,6 +513,43 @@ fn client_ids_key(key: &ResourceKey) -> Vec<u8> {
 
 fn resource_references_key(key: &ResourceKey) -> Vec<u8> {
     store_key(RESOURCE_REFERENCES_KEY_PREFIX, key)
+}
+
+fn latest_resource_key(kind: ResourceKind, name: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(LATEST_RESOURCE_KEY_PREFIX);
+    bytes.push(b':');
+    bytes.extend_from_slice(resource_kind_label(kind).as_bytes());
+    bytes.push(b':');
+    bytes.extend_from_slice(name.as_bytes());
+    bytes
+}
+
+fn latest_resource_key_from_key(key: &ResourceKey) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(LATEST_RESOURCE_KEY_PREFIX);
+    bytes.push(b':');
+    bytes.extend_from_slice(resource_kind_label_from_i32(key.kind).as_bytes());
+    bytes.push(b':');
+    bytes.extend_from_slice(key.name.as_bytes());
+    bytes
+}
+
+fn resource_kind_label(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::MqttSource => "mqtt_source",
+        ResourceKind::Egress => "egress",
+        ResourceKind::Process => "process",
+        ResourceKind::Pipeline => "pipeline",
+        ResourceKind::Unspecified => "unspecified",
+    }
+}
+
+fn resource_kind_label_from_i32(kind: i32) -> String {
+    match ResourceKind::try_from(kind) {
+        Ok(kind) => resource_kind_label(kind).to_string(),
+        Err(_) => format!("kind_{kind}"),
+    }
 }
 
 fn store_key(prefix: &[u8], key: &ResourceKey) -> Vec<u8> {

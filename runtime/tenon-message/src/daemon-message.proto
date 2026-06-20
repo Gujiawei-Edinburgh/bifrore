@@ -50,6 +50,7 @@ message PutResourceResponse {
   ResourceId id = 2;
   ApplyMode mode = 3;
   string message = 4;
+  repeated ResourceId resource_ids = 5;
 }
 
 message ApplyResourceRequest {
@@ -83,6 +84,8 @@ message ReviseResourceResponse {
   bool accepted = 1;
   ResourceId revised_pipeline_id = 2;
   string message = 3;
+  ResourceId revised_resource_id = 4;
+  repeated ResourceId resource_ids = 5;
 }
 
 message DeleteResourceRequest {

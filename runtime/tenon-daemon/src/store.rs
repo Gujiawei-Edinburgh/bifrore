@@ -1,4 +1,4 @@
-use crate::{DaemonError, DaemonResult, ResourceKey};
+use crate::{DaemonError, DaemonResult};
 use prost::Message;
 use std::collections::HashMap;
 use std::future::Future;
@@ -30,13 +30,13 @@ pub trait DaemonStore {
 
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
-        key: &'a ResourceKey,
+        key: &'a ResourceId,
         client_ids: Vec<String>,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a;
 
     fn load_mqtt_client_ids<'a>(
         &'a self,
-        key: &'a ResourceKey,
+        key: &'a ResourceId,
     ) -> impl Future<Output = DaemonResult<Vec<String>>> + Send + 'a;
 }
 
@@ -58,12 +58,11 @@ impl DaemonStore for InMemoryDaemonStore {
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a {
         async move {
             let id = required_pipeline_id(plan.id.as_ref())?;
-            let key = ResourceKey::from_id(id);
-            let storage_key = pipeline_key(&key);
+            let storage_key = pipeline_key(id);
             if self.load_message::<DeploymentPlan>(&storage_key, PLAN_LABEL)?.is_some() {
                 return Err(DaemonError::invalid_state(format!(
                     "pipeline resource already exists: {}",
-                    key.as_store_key()
+                    pipeline_id_label(id)
                 )));
             }
             self.save_message(storage_key, &plan);
@@ -78,7 +77,7 @@ impl DaemonStore for InMemoryDaemonStore {
     ) -> impl Future<Output = DaemonResult<Option<DeploymentPlan>>> + Send + 'a {
         async move {
             required_pipeline_id(Some(id))?;
-            self.load_message::<DeploymentPlan>(&pipeline_key(&ResourceKey::from_id(id)), PLAN_LABEL)
+            self.load_message::<DeploymentPlan>(&pipeline_key(id), PLAN_LABEL)
         }
     }
 
@@ -96,7 +95,7 @@ impl DaemonStore for InMemoryDaemonStore {
 
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
-        key: &'a ResourceKey,
+        key: &'a ResourceId,
         client_ids: Vec<String>,
     ) -> impl Future<Output = DaemonResult<()>> + Send + 'a {
         async move {
@@ -107,7 +106,7 @@ impl DaemonStore for InMemoryDaemonStore {
 
     fn load_mqtt_client_ids<'a>(
         &'a self,
-        key: &'a ResourceKey,
+        key: &'a ResourceId,
     ) -> impl Future<Output = DaemonResult<Vec<String>>> + Send + 'a {
         async move {
             Ok(self
@@ -151,16 +150,20 @@ fn required_pipeline_id(id: Option<&ResourceId>) -> DaemonResult<&ResourceId> {
     Ok(id)
 }
 
-fn pipeline_key(key: &ResourceKey) -> Vec<u8> {
-    store_key(PIPELINE_KEY_PREFIX, key.as_store_key().as_bytes())
+fn pipeline_key(id: &ResourceId) -> Vec<u8> {
+    store_key(PIPELINE_KEY_PREFIX, pipeline_id_label(id).as_bytes())
 }
 
 fn pipeline_metadata_key(name: &str) -> Vec<u8> {
     store_key(PIPELINE_METADATA_KEY_PREFIX, name.as_bytes())
 }
 
-fn client_ids_key(key: &ResourceKey) -> Vec<u8> {
-    store_key(MQTT_CLIENT_IDS_KEY_PREFIX, key.as_store_key().as_bytes())
+fn client_ids_key(id: &ResourceId) -> Vec<u8> {
+    store_key(MQTT_CLIENT_IDS_KEY_PREFIX, pipeline_id_label(id).as_bytes())
+}
+
+fn pipeline_id_label(id: &ResourceId) -> String {
+    format!("{}:{}", id.name, id.version)
 }
 
 fn store_key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
@@ -182,7 +185,7 @@ mod tests {
 
     #[test]
     fn builds_readable_byte_keys() {
-        let key = key("sensor", "v1");
+        let key = id("sensor", "v1");
 
         assert_eq!(pipeline_key(&key), b"pipeline:sensor:v1".to_vec());
         assert_eq!(pipeline_metadata_key("sensor"), b"pipeline_metadata:sensor".to_vec());
@@ -239,7 +242,7 @@ mod tests {
     fn saves_and_loads_mqtt_client_ids() {
         block_on(async {
             let mut store = InMemoryDaemonStore::new();
-            let source_key = key("sensor-source", "v1");
+            let source_key = id("sensor-source", "v1");
 
             assert!(
                 store
@@ -265,13 +268,6 @@ mod tests {
                 vec!["client-0".to_string(), "client-1".to_string()]
             );
         });
-    }
-
-    fn key(name: &str, version: &str) -> ResourceKey {
-        ResourceKey {
-            name: name.to_string(),
-            version: version.to_string(),
-        }
     }
 
     fn id(name: &str, version: &str) -> ResourceId {

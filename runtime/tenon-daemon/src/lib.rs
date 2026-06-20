@@ -82,26 +82,7 @@ pub struct DaemonPutPipelineResult {
     pub id: ResourceId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResourceKey {
-    pub name: String,
-    pub version: String,
-}
-
-impl ResourceKey {
-    pub fn from_id(id: &ResourceId) -> Self {
-        Self {
-            name: id.name.clone(),
-            version: id.version.clone(),
-        }
-    }
-
-    pub fn as_store_key(&self) -> String {
-        format!("{}:{}", self.name, self.version)
-    }
-}
-
-pub type DeploymentKey = ResourceKey;
+pub type DeploymentKey = ResourceId;
 
 pub struct TenonDaemon<L, P> {
     worker_launcher: L,
@@ -171,7 +152,7 @@ where
             .id
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
-        let key = DeploymentKey::from_id(&id);
+        let key = id.clone();
 
         if let Some(active_key) = self.active_key_for_pipeline(&id) {
             if let Some(mut deployment) = self.deployments.remove(&active_key) {
@@ -219,10 +200,9 @@ where
     }
 
     pub fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
-        let key = DeploymentKey::from_id(id);
         let deployment = self
             .deployments
-            .get(&key)
+            .get(id)
             .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?;
         self.worker_launcher.status(&deployment.worker)
     }

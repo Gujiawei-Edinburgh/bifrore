@@ -52,6 +52,17 @@ message PutResourceResponse {
   string message = 4;
 }
 
+message ApplyResourceRequest {
+  ResourceId pipeline_id = 1;
+}
+
+message ApplyResourceResponse {
+  bool accepted = 1;
+  ResourceId active_pipeline_id = 2;
+  ApplyMode mode = 3;
+  string message = 4;
+}
+
 message GetResourceRequest {
   ResourceId id = 1;
 }
@@ -62,14 +73,15 @@ message GetResourceResponse {
   string message = 3;
 }
 
-message UpdateResourceRequest {
-  ResourceId previous_id = 1;
-  Resource resource = 2;
+message ReviseResourceRequest {
+  ResourceId pipeline_id = 1;
+  ResourceId previous_resource_id = 2;
+  Resource new_resource = 3;
 }
 
-message UpdateResourceResponse {
+message ReviseResourceResponse {
   bool accepted = 1;
-  repeated ResourceId affected_pipelines = 2;
+  ResourceId revised_pipeline_id = 2;
   string message = 3;
 }
 
@@ -189,9 +201,11 @@ message DaemonEnvelope {
     PutResourceResponse put_resource_response = 4;
     GetResourceRequest get_resource = 7;
     GetResourceResponse get_resource_response = 8;
-    UpdateResourceRequest update_resource = 9;
-    UpdateResourceResponse update_resource_response = 10;
+    ReviseResourceRequest revise_resource = 9;
+    ReviseResourceResponse revise_resource_response = 10;
     DeleteResourceRequest delete_resource = 11;
     DeleteResourceResponse delete_resource_response = 12;
+    ApplyResourceRequest apply_resource = 13;
+    ApplyResourceResponse apply_resource_response = 14;
   }
 }

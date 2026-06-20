@@ -58,10 +58,29 @@ impl std::fmt::Display for DaemonError {
 
 impl std::error::Error for DaemonError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActiveDeployment {
     pub id: ResourceId,
+    pub plan: DeploymentPlan,
     pub worker: WorkerHandle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonApplyMode {
+    Started,
+    HotReload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonApplyResult {
+    pub id: ResourceId,
+    pub mode: DaemonApplyMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonPutResult {
+    pub id: ResourceId,
+    pub apply_mode: Option<DaemonApplyMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,7 +158,7 @@ where
         self.deployments.values()
     }
 
-    pub async fn put_resource(&mut self, resource: Resource) -> DaemonResult<ResourceId> {
+    pub async fn put_resource(&mut self, resource: Resource) -> DaemonResult<DaemonPutResult> {
         let id = resource_id_from_resource(&resource)
             .ok_or_else(|| DaemonError::invalid_state("resource id is missing"))?;
         let pipeline = match &resource.kind {
@@ -149,10 +168,12 @@ where
         };
 
         self.store.save_resource(resource).await?;
-        if let Some(plan) = pipeline {
-            self.apply(plan).await?;
-        }
-        Ok(id)
+        let apply_mode = if let Some(plan) = pipeline {
+            Some(self.apply(plan).await?.mode)
+        } else {
+            None
+        };
+        Ok(DaemonPutResult { id, apply_mode })
     }
 
     pub async fn get_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
@@ -160,15 +181,80 @@ where
         self.store.load_resource(&key).await
     }
 
-    pub async fn update_resource(
+    pub async fn revise_resource(
         &mut self,
+        pipeline_id: &ResourceId,
         previous_id: &ResourceId,
         resource: Resource,
-    ) -> DaemonResult<Vec<ResourceId>> {
-        let previous_key = ResourceKey::from_id(previous_id);
-        let affected_pipelines = self.store.load_referencing_plans(&previous_key).await?;
-        self.store.save_resource(resource).await?;
-        Ok(affected_pipelines)
+    ) -> DaemonResult<ResourceId> {
+        if ResourceKind::try_from(previous_id.kind) != Ok(ResourceKind::Process) {
+            return Err(DaemonError::invalid_state(
+                "revise currently accepts process resources only",
+            ));
+        }
+
+        let process = match resource.kind {
+            Some(resource::Kind::Process(process)) => process,
+            Some(_) => {
+                return Err(DaemonError::invalid_state(
+                    "revised resource must be a process",
+                ));
+            }
+            None => return Err(DaemonError::invalid_state("revised resource is missing")),
+        };
+        let process_id = process
+            .id
+            .clone()
+            .ok_or_else(|| DaemonError::invalid_state("revised process id is missing"))?;
+        if ResourceKind::try_from(process_id.kind) != Ok(ResourceKind::Process) {
+            return Err(DaemonError::invalid_state(
+                "revised process id must use Process kind",
+            ));
+        }
+        if &process_id == previous_id {
+            return Err(DaemonError::invalid_state(
+                "revised process id must advance the version",
+            ));
+        }
+
+        let pipeline = self
+            .get_resource(pipeline_id)
+            .await?
+            .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
+        let mut plan = match pipeline.kind {
+            Some(resource::Kind::Pipeline(plan)) => plan,
+            _ => return Err(DaemonError::invalid_state("resource is not a pipeline")),
+        };
+        let current_process_id = plan
+            .process
+            .as_ref()
+            .and_then(|process| process.id.as_ref())
+            .ok_or_else(|| DaemonError::invalid_state("pipeline process id is missing"))?;
+        if current_process_id != previous_id {
+            return Err(DaemonError::invalid_state(
+                "pipeline does not reference previous resource id",
+            ));
+        }
+
+        let revised_pipeline_id = ResourceId {
+            kind: ResourceKind::Pipeline as i32,
+            name: pipeline_id.name.clone(),
+            version: process_id.version.clone(), // TODO replace it with ver generator rather than using process_id
+        };
+        if &revised_pipeline_id == pipeline_id {
+            return Err(DaemonError::invalid_state(
+                "revised pipeline id must advance the version",
+            ));
+        }
+
+        plan.id = Some(revised_pipeline_id.clone());
+        plan.process = Some(process);
+        self.store
+            .save_resource(Resource {
+                kind: Some(resource::Kind::Pipeline(plan)),
+            })
+            .await?;
+        Ok(revised_pipeline_id)
     }
 
     pub async fn delete_resource(&mut self, id: &ResourceId) -> DaemonResult<bool> {
@@ -189,23 +275,62 @@ where
         self.store.delete_resource(&key).await
     }
 
-    pub async fn apply(&mut self, plan: DeploymentPlan) -> DaemonResult<&ActiveDeployment> {
+    pub async fn apply_resource(&mut self, id: &ResourceId) -> DaemonResult<DaemonApplyResult> {
+        let resource = self
+            .get_resource(id)
+            .await?
+            .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
+        match resource.kind {
+            Some(resource::Kind::Pipeline(plan)) => self.apply(plan).await,
+            _ => Err(DaemonError::invalid_state("resource is not a pipeline")),
+        }
+    }
+
+    async fn apply(&mut self, plan: DeploymentPlan) -> DaemonResult<DaemonApplyResult> {
         let id = plan
             .id
             .clone()
             .ok_or_else(|| DaemonError::invalid_state("deployment plan id is missing"))?;
         let key = DeploymentKey::from_id(&id);
-        self.stop_worker_by_key(&key)?;
 
-        let worker = self.worker_launcher.start(plan)?;
+        if let Some(active_key) = self.active_key_for_pipeline(&id) {
+            if let Some(mut deployment) = self.deployments.remove(&active_key) {
+                if can_reload_process_only(&deployment.plan, &plan) {
+                    self.worker_launcher.reload(&deployment.worker, plan.clone())?;
+                    deployment.id = id;
+                    deployment.plan = plan;
+                    self.deployments.insert(key.clone(), deployment);
+                    return Ok(DaemonApplyResult {
+                        id: self
+                            .deployments
+                            .get(&key)
+                            .ok_or_else(|| {
+                                DaemonError::invalid_state("deployment missing after reload")
+                            })?
+                            .id
+                            .clone(),
+                        mode: DaemonApplyMode::HotReload,
+                    });
+                }
+                self.worker_launcher.stop(deployment.worker)?;
+            }
+        }
+
+        let worker = self.worker_launcher.start(plan.clone())?;
         self.deployments
-            .insert(key.clone(), ActiveDeployment { id, worker });
-        self.deployments
-            .get(&key)
-            .ok_or_else(|| DaemonError::invalid_state("deployment missing after apply"))
+            .insert(key.clone(), ActiveDeployment { id, plan, worker });
+        Ok(DaemonApplyResult {
+            id: self
+                .deployments
+                .get(&key)
+                .ok_or_else(|| DaemonError::invalid_state("deployment missing after apply"))?
+                .id
+                .clone(),
+            mode: DaemonApplyMode::Started,
+        })
     }
 
-    pub async fn reload(&mut self, plan: DeploymentPlan) -> DaemonResult<&ActiveDeployment> {
+    pub async fn reload(&mut self, plan: DeploymentPlan) -> DaemonResult<DaemonApplyResult> {
         self.apply(plan).await
     }
 
@@ -232,6 +357,13 @@ where
         }
         Ok(())
     }
+
+    fn active_key_for_pipeline(&self, id: &ResourceId) -> Option<DeploymentKey> {
+        self.deployments
+            .keys()
+            .find(|key| key.kind == id.kind && key.name == id.name)
+            .cloned()
+    }
 }
 
 fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
@@ -242,4 +374,19 @@ fn resource_id_from_resource(resource: &Resource) -> Option<ResourceId> {
         Some(resource::Kind::Egress(egress)) => egress.id.clone(),
         None => None,
     }
+}
+
+fn can_reload_process_only(current: &DeploymentPlan, target: &DeploymentPlan) -> bool {
+    let Some(current_id) = current.id.as_ref() else {
+        return false;
+    };
+    let Some(target_id) = target.id.as_ref() else {
+        return false;
+    };
+    current_id.kind == target_id.kind
+        && current_id.name == target_id.name
+        && current.execution == target.execution
+        && current.sources == target.sources
+        && current.egress == target.egress
+        && current.process != target.process
 }

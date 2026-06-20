@@ -1,11 +1,11 @@
 use crate::{
-    DaemonError, DaemonErrorKind, DaemonResult, DaemonStore, InMemoryDaemonStore, NoopWorkerLauncher,
-    TenonDaemon, WorkerLauncher,
+    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonResult, DaemonStore,
+    InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon, WorkerLauncher,
 };
 use tenon_message::daemon::v1::{
-    worker_envelope, ApplyMode, DeleteResourceRequest, DeleteResourceResponse, GetResourceRequest,
-    GetResourceResponse, PutResourceRequest, PutResourceResponse, UpdateResourceRequest,
-    UpdateResourceResponse, WorkerEnvelope,
+    worker_envelope, ApplyMode, ApplyResourceRequest, ApplyResourceResponse, DeleteResourceRequest,
+    DeleteResourceResponse, GetResourceRequest, GetResourceResponse, PutResourceRequest,
+    PutResourceResponse, ReviseResourceRequest, ReviseResourceResponse, WorkerEnvelope,
 };
 
 pub struct DaemonService<L = NoopWorkerLauncher, S = InMemoryDaemonStore> {
@@ -49,19 +49,18 @@ where
             return put_rejected(ApplyMode::RejectedWorkerError, "resource is missing");
         };
 
-        let mode = match resource.kind {
-            Some(tenon_message::plan::resource::Kind::Pipeline(_)) => ApplyMode::Started,
-            Some(_) => ApplyMode::Unspecified,
-            None => {
+        if resource.kind.is_none() {
                 return put_rejected(ApplyMode::RejectedWorkerError, "resource payload is missing");
-            }
-        };
+        }
 
         match self.daemon.put_resource(resource).await {
-            Ok(id) => PutResourceResponse {
+            Ok(result) => PutResourceResponse {
                 accepted: true,
-                id: Some(id),
-                mode: mode as i32,
+                id: Some(result.id),
+                mode: result
+                    .apply_mode
+                    .map(apply_mode_from_daemon)
+                    .unwrap_or(ApplyMode::Unspecified) as i32,
                 message: String::new(),
             },
             Err(error) => put_rejected(apply_error_mode(&error), error.message),
@@ -98,27 +97,58 @@ where
         }
     }
 
-    pub async fn handle_update_resource(
+    pub async fn handle_apply_resource(
         &mut self,
-        request: UpdateResourceRequest,
-    ) -> UpdateResourceResponse {
-        let Some(previous_id) = request.previous_id else {
-            return update_rejected("previous resource id is missing");
+        request: ApplyResourceRequest,
+    ) -> ApplyResourceResponse {
+        let Some(pipeline_id) = request.pipeline_id else {
+            return apply_rejected("pipeline id is missing");
         };
-        let Some(resource) = request.resource else {
-            return update_rejected("updated resource is missing");
-        };
-        if resource.kind.is_none() {
-            return update_rejected("updated resource is missing");
-        }
 
-        match self.daemon.update_resource(&previous_id, resource).await {
-            Ok(affected_pipelines) => UpdateResourceResponse {
+        match self.daemon.apply_resource(&pipeline_id).await {
+            Ok(result) => ApplyResourceResponse {
                 accepted: true,
-                affected_pipelines,
+                active_pipeline_id: Some(result.id),
+                mode: apply_mode_from_daemon(result.mode) as i32,
                 message: String::new(),
             },
-            Err(error) => update_rejected(error.message),
+            Err(error) => ApplyResourceResponse {
+                accepted: false,
+                active_pipeline_id: None,
+                mode: apply_error_mode(&error) as i32,
+                message: error.message,
+            },
+        }
+    }
+
+    pub async fn handle_revise_resource(
+        &mut self,
+        request: ReviseResourceRequest,
+    ) -> ReviseResourceResponse {
+        let Some(pipeline_id) = request.pipeline_id else {
+            return revise_rejected("pipeline id is missing");
+        };
+        let Some(previous_id) = request.previous_resource_id else {
+            return revise_rejected("previous resource id is missing");
+        };
+        let Some(resource) = request.new_resource else {
+            return revise_rejected("revised resource is missing");
+        };
+        if resource.kind.is_none() {
+            return revise_rejected("revised resource is missing");
+        }
+
+        match self
+            .daemon
+            .revise_resource(&pipeline_id, &previous_id, resource)
+            .await
+        {
+            Ok(revised_pipeline_id) => ReviseResourceResponse {
+                accepted: true,
+                revised_pipeline_id: Some(revised_pipeline_id),
+                message: String::new(),
+            },
+            Err(error) => revise_rejected(error.message),
         }
     }
 
@@ -163,10 +193,19 @@ fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutResourceRespo
     }
 }
 
-fn update_rejected(message: impl Into<String>) -> UpdateResourceResponse {
-    UpdateResourceResponse {
+fn apply_rejected(message: impl Into<String>) -> ApplyResourceResponse {
+    ApplyResourceResponse {
         accepted: false,
-        affected_pipelines: Vec::new(),
+        active_pipeline_id: None,
+        mode: ApplyMode::RejectedWorkerError as i32,
+        message: message.into(),
+    }
+}
+
+fn revise_rejected(message: impl Into<String>) -> ReviseResourceResponse {
+    ReviseResourceResponse {
+        accepted: false,
+        revised_pipeline_id: None,
         message: message.into(),
     }
 }
@@ -184,6 +223,13 @@ fn apply_error_mode(error: &DaemonError) -> ApplyMode {
         DaemonErrorKind::Store | DaemonErrorKind::InvalidState | DaemonErrorKind::NotFound => {
             ApplyMode::RejectedWorkerError
         }
+    }
+}
+
+fn apply_mode_from_daemon(mode: DaemonApplyMode) -> ApplyMode {
+    match mode {
+        DaemonApplyMode::Started => ApplyMode::Started,
+        DaemonApplyMode::HotReload => ApplyMode::HotReload,
     }
 }
 
@@ -297,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn edits_resource_and_reports_affected_pipelines() {
+    fn revises_process_and_returns_new_pipeline_id() {
         block_on(async {
             let mut service = DaemonService::new();
             let plan = plan();
@@ -311,16 +357,96 @@ mod tests {
             let mut new_process = plan.process.clone().expect("process");
             new_process.id = Some(id(ResourceKind::Process, "sensor-process", "v2"));
             let response = service
-                .handle_update_resource(UpdateResourceRequest {
-                    previous_id: Some(previous_process_id),
-                    resource: Some(Resource {
+                .handle_revise_resource(ReviseResourceRequest {
+                    pipeline_id: plan.id.clone(),
+                    previous_resource_id: Some(previous_process_id),
+                    new_resource: Some(Resource {
                         kind: Some(resource::Kind::Process(new_process)),
                     }),
                 })
                 .await;
 
             assert!(response.accepted);
-            assert_eq!(response.affected_pipelines, vec![plan.id.expect("plan id")]);
+            assert_eq!(
+                response.revised_pipeline_id,
+                Some(id(ResourceKind::Pipeline, "sensor-pipeline", "v2"))
+            );
+        });
+    }
+
+    #[test]
+    fn applies_revised_process_with_hot_reload() {
+        block_on(async {
+            let mut service = DaemonService::new();
+            let plan = plan();
+            let previous_process_id = plan
+                .process
+                .as_ref()
+                .and_then(|process| process.id.clone())
+                .expect("process id");
+            put_full_plan(&mut service, &plan).await;
+            let original_worker_id = service
+                .daemon()
+                .deployments()
+                .next()
+                .expect("active deployment")
+                .worker
+                .id
+                .clone();
+
+            let mut new_process = plan.process.clone().expect("process");
+            new_process.id = Some(id(ResourceKind::Process, "sensor-process", "v2"));
+            let revise = service
+                .handle_revise_resource(ReviseResourceRequest {
+                    pipeline_id: plan.id.clone(),
+                    previous_resource_id: Some(previous_process_id),
+                    new_resource: Some(Resource {
+                        kind: Some(resource::Kind::Process(new_process)),
+                    }),
+                })
+                .await;
+            let apply = service
+                .handle_apply_resource(ApplyResourceRequest {
+                    pipeline_id: revise.revised_pipeline_id.clone(),
+                })
+                .await;
+            let current_worker_id = service
+                .daemon()
+                .deployments()
+                .next()
+                .expect("active deployment")
+                .worker
+                .id
+                .clone();
+
+            assert!(revise.accepted);
+            assert!(apply.accepted);
+            assert_eq!(ApplyMode::try_from(apply.mode), Ok(ApplyMode::HotReload));
+            assert_eq!(current_worker_id, original_worker_id);
+        });
+    }
+
+    #[test]
+    fn rejects_revise_for_non_process_resource() {
+        block_on(async {
+            let mut service = DaemonService::new();
+            let plan = plan();
+            put_full_plan(&mut service, &plan).await;
+
+            let mut egress = plan.egress.clone().expect("egress");
+            egress.id = Some(id(ResourceKind::Egress, "sensor-egress", "v2"));
+            let response = service
+                .handle_revise_resource(ReviseResourceRequest {
+                    pipeline_id: plan.id.clone(),
+                    previous_resource_id: plan.egress.as_ref().and_then(|egress| egress.id.clone()),
+                    new_resource: Some(Resource {
+                        kind: Some(resource::Kind::Egress(egress)),
+                    }),
+                })
+                .await;
+
+            assert!(!response.accepted);
+            assert!(response.message.contains("process resources only"));
         });
     }
 

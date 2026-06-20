@@ -20,6 +20,8 @@ pub enum WorkerStatus {
 pub trait WorkerLauncher {
     fn start(&mut self, plan: DeploymentPlan) -> DaemonResult<WorkerHandle>;
 
+    fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()>;
+
     fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()>;
 
     fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus>;
@@ -36,6 +38,10 @@ impl WorkerLauncher for NoopWorkerLauncher {
         Ok(WorkerHandle {
             id: format!("worker-{id}"),
         })
+    }
+
+    fn reload(&mut self, _worker: &WorkerHandle, _plan: DeploymentPlan) -> DaemonResult<()> {
+        Ok(())
     }
 
     fn stop(&mut self, _worker: WorkerHandle) -> DaemonResult<()> {

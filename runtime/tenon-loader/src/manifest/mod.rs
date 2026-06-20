@@ -12,8 +12,7 @@ use spec::{
 use crate::{
     auth_plan, AuthPlan, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError,
     LoaderErrorKind, MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
-    PayloadDecodePlan, ProcessPlan, ResourceId, ResourceKind as PlanResourceKind, ScriptModule,
-    ScriptRuntime, UsernamePasswordAuth,
+    PayloadDecodePlan, ProcessPlan, ResourceId, ScriptModule, ScriptRuntime, UsernamePasswordAuth,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";
@@ -25,17 +24,6 @@ pub(crate) enum ManifestResourceKind {
     Egress,
     Process,
     Pipeline,
-}
-
-impl ManifestResourceKind {
-    fn into_plan_kind(self) -> PlanResourceKind {
-        match self {
-            Self::MqttSource => PlanResourceKind::MqttSource,
-            Self::Egress => PlanResourceKind::Egress,
-            Self::Process => PlanResourceKind::Process,
-            Self::Pipeline => PlanResourceKind::Pipeline,
-        }
-    }
 }
 
 impl std::fmt::Display for ManifestResourceKind {
@@ -99,7 +87,6 @@ pub(crate) struct ResourceDocument {
 impl ResourceDocument {
     pub(crate) fn id(&self) -> ResourceId {
         ResourceId {
-            kind: self.kind.into_plan_kind() as i32,
             name: self.metadata.name.clone(),
             version: self.metadata.version.clone(),
         }
@@ -220,7 +207,6 @@ impl ResourceRegistry {
             .ok_or_else(|| reference_error(format!("missing MqttSource {}", reference.display())))?;
         let spec = parse_spec::<MqttSourceSpec>(resource)?;
         Ok(MqttSourcePlan {
-            id: Some(resource.id()),
             broker: Some(MqttBrokerPlan {
                 host: spec.broker.host,
                 port: spec.broker.port as u32,
@@ -266,7 +252,6 @@ impl ResourceRegistry {
             .ok_or_else(|| reference_error(format!("missing Process {}", reference.display())))?;
         let spec = parse_spec::<ProcessSpec>(resource)?;
         Ok(ProcessPlan {
-            id: Some(resource.id()),
             runtime: ScriptRuntime::Lua as i32,
             source: spec.source,
         })
@@ -280,7 +265,6 @@ impl ResourceRegistry {
             .ok_or_else(|| reference_error(format!("missing Egress {}", reference.display())))?;
         let spec = parse_spec::<EgressSpec>(resource)?;
         Ok(EgressPlan {
-            id: Some(resource.id()),
             delivery: i32::from(DeliveryMode::from(spec.delivery)),
         })
     }

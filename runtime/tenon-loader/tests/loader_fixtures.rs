@@ -1,4 +1,4 @@
-use tenon_loader::{DeliveryMode, Loader, LoaderErrorKind, ResourceKind};
+use tenon_loader::{DeliveryMode, Loader, LoaderErrorKind};
 
 fn fixture(path: &str) -> &'static str {
     match path {
@@ -34,14 +34,10 @@ fn loads_sensor_pipeline_fixture() {
         .expect("valid sensor pipeline");
 
     let id = plan.id.as_ref().expect("plan id");
-    assert_eq!(ResourceKind::try_from(id.kind), Ok(ResourceKind::Pipeline));
     assert_eq!(id.name, "sensor-ingest");
     assert_eq!(plan.sources.len(), 2);
 
     let process = plan.process.as_ref().expect("process plan");
-    let process_id = process.id.as_ref().expect("process id");
-    assert_eq!(process_id.name, "sensor-process");
-
     assert!(process.source.contains("function on_message"));
 
     let egress = plan.egress.as_ref().expect("egress plan");

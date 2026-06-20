@@ -3,17 +3,8 @@ syntax = "proto3";
 package tenon.daemon.v1;
 
 message ResourceId {
-  ResourceKind kind = 1;
-  string name = 2;
-  string version = 3;
-}
-
-enum ResourceKind {
-  RESOURCE_KIND_UNSPECIFIED = 0;
-  RESOURCE_KIND_MQTT_SOURCE = 1;
-  RESOURCE_KIND_EGRESS = 3;
-  RESOURCE_KIND_PROCESS = 4;
-  RESOURCE_KIND_PIPELINE = 5;
+  string name = 1;
+  string version = 2;
 }
 
 message DeploymentPlan {
@@ -22,14 +13,6 @@ message DeploymentPlan {
   repeated MqttSourcePlan sources = 3;
   ProcessPlan process = 4;
   EgressPlan egress = 5;
-}
-
-message StoredDeploymentPlan {
-  ResourceId id = 1;
-  ExecutionMode execution = 2;
-  repeated ResourceId source_refs = 3;
-  ResourceId process_ref = 4;
-  ResourceId egress_ref = 5;
 }
 
 message Resource {
@@ -50,11 +33,11 @@ message PutPipelineResponse {
   ResourceId id = 2;
   ApplyMode mode = 3;
   string message = 4;
-  repeated ResourceId resource_ids = 5;
 }
 
 message ApplyResourceRequest {
-  optional string pipeline_ver = 1;
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
 }
 
 message ApplyResourceResponse {
@@ -62,39 +45,6 @@ message ApplyResourceResponse {
   ResourceId active_pipeline_id = 2;
   ApplyMode mode = 3;
   string message = 4;
-}
-
-message GetResourceRequest {
-  ResourceId id = 1;
-}
-
-message GetResourceResponse {
-  bool found = 1;
-  Resource resource = 2;
-  string message = 3;
-}
-
-message ReviseResourceRequest {
-  ResourceId pipeline_id = 1;
-  ResourceId previous_resource_id = 2;
-  Resource new_resource = 3;
-}
-
-message ReviseResourceResponse {
-  bool accepted = 1;
-  ResourceId revised_pipeline_id = 2;
-  string message = 3;
-  ResourceId revised_resource_id = 4;
-  repeated ResourceId resource_ids = 5;
-}
-
-message DeleteResourceRequest {
-  ResourceId id = 1;
-}
-
-message DeleteResourceResponse {
-  bool deleted = 1;
-  string message = 2;
 }
 
 enum ApplyMode {
@@ -111,19 +61,14 @@ enum ExecutionMode {
 }
 
 message MqttSourcePlan {
-  ResourceId id = 1;
-  MqttBrokerPlan broker = 2;
-  AuthPlan auth = 3;
-  repeated MqttSubscriptionPlan subscriptions = 4;
-  uint32 client_count = 5;
+  MqttBrokerPlan broker = 1;
+  AuthPlan auth = 2;
+  repeated MqttSubscriptionPlan subscriptions = 3;
+  uint32 client_count = 4;
 }
 
 message MqttClientIds {
   repeated string client_ids = 1;
-}
-
-message ResourceReferences {
-  repeated ResourceId pipeline_refs = 1;
 }
 
 message MqttBrokerPlan {
@@ -157,9 +102,8 @@ enum PayloadDecodePlan {
 }
 
 message ProcessPlan {
-  ResourceId id = 1;
-  ScriptRuntime runtime = 2;
-  string source = 3;
+  ScriptRuntime runtime = 1;
+  string source = 2;
 }
 
 message ScriptModule {
@@ -173,8 +117,7 @@ enum ScriptRuntime {
 }
 
 message EgressPlan {
-  ResourceId id = 1;
-  DeliveryMode delivery = 2;
+  DeliveryMode delivery = 1;
 }
 
 enum DeliveryMode {
@@ -202,12 +145,6 @@ message DaemonEnvelope {
   oneof payload {
     PutPipelineRequest put_pipeline = 3;
     PutPipelineResponse put_pipeline_response = 4;
-    GetResourceRequest get_resource = 7;
-    GetResourceResponse get_resource_response = 8;
-    ReviseResourceRequest revise_resource = 9;
-    ReviseResourceResponse revise_resource_response = 10;
-    DeleteResourceRequest delete_resource = 11;
-    DeleteResourceResponse delete_resource_response = 12;
     ApplyResourceRequest apply_resource = 13;
     ApplyResourceResponse apply_resource_response = 14;
   }

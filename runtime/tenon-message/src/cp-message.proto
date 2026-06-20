@@ -13,25 +13,11 @@ message PutPipelineResponse {
   tenon.daemon.v1.ResourceId id = 2;
   tenon.daemon.v1.ApplyMode mode = 3;
   string message = 4;
-  repeated tenon.daemon.v1.ResourceId resource_ids = 5;
-}
-
-message ReviseResourceRequest {
-  tenon.daemon.v1.ResourceId pipeline_id = 1;
-  tenon.daemon.v1.ResourceId previous_resource_id = 2;
-  tenon.daemon.v1.Resource new_resource = 3;
-}
-
-message ReviseResourceResponse {
-  bool accepted = 1;
-  tenon.daemon.v1.ResourceId revised_pipeline_id = 2;
-  string message = 3;
-  tenon.daemon.v1.ResourceId revised_resource_id = 4;
-  repeated tenon.daemon.v1.ResourceId resource_ids = 5;
 }
 
 message ApplyResourceRequest {
-  optional string pipeline_ver = 1;
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
 }
 
 message ApplyResourceResponse {
@@ -57,8 +43,6 @@ message ControlPlaneEnvelope {
     GetPipelineResponse get_pipeline_response = 4;
     PutPipelineRequest put_pipeline = 6;
     PutPipelineResponse put_pipeline_response = 7;
-    ReviseResourceRequest revise_resource = 8;
-    ReviseResourceResponse revise_resource_response = 9;
     ApplyResourceRequest apply_resource = 10;
     ApplyResourceResponse apply_resource_response = 11;
   }

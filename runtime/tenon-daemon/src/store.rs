@@ -13,12 +13,14 @@ const PROCESS_LABEL: &str = "process";
 const EGRESS_LABEL: &str = "egress";
 const MQTT_CLIENT_IDS_LABEL: &str = "MQTT client ids";
 const RESOURCE_REFERENCES_LABEL: &str = "resource references";
+const LAST_PIPELINE_ID_LABEL: &str = "last pipeline ID";
 
 const PLAN_KEY_PREFIX: &[u8] = b"plan";
 const RESOURCE_KEY_PREFIX: &[u8] = b"resource";
 const MQTT_CLIENT_IDS_KEY_PREFIX: &[u8] = b"mqtt_source_client_ids";
 const RESOURCE_REFERENCES_KEY_PREFIX: &[u8] = b"resource_refs";
 const LATEST_RESOURCE_KEY_PREFIX: &[u8] = b"latest_resource";
+const LATEST_PIPELINE_KEY: &[u8] = b"latest_pipeline";
 
 pub trait DaemonStore {
     fn allocate_revision<'a>(
@@ -42,6 +44,8 @@ pub trait DaemonStore {
         kind: ResourceKind,
         name: &'a str,
     ) -> impl Future<Output = DaemonResult<Option<Resource>>> + Send + 'a;
+
+    fn load_latest_pipeline_id(&self) -> impl Future<Output = DaemonResult<Option<ResourceId>>> + Send + '_;
 
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
@@ -119,6 +123,7 @@ impl DaemonStore for InMemoryDaemonStore {
                     self.save_pipeline_resources(&pipeline)?;
                     self.save_pipeline_reverse_refs(&stored_plan)?;
                     self.save_latest_resource_id(&key, pipeline.id.as_ref());
+                    self.save_latest_pipeline_id(pipeline.id.as_ref());
                 }
                 Some(resource::Kind::MqttSource(source)) => {
                     let key =
@@ -155,6 +160,10 @@ impl DaemonStore for InMemoryDaemonStore {
             };
             self.load_resource(&ResourceKey::from_id(&id)).await
         }
+    }
+
+    fn load_latest_pipeline_id(&self) -> impl Future<Output = DaemonResult<Option<ResourceId>>> + Send + '_ {
+        async move { self.load_message::<ResourceId>(LATEST_PIPELINE_KEY, LAST_PIPELINE_ID_LABEL) }
     }
 
     fn load_resource<'a>(
@@ -243,6 +252,7 @@ impl DaemonStore for InMemoryDaemonStore {
                     return Ok(false);
                 };
                 self.remove_pipeline_reverse_refs(&stored_plan)?;
+                self.remove_latest_pipeline_id(key)?;
                 return Ok(self.entries.remove(&plan_key(key)).is_some());
             }
 
@@ -257,6 +267,27 @@ impl InMemoryDaemonStore {
         if let Some(id) = id {
             self.save_message(latest_resource_key_from_key(key), id);
         }
+    }
+
+    fn save_latest_pipeline_id(&mut self, id: Option<&ResourceId>) {
+        if let Some(id) = id {
+            self.save_message(LATEST_PIPELINE_KEY.to_vec(), id);
+        }
+    }
+
+    fn remove_latest_pipeline_id(&mut self, key: &ResourceKey) -> DaemonResult<()> {
+        let Some(latest_id) =
+            self.load_message::<ResourceId>(LATEST_PIPELINE_KEY, "latest pipeline id")?
+        else {
+            return Ok(());
+        };
+        if latest_id.kind == key.kind
+            && latest_id.name == key.name
+            && latest_id.version == key.version
+        {
+            self.entries.remove(LATEST_PIPELINE_KEY);
+        }
+        Ok(())
     }
 
     fn resolve_stored_plan(&self, stored_plan: StoredDeploymentPlan) -> DaemonResult<DeploymentPlan> {
@@ -692,6 +723,13 @@ mod tests {
                     .await
                     .expect("load egress references"),
                 vec![loaded_plan.id.clone().expect("plan id")]
+            );
+            assert_eq!(
+                store
+                    .load_latest_pipeline_id()
+                    .await
+                    .expect("load latest pipeline"),
+                loaded_plan.id
             );
         });
     }

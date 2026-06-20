@@ -95,11 +95,11 @@ where
         &mut self,
         request: ApplyResourceRequest,
     ) -> ApplyResourceResponse {
-        let Some(pipeline_id) = request.pipeline_id else {
-            return apply_rejected("pipeline id is missing");
-        };
-
-        match self.daemon.apply_resource(&pipeline_id).await {
+        match self
+            .daemon
+            .apply_pipeline(request.pipeline_ver.as_deref())
+            .await
+        {
             Ok(result) => ApplyResourceResponse {
                 accepted: true,
                 active_pipeline_id: Some(result.id),
@@ -187,15 +187,6 @@ fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutPipelineRespo
         mode: mode as i32,
         message: message.into(),
         resource_ids: Vec::new(),
-    }
-}
-
-fn apply_rejected(message: impl Into<String>) -> ApplyResourceResponse {
-    ApplyResourceResponse {
-        accepted: false,
-        active_pipeline_id: None,
-        mode: ApplyMode::RejectedWorkerError as i32,
-        message: message.into(),
     }
 }
 
@@ -383,7 +374,7 @@ mod tests {
                 .expect("process id");
             service
                 .handle_apply_resource(ApplyResourceRequest {
-                    pipeline_id: stored_plan.id.clone(),
+                    pipeline_ver: None,
                 })
                 .await;
             let original_worker_id = service
@@ -407,7 +398,10 @@ mod tests {
                 .await;
             let apply = service
                 .handle_apply_resource(ApplyResourceRequest {
-                    pipeline_id: revise.revised_pipeline_id.clone(),
+                    pipeline_ver: revise
+                        .revised_pipeline_id
+                        .as_ref()
+                        .map(|id| id.version.clone()),
                 })
                 .await;
             let current_worker_id = service
@@ -439,7 +433,7 @@ mod tests {
 
             let apply = service
                 .handle_apply_resource(ApplyResourceRequest {
-                    pipeline_id: Some(id(ResourceKind::Pipeline, "sensor-pipeline", "")),
+                    pipeline_ver: None,
                 })
                 .await;
 

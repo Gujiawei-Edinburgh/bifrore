@@ -4,26 +4,6 @@ package tenon.cp.v1;
 
 import "daemon-message.proto";
 
-message ApplyManifestRequest {
-  string manifest = 1;
-}
-
-message ApplyManifestResponse {
-  bool accepted = 1;
-  tenon.daemon.v1.ResourceId active_plan = 2;
-  ApplyManifestMode mode = 3;
-  string message = 4;
-}
-
-enum ApplyManifestMode {
-  APPLY_MANIFEST_MODE_UNSPECIFIED = 0;
-  APPLY_MANIFEST_MODE_STARTED = 1;
-  APPLY_MANIFEST_MODE_HOT_RELOAD = 2;
-  APPLY_MANIFEST_MODE_REJECTED_RESTART_REQUIRED = 3;
-  APPLY_MANIFEST_MODE_REJECTED_WORKER_ERROR = 4;
-  APPLY_MANIFEST_MODE_REJECTED_INVALID_MANIFEST = 5;
-}
-
 message PutPipelineRequest {
   tenon.daemon.v1.DeploymentPlan pipeline = 1;
 }
@@ -31,7 +11,7 @@ message PutPipelineRequest {
 message PutPipelineResponse {
   bool accepted = 1;
   tenon.daemon.v1.ResourceId id = 2;
-  ApplyManifestMode mode = 3;
+  tenon.daemon.v1.ApplyMode mode = 3;
   string message = 4;
   repeated tenon.daemon.v1.ResourceId resource_ids = 5;
 }
@@ -51,13 +31,13 @@ message ReviseResourceResponse {
 }
 
 message ApplyResourceRequest {
-  tenon.daemon.v1.ResourceId pipeline_id = 1;
+  optional string pipeline_ver = 1;
 }
 
 message ApplyResourceResponse {
   bool accepted = 1;
   tenon.daemon.v1.ResourceId active_pipeline_id = 2;
-  ApplyManifestMode mode = 3;
+  tenon.daemon.v1.ApplyMode mode = 3;
   string message = 4;
 }
 
@@ -73,8 +53,6 @@ message GetPipelineResponse {
 
 message ControlPlaneEnvelope {
   oneof payload {
-    ApplyManifestRequest apply_manifest = 1;
-    ApplyManifestResponse apply_manifest_response = 2;
     GetPipelineRequest get_pipeline = 3;
     GetPipelineResponse get_pipeline_response = 4;
     PutPipelineRequest put_pipeline = 6;

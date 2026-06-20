@@ -200,7 +200,7 @@ where
             ));
         }
 
-        let resource = self.assign_resource_revisions(resource).await?;
+        let resource = self.assign_process_revisions(resource).await?;
         let process = match resource.kind {
             Some(resource::Kind::Process(process)) => process,
             Some(_) => {
@@ -274,9 +274,13 @@ where
         self.store.delete_resource(&key).await
     }
 
-    pub async fn apply_resource(&mut self, id: &ResourceId) -> DaemonResult<DaemonApplyResult> {
+    pub async fn apply_pipeline(
+        &mut self,
+        pipeline_ver: Option<&str>,
+    ) -> DaemonResult<DaemonApplyResult> {
+        let id = self.apply_pipeline_id(pipeline_ver).await?;
         let resource = self
-            .get_pipeline_resource(id)
+            .get_pipeline_resource(&id)
             .await?
             .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
         match resource.kind {
@@ -364,6 +368,28 @@ where
             .cloned()
     }
 
+    async fn apply_pipeline_id(&self, pipeline_ver: Option<&str>) -> DaemonResult<ResourceId> {
+        let latest_id = match self.store.load_latest_pipeline_id().await? {
+            Some(id) => id,
+            None => self
+                .deployments
+                .values()
+                .next()
+                .map(|deployment| deployment.id.clone())
+                .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?,
+        };
+
+        let Some(version) = pipeline_ver.filter(|version| !version.is_empty()) else {
+            return Ok(latest_id);
+        };
+
+        Ok(ResourceId {
+            kind: ResourceKind::Pipeline as i32,
+            name: latest_id.name,
+            version: version.to_string(),
+        })
+    }
+
     async fn get_pipeline_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
         if ResourceKind::try_from(id.kind) != Ok(ResourceKind::Pipeline) {
             return Err(DaemonError::invalid_state("resource is not a pipeline"));
@@ -377,31 +403,16 @@ where
         self.get_resource(id).await
     }
 
-    async fn assign_resource_revisions(&mut self, resource: Resource) -> DaemonResult<Resource> {
+    async fn assign_process_revisions(&mut self, resource: Resource) -> DaemonResult<Resource> {
         match resource.kind {
-            Some(resource::Kind::Pipeline(mut plan)) => {
-                plan = self.assign_pipeline_revisions(plan).await?;
-                Ok(Resource {
-                    kind: Some(resource::Kind::Pipeline(plan)),
-                })
-            }
-            Some(resource::Kind::MqttSource(mut source)) => {
-                source.id = Some(self.assign_id(source.id, ResourceKind::MqttSource).await?);
-                Ok(Resource {
-                    kind: Some(resource::Kind::MqttSource(source)),
-                })
-            }
             Some(resource::Kind::Process(mut process)) => {
                 process.id = Some(self.assign_id(process.id, ResourceKind::Process).await?);
                 Ok(Resource {
                     kind: Some(resource::Kind::Process(process)),
                 })
             }
-            Some(resource::Kind::Egress(mut egress)) => {
-                egress.id = Some(self.assign_id(egress.id, ResourceKind::Egress).await?);
-                Ok(Resource {
-                    kind: Some(resource::Kind::Egress(egress)),
-                })
+            Some(_) => {
+                Err(DaemonError::invalid_state("resource requires process only"))
             }
             None => Err(DaemonError::invalid_state("resource payload is missing")),
         }

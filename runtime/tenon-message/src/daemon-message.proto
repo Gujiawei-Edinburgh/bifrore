@@ -54,7 +54,7 @@ message PutPipelineResponse {
 }
 
 message ApplyResourceRequest {
-  ResourceId pipeline_id = 1;
+  optional string pipeline_ver = 1;
 }
 
 message ApplyResourceResponse {

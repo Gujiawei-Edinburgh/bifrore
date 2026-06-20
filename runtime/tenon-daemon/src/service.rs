@@ -4,8 +4,8 @@ use crate::{
 };
 use tenon_message::daemon::v1::{
     worker_envelope, ApplyMode, ApplyResourceRequest, ApplyResourceResponse, DeleteResourceRequest,
-    DeleteResourceResponse, GetResourceRequest, GetResourceResponse, PutResourceRequest,
-    PutResourceResponse, ReviseResourceRequest, ReviseResourceResponse, WorkerEnvelope,
+    DeleteResourceResponse, GetResourceRequest, GetResourceResponse, PutPipelineRequest,
+    PutPipelineResponse, ReviseResourceRequest, ReviseResourceResponse, WorkerEnvelope,
 };
 
 pub struct DaemonService<L = NoopWorkerLauncher, S = InMemoryDaemonStore> {
@@ -41,20 +41,16 @@ where
         &mut self.daemon
     }
 
-    pub async fn handle_put_resource(
+    pub async fn handle_put_pipeline(
         &mut self,
-        request: PutResourceRequest,
-    ) -> PutResourceResponse {
-        let Some(resource) = request.resource else {
-            return put_rejected(ApplyMode::RejectedWorkerError, "resource is missing");
+        request: PutPipelineRequest,
+    ) -> PutPipelineResponse {
+        let Some(pipeline) = request.pipeline else {
+            return put_rejected(ApplyMode::RejectedWorkerError, "pipeline is missing");
         };
 
-        if resource.kind.is_none() {
-                return put_rejected(ApplyMode::RejectedWorkerError, "resource payload is missing");
-        }
-
-        match self.daemon.put_resource(resource).await {
-            Ok(result) => PutResourceResponse {
+        match self.daemon.put_pipeline(pipeline).await {
+            Ok(result) => PutPipelineResponse {
                 accepted: true,
                 id: Some(result.id),
                 mode: ApplyMode::Unspecified as i32,
@@ -184,8 +180,8 @@ where
 
 }
 
-fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutResourceResponse {
-    PutResourceResponse {
+fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutPipelineResponse {
+    PutPipelineResponse {
         accepted: false,
         id: None,
         mode: mode as i32,
@@ -255,10 +251,8 @@ mod tests {
             let plan = plan();
 
             let response = service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(plan.clone())),
-                    }),
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan.clone()),
                 })
                 .await;
 
@@ -273,12 +267,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_put_without_resource() {
+    fn rejects_put_without_pipeline() {
         block_on(async {
             let mut service = DaemonService::new();
 
             let response = service
-                .handle_put_resource(PutResourceRequest { resource: None })
+                .handle_put_pipeline(PutPipelineRequest { pipeline: None })
                 .await;
 
             assert!(!response.accepted);
@@ -286,7 +280,7 @@ mod tests {
                 ApplyMode::try_from(response.mode),
                 Ok(ApplyMode::RejectedWorkerError)
             );
-            assert_eq!(response.message, "resource is missing");
+            assert_eq!(response.message, "pipeline is missing");
         });
     }
 
@@ -296,10 +290,8 @@ mod tests {
             let mut service = DaemonService::new();
             let plan = plan();
             let put = service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(plan.clone())),
-                    }),
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan.clone()),
                 })
                 .await;
 
@@ -326,17 +318,13 @@ mod tests {
             let plan = plan();
 
             let first = service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(plan.clone())),
-                    }),
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan.clone()),
                 })
                 .await;
             let second = service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(plan)),
-                    }),
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan),
                 })
                 .await;
 
@@ -444,10 +432,8 @@ mod tests {
             let mut service = DaemonService::new();
             let plan = plan();
             service
-                .handle_put_resource(PutResourceRequest {
-                    resource: Some(Resource {
-                        kind: Some(resource::Kind::Pipeline(plan)),
-                    }),
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan),
                 })
                 .await;
 
@@ -601,10 +587,8 @@ mod tests {
 
     async fn put_full_plan(service: &mut DaemonService, plan: &DeploymentPlan) -> DeploymentPlan {
         let put = service
-            .handle_put_resource(PutResourceRequest {
-                resource: Some(Resource {
-                    kind: Some(resource::Kind::Pipeline(plan.clone())),
-                }),
+            .handle_put_pipeline(PutPipelineRequest {
+                pipeline: Some(plan.clone()),
             })
             .await;
         let get = service

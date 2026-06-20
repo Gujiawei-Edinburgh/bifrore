@@ -41,11 +41,11 @@ message Resource {
   }
 }
 
-message PutResourceRequest {
-  Resource resource = 1;
+message PutPipelineRequest {
+  DeploymentPlan pipeline = 1;
 }
 
-message PutResourceResponse {
+message PutPipelineResponse {
   bool accepted = 1;
   ResourceId id = 2;
   ApplyMode mode = 3;
@@ -200,8 +200,8 @@ message Heartbeat {
 
 message DaemonEnvelope {
   oneof payload {
-    PutResourceRequest put_resource = 3;
-    PutResourceResponse put_resource_response = 4;
+    PutPipelineRequest put_pipeline = 3;
+    PutPipelineResponse put_pipeline_response = 4;
     GetResourceRequest get_resource = 7;
     GetResourceResponse get_resource_response = 8;
     ReviseResourceRequest revise_resource = 9;

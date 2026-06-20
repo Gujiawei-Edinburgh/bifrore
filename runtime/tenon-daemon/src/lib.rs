@@ -78,7 +78,7 @@ pub struct DaemonApplyResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaemonPutResult {
+pub struct DaemonPutPipelineResult {
     pub id: ResourceId,
     pub resource_ids: Vec<ResourceId>,
 }
@@ -165,14 +165,22 @@ where
         self.deployments.values()
     }
 
-    pub async fn put_resource(&mut self, resource: Resource) -> DaemonResult<DaemonPutResult> {
-        let resource = self.assign_resource_revisions(resource).await?;
+    pub async fn put_pipeline(
+        &mut self,
+        pipeline: DeploymentPlan,
+    ) -> DaemonResult<DaemonPutPipelineResult> {
+        let resource = self
+            .assign_pipeline_revisions(pipeline)
+            .await
+            .map(|pipeline| Resource {
+                kind: Some(resource::Kind::Pipeline(pipeline)),
+            })?;
         let id = resource_id_from_resource(&resource)
-            .ok_or_else(|| DaemonError::invalid_state("resource id is missing"))?;
+            .ok_or_else(|| DaemonError::invalid_state("pipeline id is missing"))?;
         let resource_ids = resource_ids_from_resource(&resource);
 
         self.store.save_resource(resource).await?;
-        Ok(DaemonPutResult { id, resource_ids })
+        Ok(DaemonPutPipelineResult { id, resource_ids })
     }
 
     pub async fn get_resource(&self, id: &ResourceId) -> DaemonResult<Option<Resource>> {
@@ -372,16 +380,7 @@ where
     async fn assign_resource_revisions(&mut self, resource: Resource) -> DaemonResult<Resource> {
         match resource.kind {
             Some(resource::Kind::Pipeline(mut plan)) => {
-                plan.id = Some(self.assign_id(plan.id, ResourceKind::Pipeline).await?);
-                for source in &mut plan.sources {
-                    source.id = Some(self.assign_id(source.id.clone(), ResourceKind::MqttSource).await?);
-                }
-                if let Some(process) = &mut plan.process {
-                    process.id = Some(self.assign_id(process.id.clone(), ResourceKind::Process).await?);
-                }
-                if let Some(egress) = &mut plan.egress {
-                    egress.id = Some(self.assign_id(egress.id.clone(), ResourceKind::Egress).await?);
-                }
+                plan = self.assign_pipeline_revisions(plan).await?;
                 Ok(Resource {
                     kind: Some(resource::Kind::Pipeline(plan)),
                 })
@@ -406,6 +405,23 @@ where
             }
             None => Err(DaemonError::invalid_state("resource payload is missing")),
         }
+    }
+
+    async fn assign_pipeline_revisions(
+        &mut self,
+        mut plan: DeploymentPlan,
+    ) -> DaemonResult<DeploymentPlan> {
+        plan.id = Some(self.assign_id(plan.id, ResourceKind::Pipeline).await?);
+        for source in &mut plan.sources {
+            source.id = Some(self.assign_id(source.id.clone(), ResourceKind::MqttSource).await?);
+        }
+        if let Some(process) = &mut plan.process {
+            process.id = Some(self.assign_id(process.id.clone(), ResourceKind::Process).await?);
+        }
+        if let Some(egress) = &mut plan.egress {
+            egress.id = Some(self.assign_id(egress.id.clone(), ResourceKind::Egress).await?);
+        }
+        Ok(plan)
     }
 
     async fn assign_id(

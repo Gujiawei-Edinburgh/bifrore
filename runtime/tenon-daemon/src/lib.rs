@@ -95,18 +95,6 @@ pub struct TenonDaemon<M, P> {
     deployments: HashMap<DeploymentKey, ActiveDeployment>,
 }
 
-impl TenonDaemon<NoopWorkerLauncher, InMemoryDaemonStore> {
-    pub fn new() -> Self {
-        Self::with_components(NoopWorkerLauncher::default(), InMemoryDaemonStore::default())
-    }
-}
-
-impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryDaemonStore> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<M, P> TenonDaemon<M, P>
 where
     M: WorkerManager,

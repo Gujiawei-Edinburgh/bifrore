@@ -1,26 +1,14 @@
 use crate::{
-    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonResult, DaemonStore,
-    InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon, WorkerManager,
+    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonResult, DaemonStore, TenonDaemon,
+    WorkerManager,
 };
 use tenon_message::daemon::v1::{
     worker_envelope, ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
     PutPipelineResponse, WorkerEnvelope,
 };
 
-pub struct DaemonService<L = NoopWorkerLauncher, S = InMemoryDaemonStore> {
+pub struct DaemonService<L, S> {
     daemon: TenonDaemon<L, S>,
-}
-
-impl DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
-    pub fn new() -> Self {
-        Self::with_daemon(TenonDaemon::new())
-    }
-}
-
-impl Default for DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl<L, S> DaemonService<L, S>
@@ -118,6 +106,7 @@ fn apply_mode_from_daemon(mode: DaemonApplyMode) -> ApplyMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InMemoryDaemonStore, NoopWorkerLauncher};
     use futures::executor::block_on;
     use tenon_message::daemon::v1::Heartbeat;
     use tenon_message::plan::{
@@ -128,7 +117,7 @@ mod tests {
     #[test]
     fn puts_pipeline_and_returns_generated_revision() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
             let response = service
                 .handle_put_pipeline(PutPipelineRequest {
                     pipeline: Some(plan("function on_message(ctx, msg) end")),
@@ -147,7 +136,7 @@ mod tests {
     #[test]
     fn rejects_put_without_pipeline() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
             let response = service
                 .handle_put_pipeline(PutPipelineRequest { pipeline: None })
                 .await;
@@ -160,7 +149,7 @@ mod tests {
     #[test]
     fn repeated_put_advances_pipeline_revision() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
 
             let first = service
                 .handle_put_pipeline(PutPipelineRequest {
@@ -181,7 +170,7 @@ mod tests {
     #[test]
     fn applies_latest_pipeline_when_revision_is_missing() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
             service
                 .handle_put_pipeline(PutPipelineRequest {
                     pipeline: Some(plan("function on_message(ctx, msg) end")),
@@ -207,7 +196,7 @@ mod tests {
     #[test]
     fn applies_named_revision() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
             service
                 .handle_put_pipeline(PutPipelineRequest {
                     pipeline: Some(plan("function on_message(ctx, msg) end")),
@@ -237,7 +226,7 @@ mod tests {
     #[test]
     fn process_only_change_hot_reloads() {
         block_on(async {
-            let mut service = DaemonService::new();
+            let mut service = service();
             service
                 .handle_put_pipeline(PutPipelineRequest {
                     pipeline: Some(plan("function on_message(ctx, msg) end")),
@@ -286,7 +275,7 @@ mod tests {
 
     #[test]
     fn accepts_worker_heartbeat() {
-        let mut service = DaemonService::new();
+        let mut service = service();
         let envelope = WorkerEnvelope {
             payload: Some(worker_envelope::Payload::Heartbeat(Heartbeat {
                 timestamp_millis: 10,
@@ -298,7 +287,7 @@ mod tests {
 
     #[test]
     fn rejects_worker_start_request() {
-        let mut service = DaemonService::new();
+        let mut service = service();
         let envelope = WorkerEnvelope {
             payload: Some(worker_envelope::Payload::StartWorker(
                 tenon_message::daemon::v1::StartWorkerRequest {
@@ -345,5 +334,12 @@ mod tests {
             name: name.to_string(),
             version: version.to_string(),
         }
+    }
+
+    fn service() -> DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
+        DaemonService::with_daemon(TenonDaemon::with_components(
+            NoopWorkerLauncher::default(),
+            InMemoryDaemonStore::default(),
+        ))
     }
 }

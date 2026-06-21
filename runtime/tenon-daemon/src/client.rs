@@ -1,6 +1,4 @@
-use crate::{
-    DaemonService, DaemonStore, InMemoryDaemonStore, NoopWorkerLauncher, WorkerManager,
-};
+use crate::{DaemonService, DaemonStore, WorkerManager};
 use futures::channel::{mpsc, oneshot};
 use futures::{SinkExt, StreamExt};
 use std::future::Future;
@@ -49,7 +47,7 @@ pub struct InProcDaemonClient {
     sender: mpsc::Sender<DaemonCommand>,
 }
 
-pub struct InProcDaemonServer<L = NoopWorkerLauncher, S = InMemoryDaemonStore> {
+pub struct InProcDaemonServer<L, S> {
     service: DaemonService<L, S>,
     receiver: mpsc::Receiver<DaemonCommand>,
 }
@@ -169,6 +167,7 @@ fn apply_resource_failed(message: impl Into<String>) -> ApplyResourceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon};
     use futures::executor::block_on;
     use tenon_message::daemon::v1::ApplyMode;
     use tenon_message::plan::{
@@ -180,7 +179,7 @@ mod tests {
     fn in_proc_client_puts_pipeline_through_server() {
         block_on(async {
             let (client, server) = InProcDaemonTransportProvider::create(
-                DaemonService::new(),
+                service(),
                 InProcDaemonConfig {
                     channel_capacity: 8,
                 },
@@ -203,7 +202,7 @@ mod tests {
     fn in_proc_client_applies_latest_pipeline() {
         block_on(async {
             let (client, server) = InProcDaemonTransportProvider::create(
-                DaemonService::new(),
+                service(),
                 InProcDaemonConfig {
                     channel_capacity: 8,
                 },
@@ -259,5 +258,12 @@ mod tests {
             name: name.to_string(),
             version: version.to_string(),
         }
+    }
+
+    fn service() -> DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
+        DaemonService::with_daemon(TenonDaemon::with_components(
+            NoopWorkerLauncher::default(),
+            InMemoryDaemonStore::default(),
+        ))
     }
 }

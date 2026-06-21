@@ -1,6 +1,6 @@
 use crate::{
     DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonResult, DaemonStore,
-    InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon, WorkerLauncher,
+    InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon, WorkerManager,
 };
 use tenon_message::daemon::v1::{
     worker_envelope, ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
@@ -25,7 +25,7 @@ impl Default for DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
 
 impl<L, S> DaemonService<L, S>
 where
-    L: WorkerLauncher,
+    L: WorkerManager,
     S: DaemonStore,
 {
     pub fn with_daemon(daemon: TenonDaemon<L, S>) -> Self {

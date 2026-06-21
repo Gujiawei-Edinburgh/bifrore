@@ -4,7 +4,7 @@ mod worker;
 
 pub use service::DaemonService;
 pub use store::{DaemonStore, InMemoryDaemonStore};
-pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerLauncher, WorkerStatus};
+pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerManager, WorkerStatus};
 
 use std::collections::HashMap;
 use tenon_message::plan::{DeploymentPlan, ResourceId};
@@ -84,8 +84,8 @@ pub struct DaemonPutPipelineResult {
 
 pub type DeploymentKey = ResourceId;
 
-pub struct TenonDaemon<L, P> {
-    worker_launcher: L,
+pub struct TenonDaemon<M, P> {
+    worker_manager: M,
     store: P,
     deployments: HashMap<DeploymentKey, ActiveDeployment>,
 }
@@ -102,14 +102,14 @@ impl Default for TenonDaemon<NoopWorkerLauncher, InMemoryDaemonStore> {
     }
 }
 
-impl<L, P> TenonDaemon<L, P>
+impl<M, P> TenonDaemon<M, P>
 where
-    L: WorkerLauncher,
+    M: WorkerManager,
     P: DaemonStore,
 {
-    pub fn with_components(worker_launcher: L, store: P) -> Self {
+    pub fn with_components(worker_manager: M, store: P) -> Self {
         Self {
-            worker_launcher,
+            worker_manager,
             store,
             deployments: HashMap::new(),
         }
@@ -157,7 +157,7 @@ where
         if let Some(active_key) = self.active_key_for_pipeline(&id) {
             if let Some(mut deployment) = self.deployments.remove(&active_key) {
                 if can_reload_process_only(&deployment.plan, &plan) {
-                    self.worker_launcher.reload(&deployment.worker, plan.clone())?;
+                    self.worker_manager.reload(&deployment.worker, plan.clone())?;
                     deployment.id = id;
                     deployment.plan = plan;
                     self.deployments.insert(key.clone(), deployment);
@@ -173,11 +173,11 @@ where
                         mode: DaemonApplyMode::HotReload,
                     });
                 }
-                self.worker_launcher.stop(deployment.worker)?;
+                self.worker_manager.stop(deployment.worker)?;
             }
         }
 
-        let worker = self.worker_launcher.start(plan.clone())?;
+        let worker = self.worker_manager.start(plan.clone())?;
         self.deployments
             .insert(key.clone(), ActiveDeployment { id, plan, worker });
         Ok(DaemonApplyResult {
@@ -194,7 +194,7 @@ where
     pub fn stop(&mut self) -> DaemonResult<()> {
         let deployments = std::mem::take(&mut self.deployments);
         for deployment in deployments.into_values() {
-            self.worker_launcher.stop(deployment.worker)?;
+            self.worker_manager.stop(deployment.worker)?;
         }
         Ok(())
     }
@@ -204,7 +204,7 @@ where
             .deployments
             .get(id)
             .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?;
-        self.worker_launcher.status(&deployment.worker)
+        self.worker_manager.status(&deployment.worker)
     }
 
     fn active_key_for_pipeline(&self, id: &ResourceId) -> Option<DeploymentKey> {

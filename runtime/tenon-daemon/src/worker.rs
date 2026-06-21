@@ -17,7 +17,7 @@ pub enum WorkerStatus {
     Error,
 }
 
-pub trait WorkerLauncher {
+pub trait WorkerManager {
     fn start(&mut self, plan: DeploymentPlan) -> DaemonResult<WorkerHandle>;
 
     fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()>;
@@ -32,7 +32,7 @@ pub struct NoopWorkerLauncher {
     next_id: AtomicU64,
 }
 
-impl WorkerLauncher for NoopWorkerLauncher {
+impl WorkerManager for NoopWorkerLauncher {
     fn start(&mut self, _plan: DeploymentPlan) -> DaemonResult<WorkerHandle> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         Ok(WorkerHandle {

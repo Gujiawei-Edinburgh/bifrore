@@ -1,7 +1,12 @@
+mod client;
 mod service;
 mod store;
 mod worker;
 
+pub use client::{
+    DaemonClient, DaemonServer, DaemonTransportProvider, InProcDaemonClient, InProcDaemonConfig,
+    InProcDaemonServer, InProcDaemonTransportProvider,
+};
 pub use service::DaemonService;
 pub use store::{DaemonStore, InMemoryDaemonStore};
 pub use worker::{NoopWorkerLauncher, WorkerHandle, WorkerManager, WorkerStatus};

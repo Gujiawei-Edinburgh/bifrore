@@ -36,10 +36,6 @@ where
         &self.daemon
     }
 
-    pub fn daemon_mut(&mut self) -> &mut TenonDaemon<L, S> {
-        &mut self.daemon
-    }
-
     pub async fn handle_put_pipeline(
         &mut self,
         request: PutPipelineRequest,

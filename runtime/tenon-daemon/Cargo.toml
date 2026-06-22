@@ -5,5 +5,7 @@ edition = "2021"
 
 [dependencies]
 futures = "0.3"
+libc = "0.2"
 prost = "0.14"
 tenon-message = { path = "../tenon-message" }
+wait-timeout = "0.2"

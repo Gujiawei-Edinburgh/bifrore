@@ -1,10 +1,9 @@
 use crate::{
-    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonResult, DaemonStore, TenonDaemon,
-    WorkerManager,
+    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonStore, TenonDaemon, WorkerManager,
 };
 use tenon_message::daemon::v1::{
-    worker_envelope, ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
-    PutPipelineResponse, WorkerEnvelope,
+    ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
+    PutPipelineResponse,
 };
 
 pub struct DaemonService<L, S> {
@@ -67,15 +66,6 @@ where
         }
     }
 
-    pub fn handle_worker_envelope(&mut self, envelope: WorkerEnvelope) -> DaemonResult<()> {
-        match envelope.payload {
-            Some(worker_envelope::Payload::Heartbeat(_)) => Ok(()),
-            Some(worker_envelope::Payload::StartWorker(_)) => Err(DaemonError::invalid_state(
-                "worker must not send StartWorkerRequest to daemon",
-            )),
-            None => Err(DaemonError::invalid_state("worker envelope payload is missing")),
-        }
-    }
 }
 
 fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutPipelineResponse {
@@ -108,7 +98,6 @@ mod tests {
     use super::*;
     use crate::{InMemoryDaemonStore, NoopWorkerManager};
     use futures::executor::block_on;
-    use tenon_message::daemon::v1::Heartbeat;
     use tenon_message::plan::{
         DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ResourceId, ScriptRuntime,
@@ -271,36 +260,6 @@ mod tests {
             assert_eq!(ApplyMode::try_from(apply.mode), Ok(ApplyMode::HotReload));
             assert_eq!(current_worker_id, original_worker_id);
         });
-    }
-
-    #[test]
-    fn accepts_worker_heartbeat() {
-        let mut service = service();
-        let envelope = WorkerEnvelope {
-            payload: Some(worker_envelope::Payload::Heartbeat(Heartbeat {
-                timestamp_millis: 10,
-            })),
-        };
-
-        service.handle_worker_envelope(envelope).expect("heartbeat");
-    }
-
-    #[test]
-    fn rejects_worker_start_request() {
-        let mut service = service();
-        let envelope = WorkerEnvelope {
-            payload: Some(worker_envelope::Payload::StartWorker(
-                tenon_message::daemon::v1::StartWorkerRequest {
-                    plan: Some(plan("function on_message(ctx, msg) end")),
-                },
-            )),
-        };
-
-        let error = service
-            .handle_worker_envelope(envelope)
-            .expect_err("worker start request should be rejected");
-
-        assert_eq!(error.kind, DaemonErrorKind::InvalidState);
     }
 
     fn plan(process_source: &str) -> DeploymentPlan {

@@ -9,7 +9,10 @@ pub use client::{
 };
 pub use service::DaemonService;
 pub use store::{DaemonStore, InMemoryDaemonStore};
-pub use worker::{NoopWorkerManager, WorkerHandle, WorkerManager, WorkerStatus};
+pub use worker::{
+    NoopWorkerManager, UdsWorkerManager, UdsWorkerManagerConfig, WorkerHandle, WorkerManager,
+    WorkerStatus,
+};
 
 use std::collections::HashMap;
 use tenon_message::plan::{DeploymentPlan, ResourceId};

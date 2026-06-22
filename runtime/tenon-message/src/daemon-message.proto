@@ -130,10 +130,18 @@ message StartWorkerRequest {
   DeploymentPlan plan = 1;
 }
 
+message ReloadWorkerRequest {
+  DeploymentPlan plan = 1;
+}
+
+message StopWorkerRequest {}
+
 message WorkerEnvelope {
   oneof payload {
     StartWorkerRequest start_worker = 1;
     Heartbeat heartbeat = 2;
+    ReloadWorkerRequest reload_worker = 3;
+    StopWorkerRequest stop_worker = 4;
   }
 }
 

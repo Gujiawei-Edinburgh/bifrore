@@ -28,11 +28,11 @@ pub trait WorkerManager {
 }
 
 #[derive(Debug, Default)]
-pub struct NoopWorkerLauncher {
+pub struct NoopWorkerManager {
     next_id: AtomicU64,
 }
 
-impl WorkerManager for NoopWorkerLauncher {
+impl WorkerManager for NoopWorkerManager {
     fn start(&mut self, _plan: DeploymentPlan) -> DaemonResult<WorkerHandle> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         Ok(WorkerHandle {

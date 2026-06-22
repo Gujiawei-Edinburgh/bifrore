@@ -106,7 +106,7 @@ fn apply_mode_from_daemon(mode: DaemonApplyMode) -> ApplyMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InMemoryDaemonStore, NoopWorkerLauncher};
+    use crate::{InMemoryDaemonStore, NoopWorkerManager};
     use futures::executor::block_on;
     use tenon_message::daemon::v1::Heartbeat;
     use tenon_message::plan::{
@@ -336,9 +336,9 @@ mod tests {
         }
     }
 
-    fn service() -> DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
+    fn service() -> DaemonService<NoopWorkerManager, InMemoryDaemonStore> {
         DaemonService::with_daemon(TenonDaemon::with_components(
-            NoopWorkerLauncher::default(),
+            NoopWorkerManager::default(),
             InMemoryDaemonStore::default(),
         ))
     }

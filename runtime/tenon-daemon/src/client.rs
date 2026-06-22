@@ -167,7 +167,7 @@ fn apply_resource_failed(message: impl Into<String>) -> ApplyResourceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InMemoryDaemonStore, NoopWorkerLauncher, TenonDaemon};
+    use crate::{InMemoryDaemonStore, NoopWorkerManager, TenonDaemon};
     use futures::executor::block_on;
     use tenon_message::daemon::v1::ApplyMode;
     use tenon_message::plan::{
@@ -260,9 +260,9 @@ mod tests {
         }
     }
 
-    fn service() -> DaemonService<NoopWorkerLauncher, InMemoryDaemonStore> {
+    fn service() -> DaemonService<NoopWorkerManager, InMemoryDaemonStore> {
         DaemonService::with_daemon(TenonDaemon::with_components(
-            NoopWorkerLauncher::default(),
+            NoopWorkerManager::default(),
             InMemoryDaemonStore::default(),
         ))
     }

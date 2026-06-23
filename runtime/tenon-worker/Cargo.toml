@@ -2,3 +2,12 @@
 name = "tenon-worker"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+flume = "0.11"
+prost = "0.14"
+rumqttc = "0.24"
+serde_json = "1.0"
+tenon-extension = { path = "../tenon-extension" }
+tenon-message = { path = "../tenon-message" }
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "sync"] }

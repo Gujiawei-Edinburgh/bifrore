@@ -71,6 +71,11 @@ message MqttClientIds {
   repeated string client_ids = 1;
 }
 
+message MqttSourceClientIds {
+  uint32 source_index = 1;
+  repeated string client_ids = 2;
+}
+
 message MqttBrokerPlan {
   string host = 1;
   uint32 port = 2;
@@ -128,6 +133,7 @@ enum DeliveryMode {
 
 message StartWorkerRequest {
   DeploymentPlan plan = 1;
+  repeated MqttSourceClientIds source_client_ids = 2;
 }
 
 message ReloadWorkerRequest {

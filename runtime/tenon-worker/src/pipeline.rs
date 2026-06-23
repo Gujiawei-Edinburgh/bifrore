@@ -1,8 +1,10 @@
-use crate::mqtt::{payload_decode_is_json, start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle};
+use crate::mqtt::{
+    payload_decode_is_json, start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle,
+};
 use crate::{WorkerError, WorkerResult};
 use flume::{Receiver, Sender};
 use std::thread::JoinHandle;
-use tenon_message::plan::{DeploymentPlan, MqttSourcePlan, ResourceId};
+use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, MqttSourcePlan, ResourceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerConfig {
@@ -26,26 +28,36 @@ impl Default for WorkerConfig {
 }
 
 pub struct ActivePipeline {
+    plan: DeploymentPlan,
     mqtt_handles: Vec<MqttAdapterHandle>,
     intake_tx: Sender<IncomingDelivery>,
     process_thread: Option<JoinHandle<()>>,
 }
 
 impl ActivePipeline {
-    pub fn start(plan: DeploymentPlan, config: WorkerConfig) -> WorkerResult<Self> {
+    pub fn start(
+        plan: DeploymentPlan,
+        source_client_ids: Vec<MqttSourceClientIds>,
+        config: WorkerConfig,
+    ) -> WorkerResult<Self> {
         let pipeline_id = plan
             .id
             .clone()
             .ok_or_else(|| WorkerError::pipeline("deployment plan id is missing"))?;
-        let sources = validate_sources(plan.sources)?;
+        let sources = validate_sources(plan.sources.clone())?;
+        let source_client_ids = validate_source_client_ids(&sources, source_client_ids)?;
         let (intake_tx, intake_rx) = flume::bounded(config.intake_queue_capacity.max(1));
         let process_thread = Some(start_process_loop(intake_rx));
         let mut mqtt_handles = Vec::with_capacity(sources.len());
 
         for (source_index, source) in sources.into_iter().enumerate() {
             let handler_tx = intake_tx.clone();
-            let adapter_config =
-                mqtt_adapter_config(&config, &pipeline_id, source_index, source);
+            let adapter_config = mqtt_adapter_config(
+                &config,
+                &pipeline_id,
+                source,
+                source_client_ids[source_index].clone(),
+            );
             let handle = start_mqtt(adapter_config, std::sync::Arc::new(move |delivery| {
                 if handler_tx.send(delivery).is_err() {
                     eprintln!("worker intake queue is closed; dropping MQTT delivery");
@@ -55,10 +67,27 @@ impl ActivePipeline {
         }
 
         Ok(Self {
+            plan,
             mqtt_handles,
             intake_tx,
             process_thread,
         })
+    }
+
+    pub fn reload_process(&mut self, plan: DeploymentPlan) -> WorkerResult<()> {
+        if self.plan.id.as_ref().map(|id| &id.name) != plan.id.as_ref().map(|id| &id.name) {
+            return Err(WorkerError::pipeline(
+                "reload plan does not target the active pipeline",
+            ));
+        }
+        if self.plan.sources != plan.sources || self.plan.egress != plan.egress {
+            return Err(WorkerError::pipeline(
+                "worker reload only supports process changes",
+            ));
+        }
+        self.plan.process = plan.process;
+        self.plan.id = plan.id;
+        Ok(())
     }
 
     pub fn stop(mut self) -> WorkerResult<()> {
@@ -91,13 +120,13 @@ fn process_delivery(delivery: IncomingDelivery) {
 fn mqtt_adapter_config(
     config: &WorkerConfig,
     pipeline_id: &ResourceId,
-    source_index: usize,
     source: MqttSourcePlan,
+    client_ids: Vec<String>,
 ) -> MqttAdapterConfig {
     MqttAdapterConfig {
         pipeline_id: pipeline_id.clone(),
-        source_index,
         source,
+        client_ids,
         group_name: pipeline_id.name.clone(),
         io_threads: config.mqtt_io_threads,
         queue_capacity: config.intake_queue_capacity,
@@ -130,6 +159,45 @@ fn validate_sources(sources: Vec<MqttSourcePlan>) -> WorkerResult<Vec<MqttSource
     Ok(sources)
 }
 
+fn validate_source_client_ids(
+    sources: &[MqttSourcePlan],
+    source_client_ids: Vec<MqttSourceClientIds>,
+) -> WorkerResult<Vec<Vec<String>>> {
+    if source_client_ids.len() != sources.len() {
+        return Err(WorkerError::pipeline(format!(
+            "source client ID groups mismatch: expected {}, got {}",
+            sources.len(),
+            source_client_ids.len()
+        )));
+    }
+
+    let mut ids_by_source = vec![Vec::new(); sources.len()];
+    for group in source_client_ids {
+        let source_index = usize::try_from(group.source_index)
+            .map_err(|_| WorkerError::pipeline("source client ID index is too large"))?;
+        if source_index >= sources.len() {
+            return Err(WorkerError::pipeline(format!(
+                "source client ID index out of range: {source_index}"
+            )));
+        }
+        if group.client_ids.is_empty() {
+            return Err(WorkerError::pipeline(format!(
+                "source {source_index} client IDs are missing"
+            )));
+        }
+        ids_by_source[source_index] = group.client_ids;
+    }
+
+    for (index, client_ids) in ids_by_source.iter().enumerate() {
+        if client_ids.is_empty() {
+            return Err(WorkerError::pipeline(format!(
+                "source {index} client IDs are missing"
+            )));
+        }
+    }
+    Ok(ids_by_source)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,8 +207,11 @@ mod tests {
 
     #[test]
     fn rejects_pipeline_without_id() {
-        let error = match ActivePipeline::start(DeploymentPlan::default(), WorkerConfig::default())
-        {
+        let error = match ActivePipeline::start(
+            DeploymentPlan::default(),
+            Vec::new(),
+            WorkerConfig::default(),
+        ) {
             Ok(_) => panic!("pipeline id should be required"),
             Err(error) => error,
         };
@@ -156,6 +227,35 @@ mod tests {
         let error = validate_sources(plan.sources).expect_err("decode should be rejected");
 
         assert_eq!(error.message, "only JSON payload decode is supported");
+    }
+
+    #[test]
+    fn rejects_missing_source_client_ids() {
+        let plan = plan();
+
+        let error = validate_source_client_ids(&plan.sources, Vec::new())
+            .expect_err("source client ids should be required");
+
+        assert!(error.message.contains("source client ID groups mismatch"));
+    }
+
+    #[test]
+    fn reload_process_rejects_source_changes() {
+        let plan = plan();
+        let mut pipeline = ActivePipeline {
+            plan: plan.clone(),
+            mqtt_handles: Vec::new(),
+            intake_tx: flume::bounded(1).0,
+            process_thread: None,
+        };
+        let mut target = plan;
+        target.sources[0].client_count = 2;
+
+        let error = pipeline
+            .reload_process(target)
+            .expect_err("source changes should be rejected");
+
+        assert_eq!(error.message, "worker reload only supports process changes");
     }
 
     fn plan() -> DeploymentPlan {
@@ -181,4 +281,5 @@ mod tests {
             egress: None,
         }
     }
+
 }

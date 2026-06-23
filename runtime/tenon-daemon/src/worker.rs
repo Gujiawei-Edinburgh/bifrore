@@ -13,7 +13,7 @@ use tenon_message::codec::encode_frame;
 use tenon_message::daemon::v1::{
     worker_envelope, ReloadWorkerRequest, StartWorkerRequest, StopWorkerRequest, WorkerEnvelope,
 };
-use tenon_message::plan::{DeploymentPlan, ResourceId};
+use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 use wait_timeout::ChildExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +31,14 @@ pub enum WorkerStatus {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerDeployment {
+    pub plan: DeploymentPlan,
+    pub source_client_ids: Vec<MqttSourceClientIds>,
+}
+
 pub trait WorkerManager {
-    fn start(&mut self, plan: DeploymentPlan) -> DaemonResult<WorkerHandle>;
+    fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle>;
 
     fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()>;
 
@@ -47,14 +53,18 @@ pub struct NoopWorkerManager {
 }
 
 impl WorkerManager for NoopWorkerManager {
-    fn start(&mut self, _plan: DeploymentPlan) -> DaemonResult<WorkerHandle> {
+    fn start(&mut self, _deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         Ok(WorkerHandle {
             id: format!("worker-{id}"),
         })
     }
 
-    fn reload(&mut self, _worker: &WorkerHandle, _plan: DeploymentPlan) -> DaemonResult<()> {
+    fn reload(
+        &mut self,
+        _worker: &WorkerHandle,
+        _plan: DeploymentPlan,
+    ) -> DaemonResult<()> {
         Ok(())
     }
 
@@ -106,8 +116,8 @@ impl UdsWorkerManager {
 }
 
 impl WorkerManager for UdsWorkerManager {
-    fn start(&mut self, plan: DeploymentPlan) -> DaemonResult<WorkerHandle> {
-        let id = self.next_worker_id(&plan)?;
+    fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
+        let id = self.next_worker_id(&deployment.plan)?;
         let socket_path = self.socket_path(&id);
         prepare_socket(&self.config.socket_dir, &socket_path)?;
 
@@ -130,7 +140,8 @@ impl WorkerManager for UdsWorkerManager {
             &mut stream,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
-                    plan: Some(plan),
+                    plan: Some(deployment.plan),
+                    source_client_ids: deployment.source_client_ids,
                 })),
             },
         )?;
@@ -346,18 +357,21 @@ mod tests {
     use std::io::Read;
     use tenon_message::codec::decode_frame;
     use tenon_message::daemon::v1::{worker_envelope, WorkerEnvelope};
+    use tenon_message::plan::MqttSourceClientIds;
 
     #[test]
     fn send_worker_envelope_writes_length_prefixed_proto_frame() {
         let (mut daemon_stream, mut worker_stream) =
             UnixStream::pair().expect("create socket pair");
         let plan = plan();
+        let deployment = deployment(plan.clone());
 
         send_worker_envelope(
             &mut daemon_stream,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
                     plan: Some(plan.clone()),
+                    source_client_ids: deployment.source_client_ids.clone(),
                 })),
             },
         )
@@ -368,6 +382,7 @@ mod tests {
         match envelope.payload {
             Some(worker_envelope::Payload::StartWorker(request)) => {
                 assert_eq!(request.plan, Some(plan));
+                assert_eq!(request.source_client_ids, deployment.source_client_ids);
             }
             other => panic!("unexpected worker envelope: {other:?}"),
         }
@@ -383,7 +398,9 @@ mod tests {
         let handle = insert_test_worker(&mut manager, "worker-reload", daemon_stream);
         let plan = plan();
 
-        manager.reload(&handle, plan.clone()).expect("reload worker");
+        manager
+            .reload(&handle, plan.clone())
+            .expect("reload worker");
 
         let frame = read_frame(&mut worker_stream);
         let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
@@ -424,7 +441,7 @@ mod tests {
         ));
 
         let error = manager
-            .start(DeploymentPlan::default())
+            .start(deployment(DeploymentPlan::default()))
             .expect_err("missing id should fail before spawn");
 
         assert_eq!(error.kind, DaemonErrorKind::InvalidState);
@@ -491,6 +508,16 @@ mod tests {
                 version: "r1".to_string(),
             }),
             ..DeploymentPlan::default()
+        }
+    }
+
+    fn deployment(plan: DeploymentPlan) -> WorkerDeployment {
+        WorkerDeployment {
+            plan,
+            source_client_ids: vec![MqttSourceClientIds {
+                source_index: 0,
+                client_ids: vec!["client-0".to_string()],
+            }],
         }
     }
 

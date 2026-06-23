@@ -33,7 +33,7 @@ impl WorkerControl {
                     replace_pipeline(&mut active, request, &self.config)?;
                 }
                 Some(worker_envelope::Payload::ReloadWorker(request)) => {
-                    reload_pipeline(&mut active, request, &self.config)?;
+                    reload_pipeline(&mut active, request)?;
                 }
                 Some(worker_envelope::Payload::StopWorker(request)) => {
                     stop_pipeline(&mut active, request)?;
@@ -63,22 +63,25 @@ fn replace_pipeline(
     let plan = request
         .plan
         .ok_or_else(|| WorkerError::control("start worker plan is missing"))?;
-    *active = Some(ActivePipeline::start(plan, config.clone())?);
+    *active = Some(ActivePipeline::start(
+        plan,
+        request.source_client_ids,
+        config.clone(),
+    )?);
     Ok(())
 }
 
 fn reload_pipeline(
     active: &mut Option<ActivePipeline>,
     request: ReloadWorkerRequest,
-    config: &WorkerConfig,
 ) -> WorkerResult<()> {
-    if let Some(pipeline) = active.take() {
-        pipeline.stop()?;
-    }
     let plan = request
         .plan
         .ok_or_else(|| WorkerError::control("reload worker plan is missing"))?;
-    *active = Some(ActivePipeline::start(plan, config.clone())?);
+    let pipeline = active
+        .as_mut()
+        .ok_or_else(|| WorkerError::control("reload requires an active pipeline"))?;
+    pipeline.reload_process(plan)?;
     Ok(())
 }
 

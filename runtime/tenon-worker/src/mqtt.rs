@@ -11,8 +11,8 @@ use tenon_message::plan::{
 #[derive(Debug, Clone)]
 pub struct MqttAdapterConfig {
     pub pipeline_id: ResourceId,
-    pub source_index: usize,
     pub source: MqttSourcePlan,
+    pub client_ids: Vec<String>,
     pub group_name: String,
     pub io_threads: usize,
     pub queue_capacity: usize,
@@ -22,13 +22,6 @@ pub struct MqttAdapterConfig {
 }
 
 impl MqttAdapterConfig {
-    fn client_id_for(&self, index: u32) -> String {
-        format!(
-            "{}-{}-{}-{}",
-            self.pipeline_id.name, self.pipeline_id.version, self.source_index, index
-        )
-    }
-
     fn shared_subscription(&self, topic_filter: &str) -> String {
         format!("$share/{}/{}", self.group_name, topic_filter)
     }
@@ -101,7 +94,10 @@ pub fn start_mqtt(
         return Err(WorkerError::mqtt("MQTT source has no subscriptions"));
     }
 
-    let client_count = config.source.client_count.max(1);
+    if config.client_ids.is_empty() {
+        return Err(WorkerError::mqtt("MQTT source client IDs are missing"));
+    }
+    let client_count = config.client_ids.len();
     let io_threads = config.io_threads.max(1);
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (ready_tx, ready_rx) = mpsc::channel::<WorkerResult<()>>();
@@ -128,8 +124,7 @@ pub fn start_mqtt(
             let mut tasks = Vec::with_capacity(client_count as usize);
             let mut subscribed_clients = 0usize;
 
-            for index in 0..client_count {
-                let client_id = config.client_id_for(index);
+            for client_id in config.client_ids.iter() {
                 let mut mqtt_options =
                     MqttOptions::new(client_id.clone(), broker.host.clone(), broker.port as u16);
                 mqtt_options.set_keep_alive(Duration::from_secs(config.keep_alive_secs.into()));

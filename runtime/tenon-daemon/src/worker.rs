@@ -338,3 +338,178 @@ fn cleanup_failed_worker(mut child: Child, socket_path: &Path) {
     let _ = child.wait();
     cleanup_socket(socket_path);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DaemonErrorKind;
+    use std::io::Read;
+    use tenon_message::codec::decode_frame;
+    use tenon_message::daemon::v1::{worker_envelope, WorkerEnvelope};
+
+    #[test]
+    fn send_worker_envelope_writes_length_prefixed_proto_frame() {
+        let (mut daemon_stream, mut worker_stream) =
+            UnixStream::pair().expect("create socket pair");
+        let plan = plan();
+
+        send_worker_envelope(
+            &mut daemon_stream,
+            WorkerEnvelope {
+                payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
+                    plan: Some(plan.clone()),
+                })),
+            },
+        )
+        .expect("send frame");
+
+        let frame = read_frame(&mut worker_stream);
+        let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+        match envelope.payload {
+            Some(worker_envelope::Payload::StartWorker(request)) => {
+                assert_eq!(request.plan, Some(plan));
+            }
+            other => panic!("unexpected worker envelope: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uds_worker_manager_reload_sends_reload_frame() {
+        let mut manager = UdsWorkerManager::new(UdsWorkerManagerConfig::new(
+            "/bin/unused",
+            unique_socket_dir("reload"),
+        ));
+        let (daemon_stream, mut worker_stream) = UnixStream::pair().expect("create socket pair");
+        let handle = insert_test_worker(&mut manager, "worker-reload", daemon_stream);
+        let plan = plan();
+
+        manager.reload(&handle, plan.clone()).expect("reload worker");
+
+        let frame = read_frame(&mut worker_stream);
+        let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+        match envelope.payload {
+            Some(worker_envelope::Payload::ReloadWorker(request)) => {
+                assert_eq!(request.plan, Some(plan));
+            }
+            other => panic!("unexpected worker envelope: {other:?}"),
+        }
+        manager.stop(handle).expect("stop worker");
+    }
+
+    #[test]
+    fn uds_worker_manager_stop_sends_stop_frame_and_removes_worker() {
+        let mut manager = UdsWorkerManager::new(UdsWorkerManagerConfig::new(
+            "/bin/unused",
+            unique_socket_dir("stop"),
+        ));
+        let (daemon_stream, mut worker_stream) = UnixStream::pair().expect("create socket pair");
+        let handle = insert_test_worker(&mut manager, "worker-stop", daemon_stream);
+
+        manager.stop(handle.clone()).expect("stop worker");
+
+        let frame = read_frame(&mut worker_stream);
+        let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+        assert!(matches!(
+            envelope.payload,
+            Some(worker_envelope::Payload::StopWorker(_))
+        ));
+        assert!(manager.worker_mut(&handle).is_err());
+    }
+
+    #[test]
+    fn uds_worker_manager_rejects_plan_without_id_before_spawning() {
+        let mut manager = UdsWorkerManager::new(UdsWorkerManagerConfig::new(
+            "/bin/unused",
+            unique_socket_dir("missing-id"),
+        ));
+
+        let error = manager
+            .start(DeploymentPlan::default())
+            .expect_err("missing id should fail before spawn");
+
+        assert_eq!(error.kind, DaemonErrorKind::InvalidState);
+        assert_eq!(error.message, "deployment plan id is missing");
+    }
+
+    #[test]
+    fn uds_worker_manager_rejects_reload_for_unknown_worker() {
+        let mut manager = UdsWorkerManager::new(UdsWorkerManagerConfig::new(
+            "/bin/unused",
+            unique_socket_dir("unknown-reload"),
+        ));
+        let worker = WorkerHandle {
+            id: "missing-worker".to_string(),
+        };
+
+        let error = manager
+            .reload(&worker, plan())
+            .expect_err("unknown worker should fail");
+
+        assert_eq!(error.kind, DaemonErrorKind::NotFound);
+    }
+
+    fn insert_test_worker(
+        manager: &mut UdsWorkerManager,
+        id: &str,
+        stream: UnixStream,
+    ) -> WorkerHandle {
+        let handle = WorkerHandle { id: id.to_string() };
+        manager.workers.insert(
+            handle.id.clone(),
+            UdsWorkerProcess {
+                child: spawn_sleep_child(),
+                stream,
+                socket_path: unique_socket_path(id),
+                status: WorkerStatus::Running,
+            },
+        );
+        handle
+    }
+
+    fn spawn_sleep_child() -> Child {
+        Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep child")
+    }
+
+    fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
+        let mut header = [0u8; 4];
+        stream.read_exact(&mut header).expect("read frame header");
+        let len = u32::from_le_bytes(header) as usize;
+        let mut frame = Vec::with_capacity(4 + len);
+        frame.extend_from_slice(&header);
+        frame.resize(4 + len, 0);
+        stream.read_exact(&mut frame[4..]).expect("read frame body");
+        frame
+    }
+
+    fn plan() -> DeploymentPlan {
+        DeploymentPlan {
+            id: Some(ResourceId {
+                name: "sensor-pipeline".to_string(),
+                version: "r1".to_string(),
+            }),
+            ..DeploymentPlan::default()
+        }
+    }
+
+    fn unique_socket_dir(label: &str) -> PathBuf {
+        let dir = PathBuf::from("target").join(format!(
+            "tdw-{label}-{}-{}",
+            std::process::id(),
+            unique_seq()
+        ));
+        fs::create_dir_all(&dir).expect("create socket dir");
+        dir
+    }
+
+    fn unique_socket_path(label: &str) -> PathBuf {
+        unique_socket_dir(label).join("worker.sock")
+    }
+
+    fn unique_seq() -> u64 {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    }
+}

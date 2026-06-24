@@ -1,8 +1,10 @@
 mod mqtt;
 mod pipeline;
+mod processor;
 mod worker_service;
 
 pub use pipeline::{ActivePipeline, WorkerConfig};
+pub use processor::{LuaProcessor, Processor};
 pub use worker_service::WorkerService;
 
 pub type WorkerResult<T> = Result<T, WorkerError>;
@@ -18,6 +20,7 @@ pub enum WorkerErrorKind {
     Control,
     Mqtt,
     Pipeline,
+    Processor,
 }
 
 impl WorkerError {
@@ -38,6 +41,10 @@ impl WorkerError {
 
     pub fn pipeline(message: impl Into<String>) -> Self {
         Self::new(WorkerErrorKind::Pipeline, message)
+    }
+
+    pub fn processor(message: impl Into<String>) -> Self {
+        Self::new(WorkerErrorKind::Processor, message)
     }
 }
 

@@ -1,9 +1,9 @@
-use crate::mqtt::{
-    payload_decode_is_json, start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle,
-};
+use crate::mqtt::{start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle};
+use crate::processor::{processor_from_plan, Processor};
 use crate::{WorkerError, WorkerResult};
 use flume::{Receiver, Sender};
 use std::thread::JoinHandle;
+use tenon_extension::{Context, SourceContext};
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, MqttSourcePlan, ResourceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +31,7 @@ pub struct ActivePipeline {
     plan: DeploymentPlan,
     mqtt_handles: Vec<MqttAdapterHandle>,
     intake_tx: Sender<IncomingDelivery>,
+    process_tx: Sender<ProcessCommand>,
     process_thread: Option<JoinHandle<()>>,
 }
 
@@ -44,10 +45,15 @@ impl ActivePipeline {
             .id
             .clone()
             .ok_or_else(|| WorkerError::pipeline("deployment plan id is missing"))?;
-        let sources = validate_sources(plan.sources.clone())?;
-        let source_client_ids = validate_source_client_ids(&sources, source_client_ids)?;
+        let context = Context::with_empty_memory(SourceContext::new(
+            pipeline_id.name.clone(),
+            pipeline_id.version.clone(),
+        ));
+        let processor = processor_from_plan(plan.process.clone(), context)?;
+        let sources = plan.sources.clone();
         let (intake_tx, intake_rx) = flume::bounded(config.intake_queue_capacity.max(1));
-        let process_thread = Some(start_process_loop(intake_rx));
+        let (process_tx, process_rx) = flume::bounded(1);
+        let process_thread = Some(start_process_loop(intake_rx, process_rx, processor));
         let mut mqtt_handles = Vec::with_capacity(sources.len());
 
         for (source_index, source) in sources.into_iter().enumerate() {
@@ -56,7 +62,10 @@ impl ActivePipeline {
                 &config,
                 &pipeline_id,
                 source,
-                source_client_ids[source_index].clone(),
+                source_client_ids
+                    .get(source_index)
+                    .map(|group| group.client_ids.clone())
+                    .unwrap_or_default(),
             );
             let handle = start_mqtt(adapter_config, std::sync::Arc::new(move |delivery| {
                 if handler_tx.send(delivery).is_err() {
@@ -70,6 +79,7 @@ impl ActivePipeline {
             plan,
             mqtt_handles,
             intake_tx,
+            process_tx,
             process_thread,
         })
     }
@@ -85,6 +95,13 @@ impl ActivePipeline {
                 "worker reload only supports process changes",
             ));
         }
+        let process = plan
+            .process
+            .clone()
+            .ok_or_else(|| WorkerError::pipeline("process plan is missing"))?;
+        self.process_tx
+            .send(ProcessCommand::Reload(process))
+            .map_err(|_| WorkerError::pipeline("process thread is not running"))?;
         self.plan.process = plan.process;
         self.plan.id = plan.id;
         Ok(())
@@ -104,16 +121,51 @@ impl ActivePipeline {
     }
 }
 
-fn start_process_loop(intake_rx: Receiver<IncomingDelivery>) -> JoinHandle<()> {
+enum ProcessCommand {
+    Reload(tenon_message::plan::ProcessPlan),
+}
+
+fn start_process_loop(
+    intake_rx: Receiver<IncomingDelivery>,
+    process_rx: Receiver<ProcessCommand>,
+    mut processor: Box<dyn Processor>,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        while let Ok(delivery) = intake_rx.recv() {
-            process_delivery(delivery);
+        loop {
+            while let Ok(command) = process_rx.try_recv() {
+                processor = handle_process_command(processor, command);
+            }
+            match intake_rx.recv() {
+                Ok(delivery) => process_delivery(&mut *processor, delivery),
+                Err(_) => break,
+            }
         }
     })
 }
 
-fn process_delivery(delivery: IncomingDelivery) {
-    let _message = &delivery.message;
+fn handle_process_command(
+    processor: Box<dyn Processor>,
+    command: ProcessCommand,
+) -> Box<dyn Processor> {
+    match command {
+        ProcessCommand::Reload(process) => {
+            replace_processor(processor, process)
+        }
+    }
+}
+
+fn replace_processor(
+    processor: Box<dyn Processor>,
+    process: tenon_message::plan::ProcessPlan,
+) -> Box<dyn Processor> {
+    let context = processor.into_context();
+    processor_from_plan(Some(process), context).expect("process plan exists")
+}
+
+fn process_delivery(processor: &mut dyn Processor, delivery: IncomingDelivery) {
+    if let Err(error) = processor.process(&delivery.message) {
+        eprintln!("failed to process message: {error}");
+    }
     delivery.ack();
 }
 
@@ -134,68 +186,6 @@ fn mqtt_adapter_config(
         session_expiry_interval: config.mqtt_session_expiry_interval,
         keep_alive_secs: config.mqtt_keep_alive_secs,
     }
-}
-
-fn validate_sources(sources: Vec<MqttSourcePlan>) -> WorkerResult<Vec<MqttSourcePlan>> {
-    if sources.is_empty() {
-        return Err(WorkerError::pipeline("deployment plan has no MQTT sources"));
-    }
-    for source in &sources {
-        if source.broker.is_none() {
-            return Err(WorkerError::pipeline("MQTT broker plan is missing"));
-        }
-        if source.subscriptions.is_empty() {
-            return Err(WorkerError::pipeline("MQTT source has no subscriptions"));
-        }
-        for subscription in &source.subscriptions {
-            if subscription.topic.trim().is_empty() {
-                return Err(WorkerError::pipeline("MQTT subscription topic is empty"));
-            }
-            if !payload_decode_is_json(subscription.decode) {
-                return Err(WorkerError::pipeline("only JSON payload decode is supported"));
-            }
-        }
-    }
-    Ok(sources)
-}
-
-fn validate_source_client_ids(
-    sources: &[MqttSourcePlan],
-    source_client_ids: Vec<MqttSourceClientIds>,
-) -> WorkerResult<Vec<Vec<String>>> {
-    if source_client_ids.len() != sources.len() {
-        return Err(WorkerError::pipeline(format!(
-            "source client ID groups mismatch: expected {}, got {}",
-            sources.len(),
-            source_client_ids.len()
-        )));
-    }
-
-    let mut ids_by_source = vec![Vec::new(); sources.len()];
-    for group in source_client_ids {
-        let source_index = usize::try_from(group.source_index)
-            .map_err(|_| WorkerError::pipeline("source client ID index is too large"))?;
-        if source_index >= sources.len() {
-            return Err(WorkerError::pipeline(format!(
-                "source client ID index out of range: {source_index}"
-            )));
-        }
-        if group.client_ids.is_empty() {
-            return Err(WorkerError::pipeline(format!(
-                "source {source_index} client IDs are missing"
-            )));
-        }
-        ids_by_source[source_index] = group.client_ids;
-    }
-
-    for (index, client_ids) in ids_by_source.iter().enumerate() {
-        if client_ids.is_empty() {
-            return Err(WorkerError::pipeline(format!(
-                "source {index} client IDs are missing"
-            )));
-        }
-    }
-    Ok(ids_by_source)
 }
 
 #[cfg(test)]
@@ -220,32 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_json_decode() {
-        let mut plan = plan();
-        plan.sources[0].subscriptions[0].decode = PayloadDecodePlan::Unspecified as i32;
-
-        let error = validate_sources(plan.sources).expect_err("decode should be rejected");
-
-        assert_eq!(error.message, "only JSON payload decode is supported");
-    }
-
-    #[test]
-    fn rejects_missing_source_client_ids() {
-        let plan = plan();
-
-        let error = validate_source_client_ids(&plan.sources, Vec::new())
-            .expect_err("source client ids should be required");
-
-        assert!(error.message.contains("source client ID groups mismatch"));
-    }
-
-    #[test]
     fn reload_process_rejects_source_changes() {
         let plan = plan();
         let mut pipeline = ActivePipeline {
             plan: plan.clone(),
             mqtt_handles: Vec::new(),
             intake_tx: flume::bounded(1).0,
+            process_tx: flume::bounded(1).0,
             process_thread: None,
         };
         let mut target = plan;

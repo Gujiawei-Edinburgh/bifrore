@@ -63,6 +63,12 @@ impl Context {
     pub fn emit(&mut self, payload: ExtensionValue) -> ExtensionResult<()> {
         self.emitter.emit(EmitRecord::new(payload))
     }
+
+    pub fn drain_outcome(&mut self) -> InvocationOutcome {
+        InvocationOutcome {
+            emits: std::mem::take(&mut self.emitter).into_records(),
+        }
+    }
 }
 
 impl ScriptApi for Context {

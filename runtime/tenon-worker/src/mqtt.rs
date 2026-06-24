@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tenon_extension::{ExtensionValue, Message, MqttMetadata, SourceContext, Topic};
-use tenon_message::plan::{
-    auth_plan, MqttSourcePlan, PayloadDecodePlan, ResourceId, UsernamePasswordAuth,
-};
+use tenon_message::plan::{auth_plan, MqttSourcePlan, ResourceId, UsernamePasswordAuth};
 
 #[derive(Debug, Clone)]
 pub struct MqttAdapterConfig {
@@ -287,8 +285,4 @@ fn properties(publish: &rumqttc::v5::mqttbytes::v5::Publish) -> HashMap<String, 
         }
     }
     properties
-}
-
-pub fn payload_decode_is_json(value: i32) -> bool {
-    PayloadDecodePlan::try_from(value) == Ok(PayloadDecodePlan::Json)
 }

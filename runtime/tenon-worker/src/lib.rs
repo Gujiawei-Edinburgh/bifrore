@@ -1,9 +1,9 @@
-mod control;
 mod mqtt;
 mod pipeline;
+mod worker_service;
 
-pub use control::WorkerControl;
 pub use pipeline::{ActivePipeline, WorkerConfig};
+pub use worker_service::WorkerService;
 
 pub type WorkerResult<T> = Result<T, WorkerError>;
 
@@ -51,17 +51,17 @@ impl std::error::Error for WorkerError {}
 
 #[derive(Debug)]
 pub struct TenonWorker {
-    control: WorkerControl,
+    service: WorkerService,
 }
 
 impl TenonWorker {
     pub fn new(config: WorkerConfig) -> Self {
         Self {
-            control: WorkerControl::new(config),
+            service: WorkerService::new(config),
         }
     }
 
     pub fn run_uds(self, socket_path: impl AsRef<std::path::Path>) -> WorkerResult<()> {
-        self.control.run_uds(socket_path.as_ref())
+        self.service.run_uds(socket_path.as_ref())
     }
 }

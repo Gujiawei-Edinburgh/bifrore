@@ -8,11 +8,11 @@ use tenon_message::daemon::v1::{
 };
 
 #[derive(Debug)]
-pub struct WorkerControl {
+pub struct WorkerService {
     config: WorkerConfig,
 }
 
-impl WorkerControl {
+impl WorkerService {
     pub fn new(config: WorkerConfig) -> Self {
         Self { config }
     }

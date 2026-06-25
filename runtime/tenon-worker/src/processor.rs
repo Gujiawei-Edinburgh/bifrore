@@ -339,14 +339,121 @@ mod tests {
         assert_eq!(second.emits[0].payload, json!({"count": 2}));
     }
 
+    #[test]
+    fn can_predicate_on_mqtt_fields_and_payload() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  if msg.topic.levels[1] == "sensor"
+                    and msg.topic.levels[2] == "room1"
+                    and msg.metadata.qos == 1
+                    and msg.metadata.retain == false
+                    and msg.properties.site == "lab"
+                    and msg.payload.temp > 30
+                  then
+                    ctx.emit({
+                      topic = msg.topic.raw,
+                      site = msg.properties.site,
+                      temp = msg.payload.temp,
+                      pkid = msg.metadata.pkid
+                    })
+                  end
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let skipped = processor.process(&message_with(
+            "sensor/room1",
+            json!({"temp": 20}),
+            MqttMetadata::new(7, 1, false, false),
+            [("site", "lab")],
+        )).expect("skipped");
+        let emitted = processor.process(&message_with(
+            "sensor/room1",
+            json!({"temp": 31}),
+            MqttMetadata::new(8, 1, false, false),
+            [("site", "lab")],
+        )).expect("emitted");
+
+        assert!(skipped.emits.is_empty());
+        assert_eq!(emitted.emits.len(), 1);
+        assert_eq!(emitted.emits[0].payload, json!({
+            "topic": "sensor/room1",
+            "site": "lab",
+            "temp": 31,
+            "pkid": 8
+        }));
+    }
+
+    #[test]
+    fn can_aggregate_context_and_emit_alert() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  local hot_count = ctx.memory.get("hot_count")
+                  if hot_count == nil then hot_count = 0 end
+
+                  if msg.payload.temp > 30 then
+                    hot_count = hot_count + 1
+                    ctx.memory.set("hot_count", hot_count)
+                  end
+
+                  if hot_count > 5 then
+                    ctx.emit({
+                      kind = "temp_alert",
+                      count = hot_count,
+                      temp = msg.payload.temp
+                    })
+                  end
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let cold = processor.process(&message(json!({"temp": 10}))).expect("cold");
+        assert!(cold.emits.is_empty());
+
+        for _ in 0..5 {
+            let outcome = processor.process(&message(json!({"temp": 31}))).expect("hot");
+            assert!(outcome.emits.is_empty());
+        }
+
+        let alert = processor.process(&message(json!({"temp": 32}))).expect("alert");
+
+        assert_eq!(alert.emits.len(), 1);
+        assert_eq!(alert.emits[0].payload, json!({
+            "kind": "temp_alert",
+            "count": 6,
+            "temp": 32
+        }));
+    }
+
     fn message(payload: ExtensionValue) -> Message {
+        message_with(
+            "sensor/a",
+            payload,
+            MqttMetadata::new(1, 1, false, false),
+            [],
+        )
+    }
+
+    fn message_with<const N: usize>(
+        topic: &str,
+        payload: ExtensionValue,
+        metadata: MqttMetadata,
+        properties: [(&str, &str); N],
+    ) -> Message {
         Message::new(
             SourceContext::new("source", "r1"),
-            Topic::new("sensor/a"),
+            Topic::new(topic),
             payload,
             br#"{"temp":30}"#.to_vec(),
-            MqttMetadata::new(1, 1, false, false),
-            HashMap::new(),
+            metadata,
+            properties
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>(),
         )
     }
 }

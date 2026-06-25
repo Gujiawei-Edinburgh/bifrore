@@ -1,7 +1,11 @@
 use crate::{WorkerError, WorkerResult};
-use mlua::{Function, Lua, Scope, Table, Value};
+use mlua::{Function, HookTriggers, Lua, LuaOptions, Scope, StdLib, Table, Value, VmState};
 use serde_json::{Map, Number};
 use std::cell::RefCell;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use tenon_extension::{
     Context, ExtensionValue, InvocationOutcome, Message, PROCESS_ON_MESSAGE_FN,
 };
@@ -17,11 +21,14 @@ pub trait Processor: Send + 'static {
 pub struct LuaProcessor {
     lua: Lua,
     context: Context,
+    instruction_budget: Arc<AtomicU64>,
 }
 
 impl LuaProcessor {
     pub fn new(process: ProcessPlan, context: Context) -> WorkerResult<Self> {
-        let lua = Lua::new();
+        let lua = Lua::new_with(safe_lua_libs(), LuaOptions::default()).map_err(lua_error)?;
+        let instruction_budget = Arc::new(AtomicU64::new(0));
+        install_instruction_budget_hook(&lua, Arc::clone(&instruction_budget));
         lua.load(&process.source)
             .exec()
             .map_err(lua_error)?;
@@ -29,7 +36,11 @@ impl LuaProcessor {
             .globals()
             .get(PROCESS_ON_MESSAGE_FN)
             .map_err(lua_error)?;
-        Ok(Self { lua, context })
+        Ok(Self {
+            lua,
+            context,
+            instruction_budget,
+        })
     }
 }
 
@@ -41,6 +52,8 @@ impl Processor for LuaProcessor {
             .get(PROCESS_ON_MESSAGE_FN)
             .map_err(lua_error)?;
         let context = RefCell::new(&mut self.context);
+        self.instruction_budget
+            .store(DEFAULT_LUA_INSTRUCTION_BUDGET, Ordering::Relaxed);
         self.lua
             .scope(|scope| {
                 let ctx = create_context_table(&self.lua, scope, &context)?;
@@ -55,6 +68,7 @@ impl Processor for LuaProcessor {
         let Self {
             lua,
             context,
+            instruction_budget: _,
         } = *self;
         drop(lua);
         context
@@ -281,6 +295,30 @@ fn lua_key_to_json_key(key: Value) -> mlua::Result<String> {
     }
 }
 
+const DEFAULT_LUA_INSTRUCTION_BUDGET: u64 = 1_000_000;
+const LUA_HOOK_INSTRUCTION_INTERVAL: u32 = 1_000;
+
+fn safe_lua_libs() -> StdLib {
+    StdLib::TABLE | StdLib::STRING | StdLib::UTF8 | StdLib::MATH
+}
+
+fn install_instruction_budget_hook(lua: &Lua, instruction_budget: Arc<AtomicU64>) {
+    lua.set_hook(
+        HookTriggers::new().every_nth_instruction(LUA_HOOK_INSTRUCTION_INTERVAL),
+        move |_, _| {
+            let remaining = instruction_budget.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |remaining| remaining.checked_sub(LUA_HOOK_INSTRUCTION_INTERVAL as u64),
+            );
+            match remaining {
+                Ok(_) => Ok(VmState::Continue),
+                Err(_) => Err(mlua::Error::external("Lua instruction budget exceeded")),
+            }
+        },
+    );
+}
+
 fn lua_error(error: mlua::Error) -> WorkerError {
     WorkerError::processor(error.to_string())
 }
@@ -427,6 +465,45 @@ mod tests {
             "count": 6,
             "temp": 32
         }));
+    }
+
+    #[test]
+    fn blocks_unsafe_standard_libraries() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  ctx.emit({has_os = os ~= nil, has_io = io ~= nil, has_package = package ~= nil})
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let outcome = processor.process(&message(json!({"temp": 30}))).expect("outcome");
+
+        assert_eq!(outcome.emits[0].payload, json!({
+            "has_os": false,
+            "has_io": false,
+            "has_package": false
+        }));
+    }
+
+    #[test]
+    fn rejects_infinite_loop() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  while true do end
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let error = processor
+            .process(&message(json!({"temp": 30})))
+            .expect_err("instruction budget error");
+
+        assert_eq!(error.kind, crate::WorkerErrorKind::Processor);
+        assert!(error.message.contains("instruction budget"));
     }
 
     fn message(payload: ExtensionValue) -> Message {

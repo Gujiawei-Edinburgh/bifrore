@@ -58,8 +58,9 @@ impl Processor for LuaProcessor {
             .scope(|scope| {
                 let ctx = create_context_table(&self.lua, scope, &context)?;
                 let msg = create_message_table(&self.lua, message)?;
-                function.call::<()>((ctx, msg))
+                function.call::<Value>((ctx, msg))
             })
+            .and_then(validate_on_message_return)
             .map_err(lua_error)?;
         Ok(self.context.drain_outcome())
     }
@@ -97,7 +98,7 @@ fn create_context_table<'scope, 'env>(
     table.set("memory", create_memory_table(lua, scope, context)?)?;
     let emit = scope
         .create_function(move |_, payload: Value| {
-            let payload = lua_value_to_json(payload)?;
+            let payload = lua_value_to_emit_payload(payload)?;
             let mut context = context.borrow_mut();
             context.emit(payload).map_err(mlua::Error::external)
         })
@@ -244,6 +245,22 @@ fn lua_value_to_json(value: Value) -> mlua::Result<ExtensionValue> {
             "unsupported Lua value for JSON conversion: {}",
             other.type_name()
         ))),
+    }
+}
+
+fn lua_value_to_emit_payload(value: Value) -> mlua::Result<ExtensionValue> {
+    let payload = lua_value_to_json(value)?;
+    if payload.is_object() {
+        Ok(payload)
+    } else {
+        Err(mlua::Error::external("ctx.emit payload must be a JSON object"))
+    }
+}
+
+fn validate_on_message_return(value: Value) -> mlua::Result<()> {
+    match value {
+        Value::Nil => Ok(()),
+        _ => Err(mlua::Error::external("on_message must not return a value")),
     }
 }
 
@@ -504,6 +521,44 @@ mod tests {
 
         assert_eq!(error.kind, crate::WorkerErrorKind::Processor);
         assert!(error.message.contains("instruction budget"));
+    }
+
+    #[test]
+    fn rejects_on_message_return_value() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  return { temp = msg.payload.temp }
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let error = processor
+            .process(&message(json!({"temp": 30})))
+            .expect_err("return value error");
+
+        assert_eq!(error.kind, crate::WorkerErrorKind::Processor);
+        assert!(error.message.contains("on_message must not return"));
+    }
+
+    #[test]
+    fn rejects_non_object_emit_payload() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  ctx.emit(msg.payload)
+                end
+            "#.to_string(),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let error = processor
+            .process(&message(json!([1, 2, 3])))
+            .expect_err("non-object emit payload");
+
+        assert_eq!(error.kind, crate::WorkerErrorKind::Processor);
+        assert!(error.message.contains("ctx.emit payload must be a JSON object"));
     }
 
     fn message(payload: ExtensionValue) -> Message {

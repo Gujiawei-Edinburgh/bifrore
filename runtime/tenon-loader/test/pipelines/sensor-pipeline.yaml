@@ -56,30 +56,27 @@ spec:
     function on_message(ctx, msg)
       local payload = msg.payload
 
-      if payload.temp == nil or payload.temp <= 30 then
-        return
+      if payload.temp ~= nil and payload.temp > 30 then
+        local batch = ctx.memory.get("batch") or {}
+        batch[#batch + 1] = {
+          source = msg.source.name,
+          topic = msg.topic.raw,
+          device = msg.topic.levels[2],
+          temp = payload.temp,
+          hum = payload.hum,
+          qos = msg.metadata.qos
+        }
+
+        if #batch < 100 then
+          ctx.memory.set("batch", batch)
+        else
+          ctx.emit({
+            count = #batch,
+            items = batch
+          })
+          ctx.memory.delete("batch")
+        end
       end
-
-      local batch = ctx.memory:get("batch") or {}
-      batch[#batch + 1] = {
-        source = msg.source.name,
-        topic = msg.topic.raw,
-        device = msg.topic[2],
-        temp = payload.temp,
-        hum = payload.hum,
-        qos = msg.metadata.qos
-      }
-
-      if #batch < 100 then
-        ctx.memory:set("batch", batch)
-        return
-      end
-
-      ctx.emit({
-        count = #batch,
-        items = batch
-      })
-      ctx.memory:delete("batch")
     end
 ---
 apiVersion: tenon.apache.org/v1alpha1

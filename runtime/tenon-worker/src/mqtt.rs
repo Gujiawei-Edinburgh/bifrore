@@ -38,7 +38,7 @@ impl IncomingDelivery {
     pub fn ack(self) {
         if let Some(ack) = self.ack {
             if let Err(error) = ack.client.try_ack(&ack.publish) {
-                eprintln!("failed to send MQTT ack after process: {error}");
+                log::warn!("failed to send MQTT ack after process: {error}");
             }
         }
     }
@@ -238,7 +238,7 @@ async fn run_event_loop(
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        eprintln!("MQTT event loop error: {error}");
+                        log::error!("MQTT event loop error: {error}");
                         break;
                     }
                 }

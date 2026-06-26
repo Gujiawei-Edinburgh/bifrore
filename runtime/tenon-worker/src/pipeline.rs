@@ -1,7 +1,8 @@
 use crate::mqtt::{start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle};
 use crate::processor::{processor_from_plan, Processor};
-use crate::{WorkerError, WorkerResult};
+use crate::{WorkerError, WorkerMetrics, WorkerResult};
 use flume::{Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use tenon_extension::{Context, SourceContext};
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, MqttSourcePlan, ResourceId};
@@ -33,6 +34,7 @@ pub struct ActivePipeline {
     intake_tx: Sender<IncomingDelivery>,
     process_tx: Sender<ProcessCommand>,
     process_thread: Option<JoinHandle<()>>,
+    metrics: Arc<WorkerMetrics>,
 }
 
 impl ActivePipeline {
@@ -50,10 +52,16 @@ impl ActivePipeline {
             pipeline_id.version.clone(),
         ));
         let processor = processor_from_plan(plan.process.clone(), context)?;
+        let metrics = Arc::new(WorkerMetrics::default());
         let sources = plan.sources.clone();
         let (intake_tx, intake_rx) = flume::bounded(config.intake_queue_capacity.max(1));
         let (process_tx, process_rx) = flume::bounded(1);
-        let process_thread = Some(start_process_loop(intake_rx, process_rx, processor));
+        let process_thread = Some(start_process_loop(
+            intake_rx,
+            process_rx,
+            processor,
+            Arc::clone(&metrics),
+        ));
         let mut mqtt_handles = Vec::with_capacity(sources.len());
 
         for (source_index, source) in sources.into_iter().enumerate() {
@@ -69,7 +77,7 @@ impl ActivePipeline {
             );
             let handle = start_mqtt(adapter_config, std::sync::Arc::new(move |delivery| {
                 if handler_tx.send(delivery).is_err() {
-                    eprintln!("worker intake queue is closed; dropping MQTT delivery");
+                    log::error!("worker intake queue is closed; dropping MQTT delivery");
                 }
             }))?;
             mqtt_handles.push(handle);
@@ -81,6 +89,7 @@ impl ActivePipeline {
             intake_tx,
             process_tx,
             process_thread,
+            metrics,
         })
     }
 
@@ -129,6 +138,7 @@ fn start_process_loop(
     intake_rx: Receiver<IncomingDelivery>,
     process_rx: Receiver<ProcessCommand>,
     mut processor: Box<dyn Processor>,
+    metrics: Arc<WorkerMetrics>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         loop {
@@ -136,7 +146,7 @@ fn start_process_loop(
                 processor = handle_process_command(processor, command);
             }
             match intake_rx.recv() {
-                Ok(delivery) => process_delivery(&mut *processor, delivery),
+                Ok(delivery) => process_delivery(&mut *processor, delivery, &metrics),
                 Err(_) => break,
             }
         }
@@ -162,9 +172,27 @@ fn replace_processor(
     processor_from_plan(Some(process), context).expect("process plan exists")
 }
 
-fn process_delivery(processor: &mut dyn Processor, delivery: IncomingDelivery) {
-    if let Err(error) = processor.process(&delivery.message) {
-        eprintln!("failed to process message: {error}");
+fn process_delivery(
+    processor: &mut dyn Processor,
+    delivery: IncomingDelivery,
+    metrics: &WorkerMetrics,
+) {
+    let topic = delivery.message.topic.raw.clone();
+    let packet_id = delivery.message.metadata.pkid;
+    match processor.process(&delivery.message) {
+        Ok(outcome) => {
+            metrics.record_processed_message();
+            metrics.record_emitted_records(outcome.emits.len());
+        }
+        Err(error) => {
+            log::error!(
+                "dropping message after processor error packet_id={} topic={} error={}",
+                packet_id,
+                topic,
+                error
+            );
+            metrics.record_processor_error();
+        }
     }
     delivery.ack();
 }
@@ -218,6 +246,7 @@ mod tests {
             intake_tx: flume::bounded(1).0,
             process_tx: flume::bounded(1).0,
             process_thread: None,
+            metrics: Arc::new(WorkerMetrics::default()),
         };
         let mut target = plan;
         target.sources[0].client_count = 2;

@@ -1,8 +1,10 @@
+mod metrics;
 mod mqtt;
 mod pipeline;
 mod processor;
 mod worker_service;
 
+pub use metrics::{WorkerMetrics, WorkerMetricsSnapshot};
 pub use pipeline::{ActivePipeline, WorkerConfig};
 pub use processor::{LuaProcessor, Processor};
 pub use worker_service::WorkerService;

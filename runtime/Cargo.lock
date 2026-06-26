@@ -935,6 +935,7 @@ name = "tenon-worker"
 version = "0.1.0"
 dependencies = [
  "flume",
+ "log",
  "mlua",
  "prost",
  "rumqttc",

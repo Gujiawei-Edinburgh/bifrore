@@ -43,7 +43,7 @@ impl Default for BatchBudget {
             max_records: 64,
             max_record_bytes: 256 * 1024,
             max_batch_bytes: 256 * 1024,
-            max_batch_wait: Duration::from_millis(1),
+            max_batch_wait: Duration::ZERO,
         }
     }
 }
@@ -203,24 +203,7 @@ fn start_egress_drain_loop(
                 }
             }
 
-            let deadline = Instant::now() + budget.max_batch_wait;
-            while !builder.is_full() {
-                let now = Instant::now();
-                if now >= deadline {
-                    break;
-                }
-                let remaining = deadline.saturating_duration_since(now);
-                let Ok(record) = receiver.recv_timeout(remaining) else {
-                    break;
-                };
-                match builder.try_push(record) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        handle_batch_push_error(error, &metrics, &mut pending);
-                        break;
-                    }
-                }
-            }
+            fill_batch(&receiver, &metrics, &budget, &mut builder, &mut pending);
 
             if !builder.is_empty() {
                 let frame = builder.build_frame();
@@ -229,6 +212,67 @@ fn start_egress_drain_loop(
             }
         }
     })
+}
+
+fn fill_batch(
+    receiver: &Receiver<EmitRecord>,
+    metrics: &WorkerMetrics,
+    budget: &BatchBudget,
+    builder: &mut BatchBuilder,
+    pending: &mut Option<EmitRecord>,
+) {
+    if budget.max_batch_wait.is_zero() {
+        fill_batch_without_wait(receiver, metrics, builder, pending);
+    } else {
+        fill_batch_until_deadline(receiver, metrics, budget, builder, pending);
+    }
+}
+
+fn fill_batch_without_wait(
+    receiver: &Receiver<EmitRecord>,
+    metrics: &WorkerMetrics,
+    builder: &mut BatchBuilder,
+    pending: &mut Option<EmitRecord>,
+) {
+    while !builder.is_full() {
+        let Ok(record) = receiver.try_recv() else {
+            break;
+        };
+        match builder.try_push(record) {
+            Ok(()) => {}
+            Err(error) => {
+                handle_batch_push_error(error, metrics, pending);
+                break;
+            }
+        }
+    }
+}
+
+fn fill_batch_until_deadline(
+    receiver: &Receiver<EmitRecord>,
+    metrics: &WorkerMetrics,
+    budget: &BatchBudget,
+    builder: &mut BatchBuilder,
+    pending: &mut Option<EmitRecord>,
+) {
+    let deadline = Instant::now() + budget.max_batch_wait;
+    while !builder.is_full() {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let Ok(record) = receiver.recv_timeout(remaining) else {
+            break;
+        };
+        match builder.try_push(record) {
+            Ok(()) => {}
+            Err(error) => {
+                handle_batch_push_error(error, metrics, pending);
+                break;
+            }
+        }
+    }
 }
 
 fn handle_batch_push_error(
@@ -375,6 +419,32 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn zero_wait_fill_drains_only_available_records() {
+        let (sender, receiver) = flume::bounded(8);
+        sender
+            .send(EmitRecord::new(json!({"index": 1})))
+            .expect("first send");
+        sender
+            .send(EmitRecord::new(json!({"index": 2})))
+            .expect("second send");
+        let mut builder = BatchBuilder::new(BatchBudget::default());
+        builder
+            .try_push(EmitRecord::new(json!({"index": 0})))
+            .expect("seed record");
+        let mut pending = None;
+        let metrics = WorkerMetrics::default();
+
+        fill_batch(&receiver, &metrics, &BatchBudget::default(), &mut builder, &mut pending);
+
+        let records = read_batch_frame(&mut Cursor::new(builder.build_frame())).expect("frame");
+        assert_eq!(
+            records,
+            vec![json!({"index": 0}), json!({"index": 1}), json!({"index": 2})]
+        );
+        assert!(pending.is_none());
     }
 
     #[test]

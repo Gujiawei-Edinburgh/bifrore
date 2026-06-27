@@ -1,10 +1,14 @@
 use crate::{WorkerError, WorkerMetrics, WorkerResult};
 use flume::{Receiver, Sender, TrySendError};
+use mio::net::{UnixListener, UnixStream};
+use mio::{Events, Interest, Poll, Token};
 use prost::Message as ProstMessage;
 #[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
-use std::io::{self, Read};
+use std::io::Read;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -17,6 +21,8 @@ use tenon_message::plan::{DeliveryMode, EgressPlan};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressConfig {
     pub queue_capacity: usize,
+    pub socket_path: PathBuf,
+    pub send_timeout: Duration,
     pub batch_budget: BatchBudget,
 }
 
@@ -24,9 +30,15 @@ impl Default for EgressConfig {
     fn default() -> Self {
         Self {
             queue_capacity: 4096,
+            socket_path: default_socket_path(),
+            send_timeout: Duration::from_millis(5),
             batch_budget: BatchBudget::default(),
         }
     }
+}
+
+fn default_socket_path() -> PathBuf {
+    std::env::temp_dir().join(format!("tenon-worker-egress-{}.sock", std::process::id()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +68,7 @@ pub struct Egress {
 pub struct EgressRuntime {
     egress: Egress,
     drain_thread: Option<JoinHandle<()>>,
+    socket_path: PathBuf,
 }
 
 impl EgressRuntime {
@@ -73,16 +86,21 @@ impl EgressRuntime {
                 return Err(WorkerError::pipeline("egress delivery mode is unspecified"));
             }
         }
+        let listener = bind_egress_listener(&config.socket_path)?;
 
         let (sender, receiver) = flume::bounded(config.queue_capacity.max(1));
+        let socket_path = config.socket_path.clone();
         let drain_thread = Some(start_egress_drain_loop(
             receiver,
+            listener,
             metrics,
             config.batch_budget,
+            config.send_timeout,
         ));
         Ok(Self {
             egress: Egress { sender },
             drain_thread,
+            socket_path,
         })
     }
 
@@ -97,6 +115,7 @@ impl EgressRuntime {
                 .join()
                 .map_err(|_| WorkerError::pipeline("egress drain thread panicked"))?;
         }
+        let _ = std::fs::remove_file(&self.socket_path);
         Ok(())
     }
 }
@@ -185,12 +204,23 @@ enum BatchPushError {
 
 fn start_egress_drain_loop(
     receiver: Receiver<EmitRecord>,
+    listener: UnixListener,
     metrics: Arc<WorkerMetrics>,
     budget: BatchBudget,
+    send_timeout: Duration,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let mut transport = match EgressTransport::new(listener) {
+            Ok(transport) => transport,
+            Err(error) => {
+                log::error!("egress transport failed to start: {error}");
+                drain_and_drop(receiver, &metrics);
+                return;
+            }
+        };
         let mut pending = None;
         loop {
+            transport.accept_pending_consumers();
             let Some(first) = pending.take().or_else(|| receiver.recv().ok()) else {
                 break;
             };
@@ -207,11 +237,208 @@ fn start_egress_drain_loop(
 
             if !builder.is_empty() {
                 let frame = builder.build_frame();
-                drop(frame);
-                metrics.record_egress_delivered_records(builder.records.len());
+                let record_count = builder.records.len();
+                match transport.send_frame(&frame, send_timeout) {
+                    SendFrameResult::Sent => {
+                        metrics.record_egress_delivered_records(record_count);
+                    }
+                    SendFrameResult::Dropped => {
+                        metrics.record_egress_dropped_records(record_count);
+                    }
+                }
             }
         }
     })
+}
+
+fn bind_egress_listener(socket_path: &Path) -> WorkerResult<UnixListener> {
+    if socket_path.exists() {
+        std::fs::remove_file(socket_path).map_err(|error| {
+            WorkerError::pipeline(format!(
+                "failed to remove stale egress socket {}: {error}",
+                socket_path.display()
+            ))
+        })?;
+    }
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            WorkerError::pipeline(format!(
+                "failed to create egress socket directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    UnixListener::bind(socket_path).map_err(|error| {
+        WorkerError::pipeline(format!(
+            "failed to bind egress socket {}: {error}",
+            socket_path.display()
+        ))
+    })
+}
+
+fn drain_and_drop(receiver: Receiver<EmitRecord>, metrics: &WorkerMetrics) {
+    while receiver.recv().is_ok() {
+        metrics.record_egress_dropped_record();
+    }
+}
+
+const LISTENER: Token = Token(0);
+const CONSUMER: Token = Token(1);
+
+struct EgressTransport {
+    listener: UnixListener,
+    poll: Poll,
+    events: Events,
+    consumer: Option<UnixStream>,
+}
+
+impl EgressTransport {
+    fn new(mut listener: UnixListener) -> io::Result<Self> {
+        let poll = Poll::new()?;
+        poll.registry()
+            .register(&mut listener, LISTENER, Interest::READABLE)?;
+        Ok(Self {
+            listener,
+            poll,
+            events: Events::with_capacity(8),
+            consumer: None,
+        })
+    }
+
+    fn accept_pending_consumers(&mut self) {
+        loop {
+            match self.listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    if self.consumer.is_some() {
+                        log::warn!("rejecting egress consumer because one is already connected");
+                        continue;
+                    }
+                    if let Err(error) = self.poll.registry().register(
+                        &mut stream,
+                        CONSUMER,
+                        Interest::WRITABLE,
+                    ) {
+                        log::error!("rejecting egress consumer because registration failed: {error}");
+                        continue;
+                    }
+                    self.consumer = Some(stream);
+                    log::info!("egress consumer connected");
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => {
+                    log::error!("failed to accept egress consumer: {error}");
+                    break;
+                }
+            }
+        }
+    }
+
+    fn send_frame(&mut self, frame: &[u8], timeout: Duration) -> SendFrameResult {
+        self.accept_pending_consumers();
+        let Some(mut stream) = self.consumer.take() else {
+            log::warn!("dropping egress batch because no consumer is connected");
+            return SendFrameResult::Dropped;
+        };
+
+        let result = write_frame(&mut stream, &mut self.poll, &mut self.events, frame, timeout);
+        match result {
+            WriteFrameResult::Complete => {
+                self.consumer = Some(stream);
+                SendFrameResult::Sent
+            }
+            WriteFrameResult::NoProgressTimeout => {
+                self.consumer = Some(stream);
+                log::warn!("dropping egress batch because consumer is not writable");
+                SendFrameResult::Dropped
+            }
+            WriteFrameResult::PartialFailure | WriteFrameResult::Disconnected => {
+                log::warn!("closing egress consumer after incomplete frame write");
+                SendFrameResult::Dropped
+            }
+        }
+    }
+}
+
+enum SendFrameResult {
+    Sent,
+    Dropped,
+}
+
+enum WriteFrameResult {
+    Complete,
+    NoProgressTimeout,
+    PartialFailure,
+    Disconnected,
+}
+
+fn write_frame(
+    stream: &mut UnixStream,
+    poll: &mut Poll,
+    events: &mut Events,
+    frame: &[u8],
+    timeout: Duration,
+) -> WriteFrameResult {
+    let deadline = Instant::now() + timeout;
+    let mut written = 0;
+    loop {
+        match stream.write(&frame[written..]) {
+            Ok(0) => {
+                return if written == 0 {
+                    WriteFrameResult::Disconnected
+                } else {
+                    WriteFrameResult::PartialFailure
+                };
+            }
+            Ok(len) => {
+                written += len;
+                if written == frame.len() {
+                    return WriteFrameResult::Complete;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return if written == 0 {
+                        WriteFrameResult::NoProgressTimeout
+                    } else {
+                        WriteFrameResult::PartialFailure
+                    };
+                }
+                let wait = deadline.saturating_duration_since(now);
+                match poll.poll(events, Some(wait)) {
+                    Ok(()) => {
+                        if !events.iter().any(|event| {
+                            event.token() == CONSUMER && event.is_writable()
+                        }) {
+                            let now = Instant::now();
+                            if now >= deadline {
+                                return if written == 0 {
+                                    WriteFrameResult::NoProgressTimeout
+                                } else {
+                                    WriteFrameResult::PartialFailure
+                                };
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(_) => {
+                        return if written == 0 {
+                            WriteFrameResult::Disconnected
+                        } else {
+                            WriteFrameResult::PartialFailure
+                        };
+                    }
+                }
+            }
+            Err(_) => {
+                return if written == 0 {
+                    WriteFrameResult::Disconnected
+                } else {
+                    WriteFrameResult::PartialFailure
+                };
+            }
+        }
+    }
 }
 
 fn fill_batch(
@@ -367,6 +594,18 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Cursor;
+    use std::os::unix::net::UnixStream as StdUnixStream;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SOCKET_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn test_socket_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "tenon-worker-egress-test-{}-{}-{name}.sock",
+            std::process::id(),
+            SOCKET_SEQ.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     #[test]
     fn batch_builder_encodes_user_readable_batch_frame() {
@@ -459,5 +698,76 @@ mod tests {
         let error = read_batch_frame(&mut Cursor::new(frame)).expect_err("partial frame");
 
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn uds_egress_delivers_batch_frame_to_consumer() {
+        let socket_path = test_socket_path("deliver");
+        let metrics = Arc::new(WorkerMetrics::default());
+        let runtime = EgressRuntime::start(
+            Some(EgressPlan {
+                delivery: DeliveryMode::Single as i32,
+            }),
+            EgressConfig {
+                socket_path: socket_path.clone(),
+                send_timeout: Duration::from_millis(100),
+                ..EgressConfig::default()
+            },
+            Arc::clone(&metrics),
+        )
+        .expect("egress runtime");
+        let mut consumer = StdUnixStream::connect(&socket_path).expect("connect egress socket");
+
+        runtime.egress().dispatch(
+            InvocationOutcome {
+                emits: vec![
+                    EmitRecord::new(json!({"index": 1})),
+                    EmitRecord::new(json!({"index": 2})),
+                ],
+            },
+            &metrics,
+        );
+
+        let records = read_batch_frame(&mut consumer).expect("batch frame");
+
+        assert_eq!(records, vec![json!({"index": 1}), json!({"index": 2})]);
+        runtime.stop().expect("stop egress");
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.egress_enqueued_records, 2);
+        assert_eq!(snapshot.egress_delivered_records, 2);
+        assert_eq!(snapshot.egress_dropped_records, 0);
+        assert!(!socket_path.exists());
+    }
+
+    #[test]
+    fn uds_egress_drops_batch_without_consumer() {
+        let socket_path = test_socket_path("drop");
+        let metrics = Arc::new(WorkerMetrics::default());
+        let runtime = EgressRuntime::start(
+            Some(EgressPlan {
+                delivery: DeliveryMode::Single as i32,
+            }),
+            EgressConfig {
+                socket_path: socket_path.clone(),
+                send_timeout: Duration::from_millis(1),
+                ..EgressConfig::default()
+            },
+            Arc::clone(&metrics),
+        )
+        .expect("egress runtime");
+
+        runtime.egress().dispatch(
+            InvocationOutcome {
+                emits: vec![EmitRecord::new(json!({"index": 1}))],
+            },
+            &metrics,
+        );
+
+        runtime.stop().expect("stop egress");
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.egress_enqueued_records, 1);
+        assert_eq!(snapshot.egress_delivered_records, 0);
+        assert_eq!(snapshot.egress_dropped_records, 1);
+        assert!(!socket_path.exists());
     }
 }

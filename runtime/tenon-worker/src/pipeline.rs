@@ -3,8 +3,10 @@ use crate::mqtt::{start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHa
 use crate::processor::{processor_from_plan, Processor};
 use crate::{WorkerError, WorkerMetrics, WorkerResult};
 use flume::{Receiver, Sender};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 use tenon_extension::{Context, SourceContext};
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, MqttSourcePlan, ResourceId};
 
@@ -16,6 +18,8 @@ pub struct WorkerConfig {
     pub mqtt_session_expiry_interval: u32,
     pub mqtt_keep_alive_secs: u16,
     pub egress_queue_capacity: usize,
+    pub egress_socket_path: Option<PathBuf>,
+    pub egress_send_timeout: Duration,
 }
 
 impl Default for WorkerConfig {
@@ -27,6 +31,8 @@ impl Default for WorkerConfig {
             mqtt_session_expiry_interval: 3600,
             mqtt_keep_alive_secs: 30,
             egress_queue_capacity: 4096,
+            egress_socket_path: None,
+            egress_send_timeout: Duration::from_millis(5),
         }
     }
 }
@@ -61,6 +67,8 @@ impl ActivePipeline {
             plan.egress.clone(),
             EgressConfig {
                 queue_capacity: config.egress_queue_capacity,
+                socket_path: config.egress_socket_path.clone().unwrap_or_else(default_egress_socket_path),
+                send_timeout: config.egress_send_timeout,
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
@@ -150,6 +158,10 @@ impl ActivePipeline {
         }
         Ok(())
     }
+}
+
+fn default_egress_socket_path() -> PathBuf {
+    std::env::temp_dir().join(format!("tenon-worker-egress-{}.sock", std::process::id()))
 }
 
 enum ProcessCommand {
@@ -246,6 +258,7 @@ fn mqtt_adapter_config(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tenon_extension::{
         Context, EmitRecord, InvocationOutcome, Message, MqttMetadata, SourceContext, Topic,
     };
@@ -253,6 +266,8 @@ mod tests {
         DeliveryMode, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSubscriptionPlan,
         PayloadDecodePlan,
     };
+
+    static SOCKET_SEQ: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn rejects_pipeline_without_id() {
@@ -368,6 +383,11 @@ mod tests {
             }),
             EgressConfig {
                 queue_capacity: capacity,
+                socket_path: PathBuf::from("/private/tmp").join(format!(
+                    "tenon-worker-pipeline-test-{}-{}.sock",
+                    std::process::id(),
+                    SOCKET_SEQ.fetch_add(1, Ordering::Relaxed)
+                )),
                 ..EgressConfig::default()
             },
             Arc::new(WorkerMetrics::default()),

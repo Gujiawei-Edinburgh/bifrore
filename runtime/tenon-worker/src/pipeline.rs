@@ -61,6 +61,7 @@ impl ActivePipeline {
             plan.egress.clone(),
             EgressConfig {
                 queue_capacity: config.egress_queue_capacity,
+                ..EgressConfig::default()
             },
             Arc::clone(&metrics),
         )?;
@@ -367,6 +368,7 @@ mod tests {
             }),
             EgressConfig {
                 queue_capacity: capacity,
+                ..EgressConfig::default()
             },
             Arc::new(WorkerMetrics::default()),
         )

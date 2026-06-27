@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package tenon.egress.v1;
+
+message EgressBatchFrame {
+  uint32 version = 1;
+  repeated EgressRecord records = 2;
+  bytes payload_blob = 3;
+}
+
+message EgressRecord {
+  uint32 offset = 1;
+  uint32 length = 2;
+}

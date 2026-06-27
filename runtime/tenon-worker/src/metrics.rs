@@ -34,6 +34,11 @@ impl WorkerMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_egress_delivered_records(&self, count: usize) {
+        self.egress_delivered_records
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
     pub fn record_egress_dropped_record(&self) {
         self.egress_dropped_records
             .fetch_add(1, Ordering::Relaxed);

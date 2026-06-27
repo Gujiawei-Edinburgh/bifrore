@@ -42,6 +42,11 @@ impl IncomingDelivery {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn without_ack(message: Message) -> Self {
+        Self { message, ack: None }
+    }
 }
 
 type DeliveryHandler = Arc<dyn Fn(IncomingDelivery) + Send + Sync + 'static>;

@@ -8,6 +8,7 @@ use serde_json::Value;
 #[cfg(test)]
 use std::io::Read;
 use std::io::{self, Write};
+use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -16,7 +17,7 @@ use tenon_extension::{EmitRecord, InvocationOutcome};
 #[cfg(test)]
 use tenon_extension::ExtensionValue;
 use tenon_message::egress::v1::{EgressBatchFrame, EgressRecord};
-use tenon_message::plan::{DeliveryMode, EgressPlan};
+use tenon_message::plan::EgressPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressConfig {
@@ -77,15 +78,7 @@ impl EgressRuntime {
         config: EgressConfig,
         metrics: Arc<WorkerMetrics>,
     ) -> WorkerResult<Self> {
-        let plan = plan.ok_or_else(|| WorkerError::pipeline("egress plan is missing"))?;
-        let delivery = DeliveryMode::try_from(plan.delivery)
-            .map_err(|_| WorkerError::pipeline("invalid egress delivery mode"))?;
-        match delivery {
-            DeliveryMode::Single | DeliveryMode::Broadcast => {}
-            DeliveryMode::Unspecified => {
-                return Err(WorkerError::pipeline("egress delivery mode is unspecified"));
-            }
-        }
+        let _plan = plan.ok_or_else(|| WorkerError::pipeline("egress plan is missing"))?;
         let listener = bind_egress_listener(&config.socket_path)?;
 
         let (sender, receiver) = flume::bounded(config.queue_capacity.max(1));
@@ -221,8 +214,11 @@ fn start_egress_drain_loop(
         let mut pending = None;
         loop {
             transport.accept_pending_consumers();
-            let Some(first) = pending.take().or_else(|| receiver.recv().ok()) else {
-                break;
+            let Some(first) = pending.take().or_else(|| recv_first_record(&receiver, &mut transport)) else {
+                if receiver.is_disconnected() {
+                    break;
+                }
+                continue;
             };
             let mut builder = BatchBuilder::new(budget.clone());
             match builder.try_push(first) {
@@ -249,6 +245,23 @@ fn start_egress_drain_loop(
             }
         }
     })
+}
+
+const ACCEPT_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+fn recv_first_record(
+    receiver: &Receiver<EmitRecord>,
+    transport: &mut EgressTransport,
+) -> Option<EmitRecord> {
+    loop {
+        match receiver.recv_timeout(ACCEPT_IDLE_POLL_INTERVAL) {
+            Ok(record) => return Some(record),
+            Err(flume::RecvTimeoutError::Timeout) => {
+                transport.accept_pending_consumers();
+            }
+            Err(flume::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 fn bind_egress_listener(socket_path: &Path) -> WorkerResult<UnixListener> {
@@ -311,6 +324,7 @@ impl EgressTransport {
                 Ok((mut stream, _addr)) => {
                     if self.consumer.is_some() {
                         log::warn!("rejecting egress consumer because one is already connected");
+                        let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
                     if let Err(error) = self.poll.registry().register(
@@ -319,6 +333,7 @@ impl EgressTransport {
                         Interest::WRITABLE,
                     ) {
                         log::error!("rejecting egress consumer because registration failed: {error}");
+                        let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
                     self.consumer = Some(stream);
@@ -705,9 +720,7 @@ mod tests {
         let socket_path = test_socket_path("deliver");
         let metrics = Arc::new(WorkerMetrics::default());
         let runtime = EgressRuntime::start(
-            Some(EgressPlan {
-                delivery: DeliveryMode::Single as i32,
-            }),
+            Some(EgressPlan {}),
             EgressConfig {
                 socket_path: socket_path.clone(),
                 send_timeout: Duration::from_millis(100),
@@ -740,13 +753,40 @@ mod tests {
     }
 
     #[test]
+    fn uds_egress_rejects_extra_consumer_without_waiting_for_traffic() {
+        let socket_path = test_socket_path("reject");
+        let metrics = Arc::new(WorkerMetrics::default());
+        let runtime = EgressRuntime::start(
+            Some(EgressPlan {}),
+            EgressConfig {
+                socket_path: socket_path.clone(),
+                send_timeout: Duration::from_millis(100),
+                ..EgressConfig::default()
+            },
+            Arc::clone(&metrics),
+        )
+        .expect("egress runtime");
+        let _first = StdUnixStream::connect(&socket_path).expect("first consumer");
+        std::thread::sleep(ACCEPT_IDLE_POLL_INTERVAL * 2);
+        let mut second = StdUnixStream::connect(&socket_path).expect("second consumer");
+        second
+            .set_read_timeout(Some(ACCEPT_IDLE_POLL_INTERVAL * 4))
+            .expect("read timeout");
+
+        let mut header = [0u8; 4];
+        let result = second.read_exact(&mut header);
+
+        assert!(result.is_err());
+        runtime.stop().expect("stop egress");
+        assert!(!socket_path.exists());
+    }
+
+    #[test]
     fn uds_egress_drops_batch_without_consumer() {
         let socket_path = test_socket_path("drop");
         let metrics = Arc::new(WorkerMetrics::default());
         let runtime = EgressRuntime::start(
-            Some(EgressPlan {
-                delivery: DeliveryMode::Single as i32,
-            }),
+            Some(EgressPlan {}),
             EgressConfig {
                 socket_path: socket_path.clone(),
                 send_timeout: Duration::from_millis(1),

@@ -10,9 +10,9 @@ use spec::{
 };
 
 use crate::{
-    auth_plan, AuthPlan, DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError,
-    LoaderErrorKind, MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
-    PayloadDecodePlan, ProcessPlan, ResourceId, ScriptModule, ScriptRuntime, UsernamePasswordAuth,
+    auth_plan, AuthPlan, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError, LoaderErrorKind,
+    MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan,
+    ResourceId, ScriptModule, ScriptRuntime, UsernamePasswordAuth,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";
@@ -81,6 +81,7 @@ pub(crate) struct ResourceDocument {
     pub(crate) api_version: String,
     pub(crate) kind: ManifestResourceKind,
     pub(crate) metadata: ResourceMetadata,
+    #[serde(default = "empty_spec")]
     pub(crate) spec: serde_yaml::Value,
 }
 
@@ -107,6 +108,10 @@ impl ResourceDocument {
     fn display_name(&self) -> String {
         format!("{} {}/{}", self.kind, self.metadata.name, self.metadata.version)
     }
+}
+
+fn empty_spec() -> serde_yaml::Value {
+    serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -263,10 +268,8 @@ impl ResourceRegistry {
             .egresses
             .get(&ResourceKey::from_ref(ManifestResourceKind::Egress, reference))
             .ok_or_else(|| reference_error(format!("missing Egress {}", reference.display())))?;
-        let spec = parse_spec::<EgressSpec>(resource)?;
-        Ok(EgressPlan {
-            delivery: i32::from(DeliveryMode::from(spec.delivery)),
-        })
+        let _spec = parse_spec::<EgressSpec>(resource)?;
+        Ok(EgressPlan {})
     }
 }
 

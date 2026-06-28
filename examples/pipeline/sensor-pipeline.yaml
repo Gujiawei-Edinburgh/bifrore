@@ -86,8 +86,6 @@ apiVersion: tenon.apache.org/v1alpha1
 kind: Egress
 metadata:
   name: sensor-batches
-spec:
-  delivery: single
 ---
 apiVersion: tenon.apache.org/v1alpha1
 kind: Pipeline

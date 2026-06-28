@@ -121,15 +121,7 @@ enum ScriptRuntime {
   SCRIPT_RUNTIME_LUA = 1;
 }
 
-message EgressPlan {
-  DeliveryMode delivery = 1;
-}
-
-enum DeliveryMode {
-  DELIVERY_MODE_UNSPECIFIED = 0;
-  DELIVERY_MODE_SINGLE = 1;
-  DELIVERY_MODE_BROADCAST = 2;
-}
+message EgressPlan {}
 
 message StartWorkerRequest {
   DeploymentPlan plan = 1;

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
-use crate::{lua, DeliveryMode, LoaderError, LoaderErrorKind};
+use crate::{lua, LoaderError, LoaderErrorKind};
 
 use super::ManifestResourceKind;
 
@@ -119,31 +119,12 @@ pub(crate) enum ScriptRuntimeSpec {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct EgressSpec {
-    pub(crate) delivery: DeliveryModeSpec,
-}
+#[serde(deny_unknown_fields)]
+pub(crate) struct EgressSpec {}
 
 impl EgressSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        match self.delivery {
-            DeliveryModeSpec::Single | DeliveryModeSpec::Broadcast => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum DeliveryModeSpec {
-    Single,
-    Broadcast,
-}
-
-impl From<DeliveryModeSpec> for DeliveryMode {
-    fn from(value: DeliveryModeSpec) -> Self {
-        match value {
-            DeliveryModeSpec::Single => DeliveryMode::Single,
-            DeliveryModeSpec::Broadcast => DeliveryMode::Broadcast,
-        }
+        Ok(())
     }
 }
 

@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
     use tenon_message::plan::{
-        auth_plan, DeliveryMode, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
+        auth_plan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan, ScriptRuntime,
     };
 
@@ -299,9 +299,7 @@ mod tests {
                 runtime: ScriptRuntime::Lua as i32,
                 source: "function on_message(ctx, msg) end".to_string(),
             }),
-            egress: Some(EgressPlan {
-                delivery: DeliveryMode::Single as i32,
-            }),
+            egress: Some(EgressPlan {}),
         }
     }
 }

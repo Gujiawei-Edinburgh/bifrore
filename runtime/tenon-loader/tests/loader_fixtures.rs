@@ -1,4 +1,4 @@
-use tenon_loader::{DeliveryMode, Loader, LoaderErrorKind};
+use tenon_loader::{Loader, LoaderErrorKind};
 
 fn fixture(path: &str) -> &'static str {
     match path {
@@ -13,9 +13,6 @@ fn fixture(path: &str) -> &'static str {
         }
         "pipelines/invalid/invalid-lua-api.yaml" => {
             include_str!("../test/pipelines/invalid/invalid-lua-api.yaml")
-        }
-        "pipelines/invalid/unsupported-delivery.yaml" => {
-            include_str!("../test/pipelines/invalid/unsupported-delivery.yaml")
         }
         _ => panic!("unknown fixture: {path}"),
     }
@@ -40,8 +37,7 @@ fn loads_sensor_pipeline_fixture() {
     let process = plan.process.as_ref().expect("process plan");
     assert!(process.source.contains("function on_message"));
 
-    let egress = plan.egress.as_ref().expect("egress plan");
-    assert_eq!(DeliveryMode::try_from(egress.delivery), Ok(DeliveryMode::Single));
+    assert!(plan.egress.is_some());
 }
 
 #[test]
@@ -72,14 +68,4 @@ fn rejects_invalid_lua_extension_api_usage() {
 
     assert_eq!(error.kind, LoaderErrorKind::ScriptValidation);
     assert!(error.message.contains("invalid msg field: device"));
-}
-
-#[test]
-fn rejects_unsupported_delivery_mode() {
-    let error = Loader
-        .load(fixture("pipelines/invalid/unsupported-delivery.yaml"))
-        .expect_err("unsupported delivery");
-
-    assert_eq!(error.kind, LoaderErrorKind::ResourceValidation);
-    assert!(error.message.contains("shared"));
 }

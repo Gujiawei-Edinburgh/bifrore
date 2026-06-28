@@ -263,8 +263,7 @@ mod tests {
         Context, EmitRecord, InvocationOutcome, Message, MqttMetadata, SourceContext, Topic,
     };
     use tenon_message::plan::{
-        DeliveryMode, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSubscriptionPlan,
-        PayloadDecodePlan,
+        EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSubscriptionPlan, PayloadDecodePlan,
     };
 
     static SOCKET_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -378,9 +377,7 @@ mod tests {
 
     fn egress_runtime(capacity: usize) -> EgressRuntime {
         EgressRuntime::start(
-            Some(EgressPlan {
-                delivery: DeliveryMode::Single as i32,
-            }),
+            Some(EgressPlan {}),
             EgressConfig {
                 queue_capacity: capacity,
                 socket_path: PathBuf::from("/private/tmp").join(format!(

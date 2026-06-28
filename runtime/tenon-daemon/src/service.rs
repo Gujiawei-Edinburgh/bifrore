@@ -99,7 +99,7 @@ mod tests {
     use crate::{InMemoryDaemonStore, NoopWorkerManager};
     use futures::executor::block_on;
     use tenon_message::plan::{
-        DeliveryMode, DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
+        DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ResourceId, ScriptRuntime,
     };
 
@@ -282,9 +282,7 @@ mod tests {
                 runtime: ScriptRuntime::Lua as i32,
                 source: process_source.to_string(),
             }),
-            egress: Some(EgressPlan {
-                delivery: DeliveryMode::Single as i32,
-            }),
+            egress: Some(EgressPlan {}),
         }
     }
 

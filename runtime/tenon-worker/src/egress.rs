@@ -1,4 +1,4 @@
-use crate::{WorkerError, WorkerMetrics, WorkerResult};
+use crate::{EgressDropReason, WorkerError, WorkerMetrics, WorkerResult};
 use flume::{Receiver, Sender, TrySendError};
 use mio::net::{UnixListener, UnixStream};
 use mio::{Events, Interest, Poll, Token};
@@ -150,11 +150,11 @@ impl Egress {
             match self.sender.try_send(record) {
                 Ok(()) => metrics.record_egress_enqueued_record(),
                 Err(TrySendError::Full(_)) => {
-                    metrics.record_egress_dropped_record();
+                    metrics.record_egress_dropped_record(EgressDropReason::QueueFull);
                     log::warn!("dropping emitted record because egress queue is full");
                 }
                 Err(TrySendError::Disconnected(_)) => {
-                    metrics.record_egress_dropped_record();
+                    metrics.record_egress_dropped_record(EgressDropReason::Stopped);
                     log::warn!("dropping emitted record because egress stage is stopped");
                 }
             }
@@ -259,8 +259,8 @@ fn start_egress_drain_loop(
                     SendFrameResult::Sent => {
                         metrics.record_egress_delivered_records(record_count);
                     }
-                    SendFrameResult::Dropped => {
-                        metrics.record_egress_dropped_records(record_count);
+                    SendFrameResult::Dropped(reason) => {
+                        metrics.record_egress_dropped_records(reason, record_count);
                     }
                 }
             }
@@ -295,7 +295,7 @@ fn bind_egress_listener(socket_path: &Path) -> WorkerResult<UnixListener> {
 
 fn drain_and_drop(receiver: Receiver<EmitRecord>, metrics: &WorkerMetrics) {
     while receiver.recv().is_ok() {
-        metrics.record_egress_dropped_record();
+        metrics.record_egress_dropped_record(EgressDropReason::Stopped);
     }
 }
 
@@ -449,7 +449,7 @@ impl EgressTransport {
         self.receive_consumer();
         let Some(mut stream) = self.consumer.take() else {
             log::warn!("dropping egress batch because no consumer is connected");
-            return SendFrameResult::Dropped;
+            return SendFrameResult::Dropped(EgressDropReason::NoConsumer);
         };
 
         let result = write_frame(&mut stream, &mut self.write_poll, &mut self.events, frame, timeout);
@@ -461,12 +461,12 @@ impl EgressTransport {
             WriteFrameResult::NoProgressTimeout => {
                 self.consumer = Some(stream);
                 log::warn!("dropping egress batch because consumer is not writable");
-                SendFrameResult::Dropped
+                SendFrameResult::Dropped(EgressDropReason::SlowConsumer)
             }
             WriteFrameResult::PartialFailure | WriteFrameResult::Disconnected => {
                 log::warn!("closing egress consumer after incomplete frame write");
                 self.clear_consumer(stream);
-                SendFrameResult::Dropped
+                SendFrameResult::Dropped(EgressDropReason::IncompleteFrame)
             }
         }
     }
@@ -474,7 +474,7 @@ impl EgressTransport {
 
 enum SendFrameResult {
     Sent,
-    Dropped,
+    Dropped(EgressDropReason),
 }
 
 enum WriteFrameResult {
@@ -622,14 +622,14 @@ fn handle_batch_push_error(
 ) {
     match error {
         BatchPushError::Oversized { len } => {
-            metrics.record_egress_dropped_record();
+            metrics.record_egress_dropped_record(EgressDropReason::Oversized);
             log::warn!("dropping oversized emitted record bytes={len}");
         }
         BatchPushError::WouldExceed(record) => {
             *pending = Some(record);
         }
         BatchPushError::Encode(error) => {
-            metrics.record_egress_dropped_record();
+            metrics.record_egress_dropped_record(EgressDropReason::EncodeError);
             log::warn!("dropping emitted record because JSON encoding failed: {error}");
         }
     }
@@ -847,6 +847,8 @@ mod tests {
         assert_eq!(snapshot.egress_enqueued_records, 2);
         assert_eq!(snapshot.egress_delivered_records, 2);
         assert_eq!(snapshot.egress_dropped_records, 0);
+        assert_eq!(snapshot.egress_dropped_no_consumer_records, 0);
+        assert_eq!(snapshot.egress_dropped_slow_consumer_records, 0);
         assert!(!socket_path.exists());
     }
 
@@ -920,6 +922,7 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.egress_delivered_records, 1);
         assert_eq!(snapshot.egress_dropped_records, 1);
+        assert_eq!(snapshot.egress_dropped_incomplete_frame_records, 1);
         assert!(!socket_path.exists());
     }
 
@@ -950,6 +953,78 @@ mod tests {
         assert_eq!(snapshot.egress_enqueued_records, 1);
         assert_eq!(snapshot.egress_delivered_records, 0);
         assert_eq!(snapshot.egress_dropped_records, 1);
+        assert_eq!(snapshot.egress_dropped_no_consumer_records, 1);
         assert!(!socket_path.exists());
+    }
+
+    #[test]
+    fn dispatch_records_queue_full_drop_reason() {
+        let (sender, _receiver) = flume::bounded(1);
+        let egress = Egress { sender };
+        let metrics = WorkerMetrics::default();
+
+        egress.dispatch(
+            InvocationOutcome {
+                emits: vec![
+                    EmitRecord::new(json!({"index": 1})),
+                    EmitRecord::new(json!({"index": 2})),
+                ],
+            },
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.egress_enqueued_records, 1);
+        assert_eq!(snapshot.egress_dropped_records, 1);
+        assert_eq!(snapshot.egress_dropped_queue_full_records, 1);
+    }
+
+    #[test]
+    fn slow_consumer_reports_slow_consumer_drop_reason() {
+        let (_reader, mut writer) = filled_socket_pair();
+        let poll = Poll::new().expect("poll");
+        poll.registry()
+            .register(&mut writer, CONSUMER, Interest::WRITABLE)
+            .expect("register writer");
+        let (_sender, receiver) = flume::unbounded();
+        let consumer_connected = Arc::new(AtomicBool::new(true));
+        let mut transport = EgressTransport {
+            consumer_receiver: receiver,
+            consumer_connected,
+            write_poll: poll,
+            events: Events::with_capacity(8),
+            consumer: Some(writer),
+        };
+        let metrics = WorkerMetrics::default();
+        let frame = encode_batch_frame(&[serde_json::to_vec(&json!({"index": 1})).unwrap()]);
+
+        match transport.send_frame(&frame, Duration::from_millis(1)) {
+            SendFrameResult::Dropped(reason) => {
+                metrics.record_egress_dropped_records(reason, 1);
+            }
+            SendFrameResult::Sent => panic!("expected slow consumer drop"),
+        }
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.egress_dropped_records, 1);
+        assert_eq!(snapshot.egress_dropped_slow_consumer_records, 1);
+    }
+
+    fn filled_socket_pair() -> (StdUnixStream, UnixStream) {
+        let (reader, mut writer) = StdUnixStream::pair().expect("socket pair");
+        writer.set_nonblocking(true).expect("nonblocking writer");
+        let chunk = vec![0u8; 64 * 1024];
+        let mut total = 0usize;
+        loop {
+            match writer.write(&chunk) {
+                Ok(len) => {
+                    total += len;
+                    assert!(total <= 64 * 1024 * 1024, "socket send buffer did not fill");
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("failed to fill socket send buffer: {error}"),
+            }
+        }
+        (reader, UnixStream::from_std(writer))
     }
 }

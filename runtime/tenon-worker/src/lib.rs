@@ -6,7 +6,7 @@ mod processor;
 mod worker_service;
 
 pub use egress::{Egress, EgressConfig, EgressRuntime};
-pub use metrics::{WorkerMetrics, WorkerMetricsSnapshot};
+pub use metrics::{EgressDropReason, WorkerMetrics, WorkerMetricsSnapshot};
 pub use pipeline::{ActivePipeline, WorkerConfig};
 pub use processor::{LuaProcessor, Processor};
 pub use worker_service::WorkerService;

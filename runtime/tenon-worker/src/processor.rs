@@ -20,6 +20,7 @@ pub trait Processor: Send + 'static {
 #[derive(Debug)]
 pub struct LuaProcessor {
     lua: Lua,
+    on_message: Function,
     context: Context,
     instruction_budget: Arc<AtomicU64>,
 }
@@ -32,12 +33,13 @@ impl LuaProcessor {
         lua.load(&process.source)
             .exec()
             .map_err(lua_error)?;
-        let _: Function = lua
+        let on_message = lua
             .globals()
             .get(PROCESS_ON_MESSAGE_FN)
             .map_err(lua_error)?;
         Ok(Self {
             lua,
+            on_message,
             context,
             instruction_budget,
         })
@@ -46,11 +48,6 @@ impl LuaProcessor {
 
 impl Processor for LuaProcessor {
     fn process(&mut self, message: &Message) -> WorkerResult<InvocationOutcome> {
-        let function: Function = self
-            .lua
-            .globals()
-            .get(PROCESS_ON_MESSAGE_FN)
-            .map_err(lua_error)?;
         let context = RefCell::new(&mut self.context);
         self.instruction_budget
             .store(DEFAULT_LUA_INSTRUCTION_BUDGET, Ordering::Relaxed);
@@ -58,7 +55,7 @@ impl Processor for LuaProcessor {
             .scope(|scope| {
                 let ctx = create_context_table(&self.lua, scope, &context)?;
                 let msg = create_message_table(&self.lua, message)?;
-                function.call::<Value>((ctx, msg))
+                self.on_message.call::<Value>((ctx, msg))
             })
             .and_then(validate_on_message_return)
             .map_err(lua_error)?;
@@ -68,9 +65,11 @@ impl Processor for LuaProcessor {
     fn into_context(self: Box<Self>) -> Context {
         let Self {
             lua,
+            on_message,
             context,
             instruction_budget: _,
         } = *self;
+        drop(on_message);
         drop(lua);
         context
     }

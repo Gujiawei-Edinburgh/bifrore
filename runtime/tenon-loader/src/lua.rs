@@ -159,9 +159,44 @@ enum StaticType {
     EmitFn,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StaticValue {
+    Unknown,
+    String(String),
+    Int(i64),
+}
+
+impl Default for StaticValue {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Binding {
+    ty: StaticType,
+    value: StaticValue,
+}
+
+impl Binding {
+    fn unknown() -> Self {
+        Self {
+            ty: StaticType::Unknown,
+            value: StaticValue::Unknown,
+        }
+    }
+
+    fn typed(ty: StaticType) -> Self {
+        Self {
+            ty,
+            value: StaticValue::Unknown,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TypeEnv {
-    variables: HashMap<String, StaticType>,
+    variables: HashMap<String, Binding>,
     process_function: bool,
 }
 
@@ -176,10 +211,10 @@ impl TypeEnv {
             .ok_or_else(|| "failed to inspect Lua extension function parameters".to_string())?;
         let mut variables = HashMap::new();
         if expected_arity >= 1 {
-            variables.insert(params[0].clone(), StaticType::Ctx);
+            variables.insert(params[0].clone(), Binding::typed(StaticType::Ctx));
         }
         if expected_arity >= 2 {
-            variables.insert(params[1].clone(), StaticType::Msg);
+            variables.insert(params[1].clone(), Binding::typed(StaticType::Msg));
         }
         Ok(Self {
             variables,
@@ -190,12 +225,19 @@ impl TypeEnv {
     fn get(&self, name: &str) -> StaticType {
         self.variables
             .get(name)
-            .copied()
+            .map(|binding| binding.ty)
             .unwrap_or(StaticType::Unknown)
     }
 
-    fn set(&mut self, name: String, ty: StaticType) {
-        self.variables.insert(name, ty);
+    fn value(&self, name: &str) -> StaticValue {
+        self.variables
+            .get(name)
+            .map(|binding| binding.value.clone())
+            .unwrap_or(StaticValue::Unknown)
+    }
+
+    fn set(&mut self, name: String, binding: Binding) {
+        self.variables.insert(name, binding);
     }
 
     fn contains(&self, name: &str) -> bool {
@@ -276,8 +318,8 @@ fn analyze_assignment(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Resul
         if !env.contains(&name) {
             return Err(format!("global assignment is not allowed: {name}"));
         }
-        let ty = infer_expr_type(value, source, env)?;
-        env.set(name, ty);
+        let binding = infer_expr_binding(value, source, env)?;
+        env.set(name, binding);
     }
     Ok(())
 }
@@ -310,13 +352,13 @@ fn analyze_variable_declaration(
 
     for (index, name) in names.into_iter().enumerate() {
         let name = name.utf8_text(source).unwrap_or_default().to_string();
-        let ty = values
+        let binding = values
             .get(index)
             .copied()
-            .map(|value| infer_expr_type(value, source, env))
+            .map(|value| infer_expr_binding(value, source, env))
             .transpose()?
-            .unwrap_or(StaticType::Unknown);
-        env.set(name, ty);
+            .unwrap_or_else(Binding::unknown);
+        env.set(name, binding);
     }
     Ok(())
 }
@@ -373,13 +415,66 @@ fn function_call_arg_nodes(node: Node<'_>) -> Vec<Node<'_>> {
 }
 
 fn infer_expr_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+    Ok(infer_expr_binding(node, source, env)?.ty)
+}
+
+fn infer_expr_binding(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<Binding, String> {
+    let value = infer_static_value(node, source, env);
     match node.kind() {
-        "identifier" | "variable_name" => Ok(env.get(node.utf8_text(source).unwrap_or_default())),
-        "dot_index_expression" => infer_dot_index_type(node, source, env),
-        "method_index_expression" => infer_method_index_type(node, source, env),
-        "bracket_index_expression" => infer_bracket_index_type(node, source, env),
-        _ => Ok(StaticType::Unknown),
+        "identifier" | "variable_name" => {
+            let name = node.utf8_text(source).unwrap_or_default();
+            Ok(Binding {
+                ty: env.get(name),
+                value: env.value(name),
+            })
+        }
+        "dot_index_expression" => Ok(Binding {
+            ty: infer_dot_index_type(node, source, env)?,
+            value,
+        }),
+        "method_index_expression" => Ok(Binding {
+            ty: infer_method_index_type(node, source, env)?,
+            value,
+        }),
+        "bracket_index_expression" => Ok(Binding {
+            ty: infer_bracket_index_type(node, source, env)?,
+            value,
+        }),
+        _ => Ok(Binding {
+            ty: StaticType::Unknown,
+            value,
+        }),
     }
+}
+
+fn infer_static_value(node: Node<'_>, source: &[u8], env: &TypeEnv) -> StaticValue {
+    match node.kind() {
+        "identifier" | "variable_name" => env.value(node.utf8_text(source).unwrap_or_default()),
+        "string" => string_literal_value(node, source)
+            .map(StaticValue::String)
+            .unwrap_or(StaticValue::Unknown),
+        "number" => node
+            .utf8_text(source)
+            .ok()
+            .and_then(|text| text.parse::<i64>().ok())
+            .map(StaticValue::Int)
+            .unwrap_or(StaticValue::Unknown),
+        _ => StaticValue::Unknown,
+    }
+}
+
+fn string_literal_value(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?.trim();
+    if text.len() < 2 {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    if !((bytes[0] == b'"' && bytes[text.len() - 1] == b'"')
+        || (bytes[0] == b'\'' && bytes[text.len() - 1] == b'\''))
+    {
+        return None;
+    }
+    Some(text[1..text.len() - 1].to_string())
 }
 
 fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
@@ -455,10 +550,26 @@ fn infer_bracket_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Res
     let Some(table) = node.child_by_field_name("table") else {
         return Ok(StaticType::Unknown);
     };
+    let _access = infer_bracket_access(node, source, env);
     match infer_expr_type(table, source, env)? {
         StaticType::Topic | StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
         StaticType::Unknown => Ok(StaticType::Unknown),
         known => Err(format!("invalid bracket access on {known:?}")),
+    }
+}
+
+fn infer_bracket_access(
+    node: Node<'_>,
+    source: &[u8],
+    env: &TypeEnv,
+) -> Option<StaticValue> {
+    let key = node
+        .child_by_field_name("field")
+        .or_else(|| node.child_by_field_name("index"))
+        .or_else(|| direct_named_children(node).into_iter().last())?;
+    match infer_static_value(key, source, env) {
+        StaticValue::Unknown => None,
+        value => Some(value),
     }
 }
 
@@ -650,6 +761,51 @@ end
             2,
         )
         .expect("valid Tenon extension usage");
+    }
+
+    #[test]
+    fn propagates_literal_constants_for_static_bracket_access() {
+        let source = r#"
+function on_message(ctx, msg)
+  local payload = msg.payload
+  local key = "temp"
+  local topic = msg.topic
+  local index = 2
+  local temp = payload[key]
+  local device = topic[index]
+  ctx.emit({ temp = temp, device = device })
+end
+"#;
+        let tree = parse(source).expect("tree");
+        let function = find_global_function(tree.root_node(), source.as_bytes(), PROCESS_ON_MESSAGE_FN)
+            .expect("function");
+        let mut env = TypeEnv::new(function, source.as_bytes(), 2, true).expect("env");
+        analyze_node(function, source.as_bytes(), &mut env).expect("analysis");
+
+        assert_eq!(env.value("key"), StaticValue::String("temp".to_string()));
+        assert_eq!(env.value("index"), StaticValue::Int(2));
+        assert_eq!(env.get("temp"), StaticType::JsonValue);
+        assert_eq!(env.get("device"), StaticType::JsonValue);
+    }
+
+    #[test]
+    fn keeps_runtime_dependent_bracket_access_dynamic() {
+        let source = r#"
+function on_message(ctx, msg)
+  local payload = msg.payload
+  local key = ctx.memory.get("field")
+  local temp = payload[key]
+  ctx.emit({ temp = temp })
+end
+"#;
+        let tree = parse(source).expect("tree");
+        let function = find_global_function(tree.root_node(), source.as_bytes(), PROCESS_ON_MESSAGE_FN)
+            .expect("function");
+        let mut env = TypeEnv::new(function, source.as_bytes(), 2, true).expect("env");
+        analyze_node(function, source.as_bytes(), &mut env).expect("analysis");
+
+        assert_eq!(env.value("key"), StaticValue::Unknown);
+        assert_eq!(env.get("temp"), StaticType::JsonValue);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
+use tenon_extension::AUTH_CREDENTIALS_FN;
 
 use crate::{lua, LoaderError, LoaderErrorKind};
 
@@ -140,7 +140,7 @@ impl ProcessSpec {
         match self.runtime {
             ScriptRuntimeSpec::Lua => {}
         }
-        validate_lua_function("Process.spec.source", &self.source, PROCESS_ON_MESSAGE_FN, 2)
+        require_non_empty("Process.spec.source", &self.source)
     }
 }
 

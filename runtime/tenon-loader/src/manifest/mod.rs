@@ -256,10 +256,16 @@ impl ResourceRegistry {
             .get(&ResourceKey::from_ref(ManifestResourceKind::Process, reference))
             .ok_or_else(|| reference_error(format!("missing Process {}", reference.display())))?;
         let spec = parse_spec::<ProcessSpec>(resource)?;
+        let access_plan = crate::lua::analyze_process_access_plan(&spec.source).map_err(|error| {
+            LoaderError::new(
+                LoaderErrorKind::ScriptValidation,
+                format!("invalid Lua process script in {}: {error}", resource.display_name()),
+            )
+        })?;
         Ok(ProcessPlan {
             runtime: ScriptRuntime::Lua as i32,
             source: spec.source,
-            access_plan: None,
+            access_plan: Some(access_plan),
         })
     }
 

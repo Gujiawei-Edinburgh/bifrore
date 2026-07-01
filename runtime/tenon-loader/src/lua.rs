@@ -1,7 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use tenon_extension::{
     Context, MemoryView, Message, MqttMetadata, PROCESS_ON_MESSAGE_FN, ScriptApi, SourceContext,
     Topic,
+};
+use tenon_message::{
+    daemon::v1::json_path_segment,
+    plan::{
+        AccessMode, ByteRange, JsonAccess, JsonPath, JsonPathSegment, MessageAccessPlan,
+        MetadataAccess, PropertiesAccess, RawPayloadAccess, SourceAccess, TopicAccess,
+    },
 };
 use tree_sitter::{Node, Parser, Tree};
 
@@ -37,6 +44,32 @@ pub(crate) fn validate_extension_function(
     )?;
 
     Ok(())
+}
+
+pub(crate) fn analyze_process_access_plan(source: &str) -> Result<MessageAccessPlan, String> {
+    let tree = parse(source)?;
+    let root = tree.root_node();
+    // the source script has been parsed twiece for a single loading
+    if root.has_error() {
+        return Err("Lua syntax error".to_string());
+    }
+
+    let Some(function) = find_global_function(root, source.as_bytes(), PROCESS_ON_MESSAGE_FN) else {
+        return Err(format!("must define Lua function {PROCESS_ON_MESSAGE_FN}"));
+    };
+
+    let arity = function_arity(function, source.as_bytes()).ok_or_else(|| {
+        format!("failed to inspect Lua function {PROCESS_ON_MESSAGE_FN} parameters")
+    })?;
+    if arity != 2 {
+        return Err(format!(
+            "Lua function {PROCESS_ON_MESSAGE_FN} expects 2 args, got {arity}"
+        ));
+    }
+
+    let mut env = TypeEnv::new(function, source.as_bytes(), 2, true)?;
+    analyze_node(function, source.as_bytes(), &mut env)?;
+    Ok(env.access.into_plan())
 }
 
 fn parse(source: &str) -> Result<Tree, String> {
@@ -153,6 +186,8 @@ enum StaticType {
     Memory,
     Source,
     Topic,
+    TopicLevels,
+    RawPayload,
     Metadata,
     Properties,
     JsonValue,
@@ -176,6 +211,7 @@ impl Default for StaticValue {
 struct Binding {
     ty: StaticType,
     value: StaticValue,
+    access: AccessBinding,
 }
 
 impl Binding {
@@ -183,6 +219,7 @@ impl Binding {
         Self {
             ty: StaticType::Unknown,
             value: StaticValue::Unknown,
+            access: AccessBinding::None,
         }
     }
 
@@ -190,14 +227,226 @@ impl Binding {
         Self {
             ty,
             value: StaticValue::Unknown,
+            access: AccessBinding::None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AccessBinding {
+    None,
+    Source,
+    Topic,
+    TopicLevels,
+    Payload(Vec<AccessPathSegment>),
+    RawPayload,
+    Metadata,
+    Properties,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum AccessPathSegment {
+    Field(String),
+    Index(u32),
+}
+
+#[derive(Debug, Default)]
+struct AccessPlanBuilder {
+    source_full: bool,
+    source_name: bool,
+    source_version: bool,
+    topic_full: bool,
+    topic_raw: bool,
+    topic_levels: bool,
+    topic_level_indexes: BTreeSet<u32>,
+    payload_full: bool,
+    payload_paths: BTreeSet<Vec<AccessPathSegment>>,
+    raw_payload_full: bool,
+    raw_payload_ranges: BTreeSet<(u32, u32)>,
+    metadata_full: bool,
+    metadata_pkid: bool,
+    metadata_qos: bool,
+    metadata_retain: bool,
+    metadata_dup: bool,
+    properties_full: bool,
+    property_keys: BTreeSet<String>,
+}
+
+impl AccessPlanBuilder {
+    fn source_mode(&self) -> AccessMode {
+        if self.source_full {
+            AccessMode::Full
+        } else if self.source_name || self.source_version {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn topic_mode(&self) -> AccessMode {
+        if self.topic_full {
+            AccessMode::Full
+        } else if self.topic_raw || self.topic_levels || !self.topic_level_indexes.is_empty() {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn payload_mode(&self) -> AccessMode {
+        if self.payload_full {
+            AccessMode::Full
+        } else if !self.payload_paths.is_empty() {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn raw_payload_mode(&self) -> AccessMode {
+        if self.raw_payload_full {
+            AccessMode::Full
+        } else if !self.raw_payload_ranges.is_empty() {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn metadata_mode(&self) -> AccessMode {
+        if self.metadata_full {
+            AccessMode::Full
+        } else if self.metadata_pkid || self.metadata_qos || self.metadata_retain || self.metadata_dup {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn properties_mode(&self) -> AccessMode {
+        if self.properties_full {
+            AccessMode::Full
+        } else if !self.property_keys.is_empty() {
+            AccessMode::Selective
+        } else {
+            AccessMode::None
+        }
+    }
+
+    fn record_source_field(&mut self, field: &str) {
+        match field {
+            "name" => self.source_name = true,
+            "version" => self.source_version = true,
+            _ => self.source_full = true,
+        }
+    }
+
+    fn record_topic_field(&mut self, field: &str) {
+        match field {
+            "raw" => self.topic_raw = true,
+            "levels" => self.topic_levels = true,
+            _ => self.topic_full = true,
+        }
+    }
+
+    fn record_topic_level(&mut self, index: u32) {
+        self.topic_level_indexes.insert(index);
+    }
+
+    fn record_payload_path(&mut self, path: &[AccessPathSegment]) {
+        if path.is_empty() {
+            self.payload_full = true;
+        } else if !self.payload_full {
+            self.payload_paths.insert(path.to_vec());
+        }
+    }
+
+    fn record_raw_payload_index(&mut self, lua_index: u32) {
+        let offset = lua_index.saturating_sub(1);
+        self.raw_payload_ranges.insert((offset, 1));
+    }
+
+    fn record_metadata_field(&mut self, field: &str) {
+        match field {
+            "pkid" => self.metadata_pkid = true,
+            "qos" => self.metadata_qos = true,
+            "retain" => self.metadata_retain = true,
+            "dup" => self.metadata_dup = true,
+            _ => self.metadata_full = true,
+        }
+    }
+
+    fn record_property_key(&mut self, key: &str) {
+        if !self.properties_full {
+            self.property_keys.insert(key.to_string());
+        }
+    }
+
+    fn into_plan(self) -> MessageAccessPlan {
+        let source_mode = self.source_mode();
+        let topic_mode = self.topic_mode();
+        let payload_mode = self.payload_mode();
+        let raw_payload_mode = self.raw_payload_mode();
+        let metadata_mode = self.metadata_mode();
+        let properties_mode = self.properties_mode();
+        MessageAccessPlan {
+            source: Some(SourceAccess {
+                mode: source_mode as i32,
+                name: self.source_name,
+                version: self.source_version,
+            }),
+            topic: Some(TopicAccess {
+                mode: topic_mode as i32,
+                raw: self.topic_raw,
+                levels: self.topic_levels,
+                level_indexes: self.topic_level_indexes.into_iter().collect(),
+            }),
+            payload: Some(JsonAccess {
+                mode: payload_mode as i32,
+                paths: self
+                    .payload_paths
+                    .into_iter()
+                    .map(|segments| JsonPath {
+                        segments: segments.into_iter().map(json_path_segment).collect(),
+                    })
+                    .collect(),
+            }),
+            raw_payload: Some(RawPayloadAccess {
+                mode: raw_payload_mode as i32,
+                ranges: self
+                    .raw_payload_ranges
+                    .into_iter()
+                    .map(|(offset, length)| ByteRange { offset, length })
+                    .collect(),
+            }),
+            metadata: Some(MetadataAccess {
+                mode: metadata_mode as i32,
+                pkid: self.metadata_pkid,
+                qos: self.metadata_qos,
+                retain: self.metadata_retain,
+                dup: self.metadata_dup,
+            }),
+            properties: Some(PropertiesAccess {
+                mode: properties_mode as i32,
+                keys: self.property_keys.into_iter().collect(),
+            }),
+        }
+    }
+}
+
+fn json_path_segment(segment: AccessPathSegment) -> JsonPathSegment {
+    let kind = match segment {
+        AccessPathSegment::Field(field) => json_path_segment::Kind::Field(field),
+        AccessPathSegment::Index(index) => json_path_segment::Kind::Index(index),
+    };
+    JsonPathSegment { kind: Some(kind) }
 }
 
 #[derive(Debug)]
 struct TypeEnv {
     variables: HashMap<String, Binding>,
     process_function: bool,
+    access: AccessPlanBuilder,
 }
 
 impl TypeEnv {
@@ -219,6 +468,7 @@ impl TypeEnv {
         Ok(Self {
             variables,
             process_function,
+            access: AccessPlanBuilder::default(),
         })
     }
 
@@ -234,6 +484,13 @@ impl TypeEnv {
             .get(name)
             .map(|binding| binding.value.clone())
             .unwrap_or(StaticValue::Unknown)
+    }
+
+    fn access_binding(&self, name: &str) -> AccessBinding {
+        self.variables
+            .get(name)
+            .map(|binding| binding.access.clone())
+            .unwrap_or(AccessBinding::None)
     }
 
     fn set(&mut self, name: String, binding: Binding) {
@@ -414,11 +671,11 @@ fn function_call_arg_nodes(node: Node<'_>) -> Vec<Node<'_>> {
         .collect()
 }
 
-fn infer_expr_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+fn infer_expr_type(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<StaticType, String> {
     Ok(infer_expr_binding(node, source, env)?.ty)
 }
 
-fn infer_expr_binding(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<Binding, String> {
+fn infer_expr_binding(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<Binding, String> {
     let value = infer_static_value(node, source, env);
     match node.kind() {
         "identifier" | "variable_name" => {
@@ -426,28 +683,31 @@ fn infer_expr_binding(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<Bi
             Ok(Binding {
                 ty: env.get(name),
                 value: env.value(name),
+                access: env.access_binding(name),
             })
         }
-        "dot_index_expression" => Ok(Binding {
-            ty: infer_dot_index_type(node, source, env)?,
-            value,
-        }),
+        "dot_index_expression" => {
+            let (ty, access) = infer_dot_index_type(node, source, env)?;
+            Ok(Binding { ty, value, access })
+        }
         "method_index_expression" => Ok(Binding {
             ty: infer_method_index_type(node, source, env)?,
             value,
+            access: AccessBinding::None,
         }),
-        "bracket_index_expression" => Ok(Binding {
-            ty: infer_bracket_index_type(node, source, env)?,
-            value,
-        }),
+        "bracket_index_expression" => {
+            let (ty, access) = infer_bracket_index_type(node, source, env)?;
+            Ok(Binding { ty, value, access })
+        }
         _ => Ok(Binding {
             ty: StaticType::Unknown,
             value,
+            access: AccessBinding::None,
         }),
     }
 }
 
-fn infer_static_value(node: Node<'_>, source: &[u8], env: &TypeEnv) -> StaticValue {
+fn infer_static_value(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> StaticValue {
     match node.kind() {
         "identifier" | "variable_name" => env.value(node.utf8_text(source).unwrap_or_default()),
         "string" => string_literal_value(node, source)
@@ -477,55 +737,85 @@ fn string_literal_value(node: Node<'_>, source: &[u8]) -> Option<String> {
     Some(text[1..text.len() - 1].to_string())
 }
 
-fn infer_dot_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+fn infer_dot_index_type(
+    node: Node<'_>,
+    source: &[u8],
+    env: &mut TypeEnv,
+) -> Result<(StaticType, AccessBinding), String> {
     let Some(table) = node.child_by_field_name("table") else {
-        return Ok(StaticType::Unknown);
+        return Ok((StaticType::Unknown, AccessBinding::None));
     };
     let Some(field) = node.child_by_field_name("field") else {
-        return Ok(StaticType::Unknown);
+        return Ok((StaticType::Unknown, AccessBinding::None));
     };
-    let table_ty = infer_expr_type(table, source, env)?;
+    let table_binding = infer_expr_binding(table, source, env)?;
     let field = field.utf8_text(source).unwrap_or_default();
-    match table_ty {
+    match table_binding.ty {
         StaticType::Ctx => match field {
-            field if field == script_field::<Context>("memory") => Ok(StaticType::Memory),
-            field if field == script_field::<Context>("source") => Ok(StaticType::Source),
-            field if field == script_field::<Context>("emit") => Ok(StaticType::EmitFn),
+            field if field == script_field::<Context>("memory") => Ok((StaticType::Memory, AccessBinding::None)),
+            field if field == script_field::<Context>("source") => Ok((StaticType::Source, AccessBinding::Source)),
+            field if field == script_field::<Context>("emit") => Ok((StaticType::EmitFn, AccessBinding::None)),
             _ => Err(format!("invalid ctx field: {field}")),
         },
         StaticType::Msg => match field {
-            field if field == script_field::<Message>("source") => Ok(StaticType::Source),
-            field if field == script_field::<Message>("topic") => Ok(StaticType::Topic),
-            field if field == script_field::<Message>("payload") => Ok(StaticType::JsonValue),
-            field if field == script_field::<Message>("raw_payload") => Ok(StaticType::JsonValue),
-            field if field == script_field::<Message>("metadata") => Ok(StaticType::Metadata),
-            field if field == script_field::<Message>("properties") => Ok(StaticType::Properties),
+            field if field == script_field::<Message>("source") => Ok((StaticType::Source, AccessBinding::Source)),
+            field if field == script_field::<Message>("topic") => Ok((StaticType::Topic, AccessBinding::Topic)),
+            field if field == script_field::<Message>("payload") => {
+                Ok((StaticType::JsonValue, AccessBinding::Payload(Vec::new())))
+            }
+            field if field == script_field::<Message>("raw_payload") => Ok((StaticType::RawPayload, AccessBinding::RawPayload)),
+            field if field == script_field::<Message>("metadata") => Ok((StaticType::Metadata, AccessBinding::Metadata)),
+            field if field == script_field::<Message>("properties") => Ok((StaticType::Properties, AccessBinding::Properties)),
             _ => Err(format!("invalid msg field: {field}")),
         },
         StaticType::Source => match field {
-            field if SourceContext::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
+            field if SourceContext::FIELDS.contains(&field) => {
+                env.access.record_source_field(field);
+                Ok((StaticType::JsonValue, AccessBinding::None))
+            }
             _ => Err(format!("invalid source field: {field}")),
         },
         StaticType::Topic => match field {
-            field if Topic::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
+            "levels" => Ok((StaticType::TopicLevels, AccessBinding::TopicLevels)),
+            field if Topic::FIELDS.contains(&field) => {
+                env.access.record_topic_field(field);
+                Ok((StaticType::JsonValue, AccessBinding::None))
+            }
             _ => Err(format!("invalid topic field: {field}")),
         },
         StaticType::Metadata => match field {
-            field if MqttMetadata::FIELDS.contains(&field) => Ok(StaticType::JsonValue),
+            field if MqttMetadata::FIELDS.contains(&field) => {
+                env.access.record_metadata_field(field);
+                Ok((StaticType::JsonValue, AccessBinding::None))
+            }
             _ => Err(format!("invalid metadata field: {field}")),
         },
+        StaticType::Properties => {
+            env.access.record_property_key(field);
+            Ok((StaticType::JsonValue, AccessBinding::None))
+        }
+        StaticType::JsonValue => match table_binding.access {
+            AccessBinding::Payload(mut path) => {
+                path.push(AccessPathSegment::Field(field.to_string()));
+                env.access.record_payload_path(&path);
+                Ok((StaticType::JsonValue, AccessBinding::Payload(path)))
+            }
+            _ => Ok((StaticType::JsonValue, AccessBinding::None)),
+        },
         StaticType::Memory => match field {
-            field if MemoryView::METHODS.contains(&field) => Ok(StaticType::Unknown),
+            field if MemoryView::METHODS.contains(&field) => Ok((StaticType::Unknown, AccessBinding::None)),
             _ => Err(format!(
                 "invalid memory field: {field}; use memory.get/set/delete"
             )),
         },
-        StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
-        StaticType::Unknown | StaticType::EmitFn => Ok(StaticType::Unknown),
+        StaticType::RawPayload | StaticType::TopicLevels => {
+            Err(format!("invalid dot access on {:?}", table_binding.ty))
+        }
+        StaticType::Unknown | StaticType::EmitFn => Ok((StaticType::Unknown, AccessBinding::None)),
     }
 }
 
-fn infer_method_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+fn infer_method_index_type(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<StaticType, String> {
     let Some(table) = node.child_by_field_name("table") else {
         return Ok(StaticType::Unknown);
     };
@@ -546,14 +836,71 @@ fn script_field<T: ScriptApi>(field: &'static str) -> &'static str {
     field
 }
 
-fn infer_bracket_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Result<StaticType, String> {
+fn infer_bracket_index_type(
+    node: Node<'_>,
+    source: &[u8],
+    env: &mut TypeEnv,
+) -> Result<(StaticType, AccessBinding), String> {
     let Some(table) = node.child_by_field_name("table") else {
-        return Ok(StaticType::Unknown);
+        return Ok((StaticType::Unknown, AccessBinding::None));
     };
-    let _access = infer_bracket_access(node, source, env);
-    match infer_expr_type(table, source, env)? {
-        StaticType::Topic | StaticType::Properties | StaticType::JsonValue => Ok(StaticType::JsonValue),
-        StaticType::Unknown => Ok(StaticType::Unknown),
+    let table_binding = infer_expr_binding(table, source, env)?;
+    let access = infer_bracket_access(node, source, env);
+    match table_binding.ty {
+        StaticType::Topic | StaticType::TopicLevels => {
+            if let Some(StaticValue::Int(index)) = access {
+                if let Ok(index) = u32::try_from(index) {
+                    env.access.record_topic_level(index);
+                } else {
+                    env.access.topic_levels = true;
+                }
+            } else {
+                env.access.topic_levels = true;
+            }
+            Ok((StaticType::JsonValue, AccessBinding::None))
+        }
+        StaticType::Properties => {
+            if let Some(StaticValue::String(key)) = access {
+                env.access.record_property_key(&key);
+            } else {
+                env.access.properties_full = true;
+            }
+            Ok((StaticType::JsonValue, AccessBinding::None))
+        }
+        StaticType::JsonValue => match table_binding.access {
+            AccessBinding::Payload(mut path) => {
+                match access {
+                    Some(StaticValue::String(field)) => {
+                        path.push(AccessPathSegment::Field(field));
+                        env.access.record_payload_path(&path);
+                    }
+                    Some(StaticValue::Int(index)) => {
+                        if let Ok(index) = u32::try_from(index) {
+                            path.push(AccessPathSegment::Index(index));
+                            env.access.record_payload_path(&path);
+                        } else {
+                            env.access.payload_full = true;
+                        }
+                    }
+                    _ => env.access.payload_full = true,
+                }
+                Ok((StaticType::JsonValue, AccessBinding::Payload(path)))
+            }
+            _ => Ok((StaticType::JsonValue, AccessBinding::None)),
+        },
+        StaticType::RawPayload => {
+            if let Some(StaticValue::Int(index)) = access {
+                if let Ok(index) = u32::try_from(index) {
+                    env.access.record_raw_payload_index(index);
+                } else {
+                    env.access.raw_payload_full = true;
+                }
+            } else {
+                env.access.raw_payload_full = true;
+            }
+            Ok((StaticType::JsonValue, AccessBinding::None))
+        }
+        StaticType::Unknown => Ok((StaticType::Unknown, AccessBinding::None)),
         known => Err(format!("invalid bracket access on {known:?}")),
     }
 }
@@ -561,7 +908,7 @@ fn infer_bracket_index_type(node: Node<'_>, source: &[u8], env: &TypeEnv) -> Res
 fn infer_bracket_access(
     node: Node<'_>,
     source: &[u8],
-    env: &TypeEnv,
+    env: &mut TypeEnv,
 ) -> Option<StaticValue> {
     let key = node
         .child_by_field_name("field")
@@ -597,6 +944,16 @@ fn find_first_node_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tr
 mod tests {
     use super::*;
     use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
+
+    fn path_fields(path: &JsonPath) -> Vec<&str> {
+        path.segments
+            .iter()
+            .map(|segment| match segment.kind.as_ref().expect("path segment") {
+                json_path_segment::Kind::Field(field) => field.as_str(),
+                json_path_segment::Kind::Index(_) => "<index>",
+            })
+            .collect()
+    }
 
     #[test]
     fn validates_named_extension_functions() {
@@ -806,6 +1163,96 @@ end
 
         assert_eq!(env.value("key"), StaticValue::Unknown);
         assert_eq!(env.get("temp"), StaticType::JsonValue);
+    }
+
+    #[test]
+    fn generates_static_message_access_plan() {
+        let plan = analyze_process_access_plan(
+            r#"
+function on_message(ctx, msg)
+  local payload = msg.payload
+  local key = "temp"
+  local level = 2
+  local raw_index = 1
+  ctx.emit({
+    source = msg.source.version,
+    topic = msg.topic.raw,
+    device = msg.topic.levels[level],
+    temp = payload[key],
+    first = payload.values[1],
+    byte = msg.raw_payload[raw_index],
+    dup = msg.metadata.dup,
+    site = msg.properties["site"]
+  })
+end
+"#,
+        )
+        .expect("access plan");
+
+        let source = plan.source.as_ref().expect("source access");
+        assert_eq!(source.mode, AccessMode::Selective as i32);
+        assert!(!source.name);
+        assert!(source.version);
+
+        let topic = plan.topic.as_ref().expect("topic access");
+        assert_eq!(topic.mode, AccessMode::Selective as i32);
+        assert!(topic.raw);
+        assert_eq!(topic.level_indexes, vec![2]);
+
+        let payload = plan.payload.as_ref().expect("payload access");
+        assert_eq!(payload.mode, AccessMode::Selective as i32);
+        let paths = payload.paths.iter().map(path_fields).collect::<Vec<_>>();
+        assert_eq!(paths, vec![vec!["temp"], vec!["values"], vec!["values", "<index>"]]);
+
+        let raw_payload = plan.raw_payload.as_ref().expect("raw payload access");
+        assert_eq!(raw_payload.mode, AccessMode::Selective as i32);
+        assert_eq!(raw_payload.ranges.len(), 1);
+        assert_eq!(raw_payload.ranges[0].offset, 0);
+        assert_eq!(raw_payload.ranges[0].length, 1);
+
+        let metadata = plan.metadata.as_ref().expect("metadata access");
+        assert_eq!(metadata.mode, AccessMode::Selective as i32);
+        assert!(metadata.dup);
+        assert!(!metadata.qos);
+
+        let properties = plan.properties.as_ref().expect("properties access");
+        assert_eq!(properties.mode, AccessMode::Selective as i32);
+        assert_eq!(properties.keys, vec!["site"]);
+    }
+
+    #[test]
+    fn marks_dynamic_message_access_as_full() {
+        let plan = analyze_process_access_plan(
+            r#"
+function on_message(ctx, msg)
+  local key = ctx.memory.get("field")
+  ctx.emit({
+    payload = msg.payload[key],
+    raw = msg.raw_payload[key],
+    prop = msg.properties[key],
+    level = msg.topic.levels[key]
+  })
+end
+"#,
+        )
+        .expect("access plan");
+
+        assert_eq!(
+            plan.payload.as_ref().expect("payload access").mode,
+            AccessMode::Full as i32
+        );
+        assert_eq!(
+            plan.raw_payload.as_ref().expect("raw payload access").mode,
+            AccessMode::Full as i32
+        );
+        assert_eq!(
+            plan.properties.as_ref().expect("properties access").mode,
+            AccessMode::Full as i32
+        );
+        let topic = plan.topic.as_ref().expect("topic access");
+        assert_eq!(topic.mode, AccessMode::Selective as i32);
+        assert!(topic.levels);
+        assert!(topic.level_indexes.is_empty());
     }
 
     #[test]

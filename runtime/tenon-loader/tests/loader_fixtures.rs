@@ -1,4 +1,5 @@
 use tenon_loader::{Loader, LoaderErrorKind};
+use tenon_message::{daemon::v1::json_path_segment, plan::AccessMode};
 
 fn fixture(path: &str) -> &'static str {
     match path {
@@ -36,6 +37,45 @@ fn loads_sensor_pipeline_fixture() {
 
     let process = plan.process.as_ref().expect("process plan");
     assert!(process.source.contains("function on_message"));
+    let access = process.access_plan.as_ref().expect("access plan");
+
+    let source = access.source.as_ref().expect("source access");
+    assert_eq!(source.mode, AccessMode::Selective as i32);
+    assert!(source.name);
+    assert!(!source.version);
+
+    let topic = access.topic.as_ref().expect("topic access");
+    assert_eq!(topic.mode, AccessMode::Selective as i32);
+    assert!(topic.raw);
+    assert!(!topic.levels);
+    assert_eq!(topic.level_indexes, vec![2]);
+
+    let payload = access.payload.as_ref().expect("payload access");
+    assert_eq!(payload.mode, AccessMode::Selective as i32);
+    let payload_paths = payload
+        .paths
+        .iter()
+        .map(|path| {
+            path.segments
+                .iter()
+                .map(|segment| match segment.kind.as_ref().expect("path segment") {
+                    json_path_segment::Kind::Field(field) => field.as_str(),
+                    json_path_segment::Kind::Index(_) => "<index>",
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(payload_paths, vec![vec!["hum"], vec!["temp"]]);
+
+    let metadata = access.metadata.as_ref().expect("metadata access");
+    assert_eq!(metadata.mode, AccessMode::Selective as i32);
+    assert!(metadata.qos);
+    assert!(!metadata.pkid);
+    assert!(!metadata.retain);
+    assert!(!metadata.dup);
+
+    let properties = access.properties.as_ref().expect("properties access");
+    assert_eq!(properties.mode, AccessMode::None as i32);
 
     assert!(plan.egress.is_some());
 }

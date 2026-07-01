@@ -259,6 +259,7 @@ impl ResourceRegistry {
         Ok(ProcessPlan {
             runtime: ScriptRuntime::Lua as i32,
             source: spec.source,
+            access_plan: None,
         })
     }
 

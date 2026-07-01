@@ -281,6 +281,7 @@ mod tests {
             process: Some(ProcessPlan {
                 runtime: ScriptRuntime::Lua as i32,
                 source: process_source.to_string(),
+                access_plan: None,
             }),
             egress: Some(EgressPlan {}),
         }

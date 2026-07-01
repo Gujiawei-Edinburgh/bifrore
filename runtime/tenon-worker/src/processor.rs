@@ -351,6 +351,7 @@ mod tests {
         let processor = Box::new(LuaProcessor::new(ProcessPlan {
             runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
             source: "function on_message(ctx, msg) end".to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor"));
 
         let context = processor.into_context();
@@ -363,6 +364,7 @@ mod tests {
         let mut processor = LuaProcessor::new(ProcessPlan {
             runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
             source: "function on_message(ctx, msg) ctx.emit(msg.payload) end".to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let outcome = processor.process(&message(json!({"temp": 30}))).expect("outcome");
@@ -384,6 +386,7 @@ mod tests {
                   ctx.emit({count = count})
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let first = processor.process(&message(json!({"temp": 30}))).expect("first");
@@ -415,6 +418,7 @@ mod tests {
                   end
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let skipped = processor.process(&message_with(
@@ -463,6 +467,7 @@ mod tests {
                   end
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let cold = processor.process(&message(json!({"temp": 10}))).expect("cold");
@@ -492,6 +497,7 @@ mod tests {
                   ctx.emit({has_os = os ~= nil, has_io = io ~= nil, has_package = package ~= nil})
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let outcome = processor.process(&message(json!({"temp": 30}))).expect("outcome");
@@ -512,6 +518,7 @@ mod tests {
                   while true do end
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let error = processor
@@ -531,6 +538,7 @@ mod tests {
                   return { temp = msg.payload.temp }
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let error = processor
@@ -550,6 +558,7 @@ mod tests {
                   ctx.emit(msg.payload)
                 end
             "#.to_string(),
+            access_plan: None,
         }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
 
         let error = processor

@@ -298,6 +298,7 @@ mod tests {
             process: Some(ProcessPlan {
                 runtime: ScriptRuntime::Lua as i32,
                 source: "function on_message(ctx, msg) end".to_string(),
+                access_plan: None,
             }),
             egress: Some(EgressPlan {}),
         }

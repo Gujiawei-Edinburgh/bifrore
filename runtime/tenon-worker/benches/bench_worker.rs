@@ -93,6 +93,7 @@ fn processor() -> LuaProcessor {
                 end
             "#
             .to_string(),
+            access_plan: None,
         },
         Context::with_empty_memory(SourceContext::new("bench", "r1")),
     )

@@ -106,9 +106,82 @@ enum PayloadDecodePlan {
   PAYLOAD_DECODE_PLAN_JSON = 1;
 }
 
+enum AccessMode {
+  ACCESS_MODE_UNSPECIFIED = 0;
+  // The namespace is not needed by the process script.
+  ACCESS_MODE_NONE = 1;
+  // Only the explicitly listed fields/paths/ranges are needed.
+  ACCESS_MODE_SELECTIVE = 2;
+  // The access is dynamic or whole-object, so the full namespace is needed.
+  ACCESS_MODE_FULL = 3;
+}
+
+message MessageAccessPlan {
+  SourceAccess source = 1;
+  TopicAccess topic = 2;
+  JsonAccess payload = 3;
+  RawPayloadAccess raw_payload = 4;
+  MetadataAccess metadata = 5;
+  PropertiesAccess properties = 6;
+}
+
+message SourceAccess {
+  AccessMode mode = 1;
+  bool name = 2;
+  bool version = 3;
+}
+
+message TopicAccess {
+  AccessMode mode = 1;
+  bool raw = 2;
+  bool levels = 3;
+  // Lua-facing topic level indexes are 1-based.
+  repeated uint32 level_indexes = 4;
+}
+
+message RawPayloadAccess {
+  AccessMode mode = 1;
+  repeated ByteRange ranges = 2;
+}
+
+message ByteRange {
+  uint32 offset = 1;
+  uint32 length = 2;
+}
+
+message JsonAccess {
+  AccessMode mode = 1;
+  repeated JsonPath paths = 2;
+}
+
+message JsonPath {
+  repeated JsonPathSegment segments = 1;
+}
+
+message JsonPathSegment {
+  oneof kind {
+    string field = 1;
+    uint32 index = 2;
+  }
+}
+
+message MetadataAccess {
+  AccessMode mode = 1;
+  bool pkid = 2;
+  bool qos = 3;
+  bool retain = 4;
+  bool dup = 5;
+}
+
+message PropertiesAccess {
+  AccessMode mode = 1;
+  repeated string keys = 2;
+}
+
 message ProcessPlan {
   ScriptRuntime runtime = 1;
   string source = 2;
+  MessageAccessPlan access_plan = 3;
 }
 
 message ScriptModule {

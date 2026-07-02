@@ -9,7 +9,13 @@ use std::sync::{
 use tenon_extension::{
     Context, ExtensionValue, InvocationOutcome, Message, PROCESS_ON_MESSAGE_FN,
 };
-use tenon_message::plan::ProcessPlan;
+use tenon_message::{
+    daemon::v1::{json_path_segment, JsonPathSegment},
+    plan::{
+        AccessMode, JsonAccess, MessageAccessPlan, MetadataAccess, ProcessPlan,
+        PropertiesAccess, RawPayloadAccess, SourceAccess, TopicAccess,
+    },
+};
 
 pub trait Processor: Send + 'static {
     fn process(&mut self, message: &Message) -> WorkerResult<InvocationOutcome>;
@@ -22,6 +28,7 @@ pub struct LuaProcessor {
     lua: Lua,
     on_message: Function,
     context: Context,
+    access_plan: MessageAccessPlan,
     instruction_budget: Arc<AtomicU64>,
 }
 
@@ -37,10 +44,12 @@ impl LuaProcessor {
             .globals()
             .get(PROCESS_ON_MESSAGE_FN)
             .map_err(lua_error)?;
+        let access_plan = process.access_plan.unwrap_or_else(full_message_access_plan);
         Ok(Self {
             lua,
             on_message,
             context,
+            access_plan,
             instruction_budget,
         })
     }
@@ -54,7 +63,7 @@ impl Processor for LuaProcessor {
         self.lua
             .scope(|scope| {
                 let ctx = create_context_table(&self.lua, scope, &context)?;
-                let msg = create_message_table(&self.lua, message)?;
+                let msg = create_message_table(&self.lua, message, &self.access_plan)?;
                 self.on_message.call::<Value>((ctx, msg))
             })
             .and_then(validate_on_message_return)
@@ -67,6 +76,7 @@ impl Processor for LuaProcessor {
             lua,
             on_message,
             context,
+            access_plan: _,
             instruction_budget: _,
         } = *self;
         drop(on_message);
@@ -140,15 +150,82 @@ fn create_memory_table<'scope, 'env>(
     Ok(table)
 }
 
-fn create_message_table(lua: &Lua, message: &Message) -> mlua::Result<Table> {
+fn create_message_table(
+    lua: &Lua,
+    message: &Message,
+    access_plan: &MessageAccessPlan,
+) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    table.set("source", create_source_table(lua, &message.source)?)?;
-    table.set("topic", create_topic_table(lua, message)?)?;
-    table.set("payload", json_to_lua_value(lua, &message.payload)?)?;
-    table.set("raw_payload", create_raw_payload_table(lua, message)?)?;
-    table.set("metadata", create_metadata_table(lua, message)?)?;
-    table.set("properties", create_properties_table(lua, message)?)?;
+    if let Some(source) = access_plan.source.as_ref() {
+        if access_enabled(source.mode) {
+            table.set("source", create_source_table_with_access(lua, message, source)?)?;
+        }
+    }
+    if let Some(topic) = access_plan.topic.as_ref() {
+        if access_enabled(topic.mode) {
+            table.set("topic", create_topic_table_with_access(lua, message, topic)?)?;
+        }
+    }
+    if let Some(payload) = access_plan.payload.as_ref() {
+        if access_enabled(payload.mode) {
+            table.set("payload", create_payload_value_with_access(lua, &message.payload, payload)?)?;
+        }
+    }
+    if let Some(raw_payload) = access_plan.raw_payload.as_ref() {
+        if access_enabled(raw_payload.mode) {
+            table.set("raw_payload", create_raw_payload_table_with_access(lua, message, raw_payload)?)?;
+        }
+    }
+    if let Some(metadata) = access_plan.metadata.as_ref() {
+        if access_enabled(metadata.mode) {
+            table.set("metadata", create_metadata_table_with_access(lua, message, metadata)?)?;
+        }
+    }
+    if let Some(properties) = access_plan.properties.as_ref() {
+        if access_enabled(properties.mode) {
+            table.set("properties", create_properties_table_with_access(lua, message, properties)?)?;
+        }
+    }
     Ok(table)
+}
+
+fn access_enabled(mode: i32) -> bool {
+    mode != AccessMode::None as i32
+}
+
+fn full_message_access_plan() -> MessageAccessPlan {
+    MessageAccessPlan {
+        source: Some(SourceAccess {
+            mode: AccessMode::Full as i32,
+            name: false,
+            version: false,
+        }),
+        topic: Some(TopicAccess {
+            mode: AccessMode::Full as i32,
+            raw: false,
+            levels: false,
+            level_indexes: Vec::new(),
+        }),
+        payload: Some(JsonAccess {
+            mode: AccessMode::Full as i32,
+            paths: Vec::new(),
+        }),
+        raw_payload: Some(RawPayloadAccess {
+            mode: AccessMode::Full as i32,
+            ranges: Vec::new(),
+        }),
+        metadata: Some(MetadataAccess {
+            mode: AccessMode::Full as i32,
+            pkid: false,
+            qos: false,
+            retain: false,
+            dup: false,
+        }),
+        properties: Some(PropertiesAccess {
+            mode: AccessMode::Full as i32,
+            keys: Vec::new(),
+        }),
+    }
 }
 
 fn create_source_table(
@@ -158,6 +235,24 @@ fn create_source_table(
     let table = lua.create_table()?;
     table.set("name", source.name.as_str())?;
     table.set("version", source.version.as_str())?;
+    Ok(table)
+}
+
+fn create_source_table_with_access(
+    lua: &Lua,
+    message: &Message,
+    access: &SourceAccess,
+) -> mlua::Result<Table> {
+    if access.mode == AccessMode::Full as i32 {
+        return create_source_table(lua, &message.source);
+    }
+    let table = lua.create_table()?;
+    if access.name {
+        table.set("name", message.source.name.as_str())?;
+    }
+    if access.version {
+        table.set("version", message.source.version.as_str())?;
+    }
     Ok(table)
 }
 
@@ -172,10 +267,59 @@ fn create_topic_table(lua: &Lua, message: &Message) -> mlua::Result<Table> {
     Ok(table)
 }
 
+fn create_topic_table_with_access(
+    lua: &Lua,
+    message: &Message,
+    access: &TopicAccess,
+) -> mlua::Result<Table> {
+    if access.mode == AccessMode::Full as i32 {
+        return create_topic_table(lua, message);
+    }
+    let table = lua.create_table()?;
+    if access.raw {
+        table.set("raw", message.topic.raw.as_str())?;
+    }
+    if access.levels || !access.level_indexes.is_empty() {
+        let levels = lua.create_table()?;
+        if access.levels {
+            for (index, level) in message.topic.levels.iter().enumerate() {
+                levels.set(index + 1, level.as_str())?;
+            }
+        } else {
+            for lua_index in &access.level_indexes {
+                if let Some(level) = message.topic.lua_level(*lua_index as usize) {
+                    levels.set(*lua_index, level)?;
+                }
+            }
+        }
+        table.set("levels", levels)?;
+    }
+    Ok(table)
+}
+
 fn create_raw_payload_table(lua: &Lua, message: &Message) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     for (index, byte) in message.raw_payload.iter().enumerate() {
         table.set(index + 1, *byte)?;
+    }
+    Ok(table)
+}
+
+fn create_raw_payload_table_with_access(
+    lua: &Lua,
+    message: &Message,
+    access: &RawPayloadAccess,
+) -> mlua::Result<Table> {
+    if access.mode == AccessMode::Full as i32 {
+        return create_raw_payload_table(lua, message);
+    }
+    let table = lua.create_table()?;
+    for range in &access.ranges {
+        let start = range.offset as usize;
+        let end = start.saturating_add(range.length as usize).min(message.raw_payload.len());
+        for offset in start..end {
+            table.set(offset + 1, message.raw_payload[offset])?;
+        }
     }
     Ok(table)
 }
@@ -189,12 +333,138 @@ fn create_metadata_table(lua: &Lua, message: &Message) -> mlua::Result<Table> {
     Ok(table)
 }
 
+fn create_metadata_table_with_access(
+    lua: &Lua,
+    message: &Message,
+    access: &MetadataAccess,
+) -> mlua::Result<Table> {
+    if access.mode == AccessMode::Full as i32 {
+        return create_metadata_table(lua, message);
+    }
+    let table = lua.create_table()?;
+    if access.pkid {
+        table.set("pkid", message.metadata.pkid)?;
+    }
+    if access.qos {
+        table.set("qos", message.metadata.qos)?;
+    }
+    if access.retain {
+        table.set("retain", message.metadata.retain)?;
+    }
+    if access.dup {
+        table.set("dup", message.metadata.dup)?;
+    }
+    Ok(table)
+}
+
 fn create_properties_table(lua: &Lua, message: &Message) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     for (key, value) in &message.properties {
         table.set(key.as_str(), value.as_str())?;
     }
     Ok(table)
+}
+
+fn create_properties_table_with_access(
+    lua: &Lua,
+    message: &Message,
+    access: &PropertiesAccess,
+) -> mlua::Result<Table> {
+    if access.mode == AccessMode::Full as i32 {
+        return create_properties_table(lua, message);
+    }
+    let table = lua.create_table()?;
+    for key in &access.keys {
+        if let Some(value) = message.properties.get(key) {
+            table.set(key.as_str(), value.as_str())?;
+        }
+    }
+    Ok(table)
+}
+
+fn create_payload_value_with_access(
+    lua: &Lua,
+    payload: &ExtensionValue,
+    access: &JsonAccess,
+) -> mlua::Result<Value> {
+    if access.mode == AccessMode::Full as i32 {
+        return json_to_lua_value(lua, payload);
+    }
+    let table = lua.create_table()?;
+    for path in &access.paths {
+        materialize_json_path(lua, &table, payload, &path.segments)?;
+    }
+    Ok(Value::Table(table))
+}
+
+fn materialize_json_path(
+    lua: &Lua,
+    table: &Table,
+    payload: &ExtensionValue,
+    path: &[JsonPathSegment],
+) -> mlua::Result<()> {
+    let Some(value) = json_value_at_path(payload, path) else {
+        return Ok(());
+    };
+    set_lua_path(lua, table, path, value)
+}
+
+fn json_value_at_path<'a>(
+    value: &'a ExtensionValue,
+    path: &[JsonPathSegment],
+) -> Option<&'a ExtensionValue> {
+    let mut current = value;
+    for segment in path {
+        match segment.kind.as_ref()? {
+            json_path_segment::Kind::Field(field) => {
+                current = current.as_object()?.get(field)?;
+            }
+            json_path_segment::Kind::Index(index) => {
+                let zero_based = index.checked_sub(1)? as usize;
+                current = current.as_array()?.get(zero_based)?;
+            }
+        }
+    }
+    Some(current)
+}
+
+fn set_lua_path(
+    lua: &Lua,
+    table: &Table,
+    path: &[JsonPathSegment],
+    value: &ExtensionValue,
+) -> mlua::Result<()> {
+    let Some((last, parents)) = path.split_last() else {
+        return Ok(());
+    };
+    let mut current = table.clone();
+    for segment in parents {
+        let next = match segment.kind.as_ref() {
+            Some(json_path_segment::Kind::Field(field)) => match current.get::<Value>(field.as_str())? {
+                Value::Table(table) => table,
+                _ => {
+                    let table = lua.create_table()?;
+                    current.set(field.as_str(), table.clone())?;
+                    table
+                }
+            },
+            Some(json_path_segment::Kind::Index(index)) => match current.get::<Value>(*index)? {
+                Value::Table(table) => table,
+                _ => {
+                    let table = lua.create_table()?;
+                    current.set(*index, table.clone())?;
+                    table
+                }
+            },
+            None => return Err(mlua::Error::external("JSON path segment kind is missing")),
+        };
+        current = next;
+    }
+    match last.kind.as_ref() {
+        Some(json_path_segment::Kind::Field(field)) => current.set(field.as_str(), json_to_lua_value(lua, value)?),
+        Some(json_path_segment::Kind::Index(index)) => current.set(*index, json_to_lua_value(lua, value)?),
+        None => Err(mlua::Error::external("JSON path segment kind is missing")),
+    }
 }
 
 fn json_to_lua_value(lua: &Lua, value: &ExtensionValue) -> mlua::Result<Value> {
@@ -345,6 +615,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use tenon_extension::{MqttMetadata, SourceContext, Topic};
+    use tenon_message::daemon::v1::json_path_segment;
 
     #[test]
     fn owns_context() {
@@ -371,6 +642,56 @@ mod tests {
 
         assert_eq!(outcome.emits.len(), 1);
         assert_eq!(outcome.emits[0].payload, json!({"temp": 30}));
+    }
+
+    #[test]
+    fn materializes_only_planned_message_fields() {
+        let mut processor = LuaProcessor::new(ProcessPlan {
+            runtime: tenon_message::plan::ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  ctx.emit({
+                    source_name = msg.source.name,
+                    source_version_missing = msg.source.version == nil,
+                    topic_raw = msg.topic.raw,
+                    topic_level2 = msg.topic.levels[2],
+                    topic_level1_missing = msg.topic.levels[1] == nil,
+                    temp = msg.payload.temp,
+                    hum_missing = msg.payload.hum == nil,
+                    first_byte = msg.raw_payload[1],
+                    second_byte_missing = msg.raw_payload[2] == nil,
+                    qos = msg.metadata.qos,
+                    pkid_missing = msg.metadata.pkid == nil,
+                    site = msg.properties.site,
+                    other_missing = msg.properties.other == nil
+                  })
+                end
+            "#.to_string(),
+            access_plan: Some(selective_access_plan()),
+        }, Context::with_empty_memory(SourceContext::new("p", "r1"))).expect("processor");
+
+        let outcome = processor.process(&message_with(
+            "sensor/room1",
+            json!({"temp": 30, "hum": 10}),
+            MqttMetadata::new(7, 1, false, false),
+            [("site", "lab"), ("other", "x")],
+        )).expect("outcome");
+
+        assert_eq!(outcome.emits[0].payload, json!({
+            "source_name": "source",
+            "source_version_missing": true,
+            "topic_raw": "sensor/room1",
+            "topic_level2": "room1",
+            "topic_level1_missing": true,
+            "temp": 30,
+            "hum_missing": true,
+            "first_byte": 123,
+            "second_byte_missing": true,
+            "qos": 1,
+            "pkid_missing": true,
+            "site": "lab",
+            "other_missing": true
+        }));
     }
 
     #[test]
@@ -593,7 +914,53 @@ mod tests {
             properties
                 .into_iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect::<HashMap<_, _>>(),
+            .collect::<HashMap<_, _>>(),
         )
+    }
+
+    fn selective_access_plan() -> MessageAccessPlan {
+        MessageAccessPlan {
+            source: Some(SourceAccess {
+                mode: AccessMode::Selective as i32,
+                name: true,
+                version: false,
+            }),
+            topic: Some(TopicAccess {
+                mode: AccessMode::Selective as i32,
+                raw: true,
+                levels: false,
+                level_indexes: vec![2],
+            }),
+            payload: Some(JsonAccess {
+                mode: AccessMode::Selective as i32,
+                paths: vec![json_path_field("temp")],
+            }),
+            raw_payload: Some(RawPayloadAccess {
+                mode: AccessMode::Selective as i32,
+                ranges: vec![tenon_message::plan::ByteRange {
+                    offset: 0,
+                    length: 1,
+                }],
+            }),
+            metadata: Some(MetadataAccess {
+                mode: AccessMode::Selective as i32,
+                pkid: false,
+                qos: true,
+                retain: false,
+                dup: false,
+            }),
+            properties: Some(PropertiesAccess {
+                mode: AccessMode::Selective as i32,
+                keys: vec!["site".to_string()],
+            }),
+        }
+    }
+
+    fn json_path_field(field: &str) -> tenon_message::plan::JsonPath {
+        tenon_message::plan::JsonPath {
+            segments: vec![tenon_message::plan::JsonPathSegment {
+                kind: Some(json_path_segment::Kind::Field(field.to_string())),
+            }],
+        }
     }
 }

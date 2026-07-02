@@ -14,15 +14,56 @@ use std::time::Duration;
 use tenon_extension::{
     Context, EmitRecord, InvocationOutcome, Message, MqttMetadata, SourceContext, Topic,
 };
+use tenon_message::daemon::v1::json_path_segment;
 use tenon_message::egress::v1::EgressBatchFrame;
-use tenon_message::plan::{EgressPlan, ProcessPlan, ScriptRuntime};
+use tenon_message::plan::{
+    AccessMode, EgressPlan, JsonAccess, JsonPath, JsonPathSegment, MessageAccessPlan,
+    MetadataAccess, ProcessPlan, PropertiesAccess, RawPayloadAccess, ScriptRuntime, SourceAccess,
+    TopicAccess,
+};
 use tenon_worker::{
     EgressConfig, EgressRuntime, LuaProcessor, Processor, WorkerMetrics,
 };
 
 fn bench_worker(c: &mut Criterion) {
-    c.bench_function("worker_processor_only_lua_filter_emit_json", |b| {
-        let mut processor = processor();
+    c.bench_function("worker_processor_lua_no_access_plan", |b| {
+        let mut processor = processor(None);
+        let message = message();
+
+        b.iter(|| {
+            let outcome = processor
+                .process(black_box(&message))
+                .expect("processor outcome");
+            black_box(outcome);
+        });
+    });
+
+    c.bench_function("worker_processor_lua_full_access_plan", |b| {
+        let mut processor = processor(Some(full_access_plan()));
+        let message = message();
+
+        b.iter(|| {
+            let outcome = processor
+                .process(black_box(&message))
+                .expect("processor outcome");
+            black_box(outcome);
+        });
+    });
+
+    c.bench_function("worker_processor_lua_selective_access_plan", |b| {
+        let mut processor = processor(Some(selective_access_plan()));
+        let message = message();
+
+        b.iter(|| {
+            let outcome = processor
+                .process(black_box(&message))
+                .expect("processor outcome");
+            black_box(outcome);
+        });
+    });
+
+    c.bench_function("worker_processor_lua_selective_raw_payload_unused", |b| {
+        let mut processor = raw_payload_unused_processor(Some(raw_payload_unused_access_plan()));
         let message = message();
 
         b.iter(|| {
@@ -54,7 +95,7 @@ fn bench_worker(c: &mut Criterion) {
             Arc::clone(&stop_consumer),
         );
         wait_for_consumer_handoff(&runtime, &metrics, &drained_records);
-        let mut processor = processor();
+        let mut processor = processor(Some(selective_access_plan()));
         let message = message();
 
         b.iter(|| {
@@ -72,7 +113,7 @@ fn bench_worker(c: &mut Criterion) {
     });
 }
 
-fn processor() -> LuaProcessor {
+fn processor(access_plan: Option<MessageAccessPlan>) -> LuaProcessor {
     LuaProcessor::new(
         ProcessPlan {
             runtime: ScriptRuntime::Lua as i32,
@@ -93,11 +134,121 @@ fn processor() -> LuaProcessor {
                 end
             "#
             .to_string(),
-            access_plan: None,
+            access_plan,
         },
         Context::with_empty_memory(SourceContext::new("bench", "r1")),
     )
     .expect("processor")
+}
+
+fn raw_payload_unused_processor(access_plan: Option<MessageAccessPlan>) -> LuaProcessor {
+    LuaProcessor::new(
+        ProcessPlan {
+            runtime: ScriptRuntime::Lua as i32,
+            source: r#"
+                function on_message(ctx, msg)
+                  if msg.payload.temp > 30 then
+                    ctx.emit({
+                      temp = msg.payload.temp,
+                      hum = msg.payload.hum
+                    })
+                  end
+                end
+            "#
+            .to_string(),
+            access_plan,
+        },
+        Context::with_empty_memory(SourceContext::new("bench", "r1")),
+    )
+    .expect("processor")
+}
+
+fn full_access_plan() -> MessageAccessPlan {
+    MessageAccessPlan {
+        source: Some(SourceAccess {
+            mode: AccessMode::Full as i32,
+            name: false,
+            version: false,
+        }),
+        topic: Some(TopicAccess {
+            mode: AccessMode::Full as i32,
+            raw: false,
+            levels: false,
+            level_indexes: Vec::new(),
+        }),
+        payload: Some(JsonAccess {
+            mode: AccessMode::Full as i32,
+            paths: Vec::new(),
+        }),
+        raw_payload: Some(RawPayloadAccess {
+            mode: AccessMode::Full as i32,
+            ranges: Vec::new(),
+        }),
+        metadata: Some(MetadataAccess {
+            mode: AccessMode::Full as i32,
+            pkid: false,
+            qos: false,
+            retain: false,
+            dup: false,
+        }),
+        properties: Some(PropertiesAccess {
+            mode: AccessMode::Full as i32,
+            keys: Vec::new(),
+        }),
+    }
+}
+
+fn selective_access_plan() -> MessageAccessPlan {
+    MessageAccessPlan {
+        source: None,
+        topic: Some(TopicAccess {
+            mode: AccessMode::Selective as i32,
+            raw: true,
+            levels: true,
+            level_indexes: Vec::new(),
+        }),
+        payload: Some(JsonAccess {
+            mode: AccessMode::Selective as i32,
+            paths: vec![json_path_field("hum"), json_path_field("temp")],
+        }),
+        raw_payload: Some(RawPayloadAccess {
+            mode: AccessMode::None as i32,
+            ranges: Vec::new(),
+        }),
+        metadata: Some(MetadataAccess {
+            mode: AccessMode::Selective as i32,
+            pkid: true,
+            qos: true,
+            retain: false,
+            dup: false,
+        }),
+        properties: None,
+    }
+}
+
+fn raw_payload_unused_access_plan() -> MessageAccessPlan {
+    MessageAccessPlan {
+        source: None,
+        topic: None,
+        payload: Some(JsonAccess {
+            mode: AccessMode::Selective as i32,
+            paths: vec![json_path_field("hum"), json_path_field("temp")],
+        }),
+        raw_payload: Some(RawPayloadAccess {
+            mode: AccessMode::None as i32,
+            ranges: Vec::new(),
+        }),
+        metadata: None,
+        properties: None,
+    }
+}
+
+fn json_path_field(field: &str) -> JsonPath {
+    JsonPath {
+        segments: vec![JsonPathSegment {
+            kind: Some(json_path_segment::Kind::Field(field.to_string())),
+        }],
+    }
 }
 
 fn message() -> Message {

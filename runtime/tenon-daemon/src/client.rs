@@ -173,6 +173,7 @@ mod tests {
     use tenon_message::plan::{
         DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ResourceId, ScriptRuntime,
+        MessageAccessPlan,
     };
 
     #[test]
@@ -246,7 +247,7 @@ mod tests {
             process: Some(ProcessPlan {
                 runtime: ScriptRuntime::Lua as i32,
                 source: process_source.to_string(),
-                access_plan: None,
+                access_plan: Some(MessageAccessPlan::default()),
             }),
             egress: Some(EgressPlan {}),
         }

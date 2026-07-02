@@ -119,6 +119,7 @@ where
         &mut self,
         pipeline: DeploymentPlan,
     ) -> DaemonResult<DaemonPutPipelineResult> {
+        validate_put_pipeline(&pipeline)?;
         let pipeline = self.assign_pipeline_revision(pipeline).await?;
         let id = pipeline
             .id
@@ -312,6 +313,17 @@ where
     }
 }
 
+fn validate_put_pipeline(plan: &DeploymentPlan) -> DaemonResult<()> {
+    let process = plan
+        .process
+        .as_ref()
+        .ok_or_else(|| DaemonError::invalid_state("process plan is missing"))?;
+    if process.access_plan.is_none() {
+        return Err(DaemonError::invalid_state("process access_plan is missing"));
+    }
+    Ok(())
+}
+
 fn can_reload_process_only(current: &DeploymentPlan, target: &DeploymentPlan) -> bool {
     let Some(current_id) = current.id.as_ref() else {
         return false;
@@ -352,7 +364,7 @@ mod tests {
     use futures::executor::block_on;
     use tenon_message::plan::{
         EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
-        MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ScriptRuntime,
+        MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ScriptRuntime, MessageAccessPlan,
     };
 
     #[test]
@@ -469,7 +481,7 @@ mod tests {
             process: Some(ProcessPlan {
                 runtime: ScriptRuntime::Lua as i32,
                 source: process_source.to_string(),
-                access_plan: None,
+                access_plan: Some(MessageAccessPlan::default()),
             }),
             egress: Some(EgressPlan {}),
         }

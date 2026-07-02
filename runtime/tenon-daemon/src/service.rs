@@ -101,6 +101,7 @@ mod tests {
     use tenon_message::plan::{
         DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ResourceId, ScriptRuntime,
+        MessageAccessPlan,
     };
 
     #[test]
@@ -132,6 +133,33 @@ mod tests {
 
             assert!(!response.accepted);
             assert_eq!(response.message, "pipeline is missing");
+        });
+    }
+
+    #[test]
+    fn rejects_put_pipeline_without_process_access_plan() {
+        block_on(async {
+            let mut service = service();
+            let mut plan = plan("function on_message(ctx, msg) end");
+            plan.process.as_mut().expect("process").access_plan = None;
+
+            let response = service
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan),
+                })
+                .await;
+
+            assert!(!response.accepted);
+            assert!(response.message.contains("process access_plan is missing"));
+
+            let apply = service
+                .handle_apply_resource(ApplyResourceRequest {
+                    pipeline_name: "sensor-pipeline".to_string(),
+                    pipeline_ver: None,
+                })
+                .await;
+            assert!(!apply.accepted);
+            assert!(apply.message.contains("pipeline resource not found"));
         });
     }
 
@@ -281,7 +309,7 @@ mod tests {
             process: Some(ProcessPlan {
                 runtime: ScriptRuntime::Lua as i32,
                 source: process_source.to_string(),
-                access_plan: None,
+                access_plan: Some(MessageAccessPlan::default()),
             }),
             egress: Some(EgressPlan {}),
         }

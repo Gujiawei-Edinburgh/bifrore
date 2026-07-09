@@ -9,7 +9,6 @@ spec:
   clientCount: 2
   auth:
     script:
-      runtime: lua
       source: |
         function credentials(ctx)
           return {
@@ -33,7 +32,6 @@ spec:
   clientCount: 1
   auth:
     script:
-      runtime: lua
       source: |
         function credentials(ctx)
           return {
@@ -51,7 +49,6 @@ kind: Process
 metadata:
   name: sensor-process
 spec:
-  runtime: lua
   source: |
     function on_message(ctx, msg)
       local payload = msg.payload

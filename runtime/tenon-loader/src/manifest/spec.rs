@@ -76,18 +76,14 @@ impl AuthSpec {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct InlineScriptSpec {
-    pub(crate) runtime: ScriptRuntimeSpec,
     pub(crate) source: String,
 }
 
 impl InlineScriptSpec {
     fn validate(&self) -> Result<(), LoaderError> {
-        match self.runtime {
-            ScriptRuntimeSpec::Lua => {
-                validate_lua_function("auth.script.source", &self.source, AUTH_CREDENTIALS_FN, 1)
-            }
-        }
+        validate_lua_function("auth.script.source", &self.source, AUTH_CREDENTIALS_FN, 1)
     }
 }
 
@@ -112,12 +108,6 @@ pub(crate) enum PayloadDecodeSpec {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum ScriptRuntimeSpec {
-    Lua,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EgressSpec {}
@@ -130,16 +120,13 @@ impl EgressSpec {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ProcessSpec {
-    pub(crate) runtime: ScriptRuntimeSpec,
     pub(crate) source: String,
 }
 
 impl ProcessSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        match self.runtime {
-            ScriptRuntimeSpec::Lua => {}
-        }
         require_non_empty("Process.spec.source", &self.source)
     }
 }

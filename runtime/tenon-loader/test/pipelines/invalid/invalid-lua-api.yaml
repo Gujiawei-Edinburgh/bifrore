@@ -15,7 +15,6 @@ kind: Process
 metadata:
   name: process
 spec:
-  runtime: lua
   source: |
     function on_message(ctx, msg)
       local m = msg

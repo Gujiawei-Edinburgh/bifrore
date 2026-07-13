@@ -1,6 +1,4 @@
 use serde::Deserialize;
-use tenon_extension::AUTH_CREDENTIALS_FN;
-
 use crate::{lua, LoaderError, LoaderErrorKind};
 
 use super::ManifestResourceKind;
@@ -68,7 +66,7 @@ pub(crate) struct InlineScriptSpec {
 
 impl InlineScriptSpec {
     fn validate(&self) -> Result<(), LoaderError> {
-        validate_lua_function("auth.script.source", &self.source, AUTH_CREDENTIALS_FN, 1)
+        validate_lua_function("auth.script.source", &self.source)
     }
 }
 
@@ -212,12 +210,10 @@ fn script_error(message: impl Into<String>) -> LoaderError {
 fn validate_lua_function(
     field: &str,
     source: &str,
-    function_name: &str,
-    expected_arity: usize,
 ) -> Result<(), LoaderError> {
     if source.trim().is_empty() {
         return Err(script_error(format!("{field} must not be empty")));
     }
-    lua::validate_extension_function(source, function_name, expected_arity)
+    lua::validate_auth_function(source)
         .map_err(|error| script_error(format!("{field}: {error}")))
 }

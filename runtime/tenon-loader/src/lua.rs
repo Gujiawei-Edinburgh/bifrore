@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use tenon_extension::{
-    Context, MemoryView, Message, MqttMetadata, PROCESS_ON_MESSAGE_FN, ScriptApi, SourceContext,
-    Topic,
+    Context, MemoryView, Message, MqttMetadata, AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN,
+    ScriptApi, SourceContext, Topic,
 };
 use tenon_message::{
     daemon::v1::json_path_segment,
@@ -12,10 +12,15 @@ use tenon_message::{
 };
 use tree_sitter::{Node, Parser, Tree};
 
-pub(crate) fn validate_extension_function(
+pub(crate) fn validate_auth_function(source: &str) -> Result<(), String> {
+    validate_function(source, AUTH_CREDENTIALS_FN, 1, ScriptKind::Auth)
+}
+
+fn validate_function(
     source: &str,
     function_name: &str,
     expected_arity: usize,
+    kind: ScriptKind,
 ) -> Result<(), String> {
     let tree = parse(source)?;
     let root = tree.root_node();
@@ -40,7 +45,7 @@ pub(crate) fn validate_extension_function(
         function,
         source.as_bytes(),
         expected_arity,
-        function_name == PROCESS_ON_MESSAGE_FN,
+        kind,
     )?;
 
     Ok(())
@@ -67,7 +72,7 @@ pub(crate) fn analyze_process_access_plan(source: &str) -> Result<MessageAccessP
         ));
     }
 
-    let mut env = TypeEnv::new(function, source.as_bytes(), 2, true)?;
+    let mut env = TypeEnv::new(function, source.as_bytes(), 2, ScriptKind::Process)?;
     analyze_node(function, source.as_bytes(), &mut env)?;
     Ok(env.access.into_plan())
 }
@@ -443,9 +448,16 @@ fn json_path_segment(segment: AccessPathSegment) -> JsonPathSegment {
 }
 
 #[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScriptKind {
+    Auth,
+    Process,
+}
+
+#[derive(Debug)]
 struct TypeEnv {
     variables: HashMap<String, Binding>,
-    process_function: bool,
+    kind: ScriptKind,
     access: AccessPlanBuilder,
 }
 
@@ -454,7 +466,7 @@ impl TypeEnv {
         function: Node<'_>,
         source: &[u8],
         expected_arity: usize,
-        process_function: bool,
+        kind: ScriptKind,
     ) -> Result<Self, String> {
         let params = function_parameters(function, source)
             .ok_or_else(|| "failed to inspect Lua extension function parameters".to_string())?;
@@ -467,7 +479,7 @@ impl TypeEnv {
         }
         Ok(Self {
             variables,
-            process_function,
+            kind,
             access: AccessPlanBuilder::default(),
         })
     }
@@ -506,9 +518,9 @@ fn validate_extension_usage(
     function: Node<'_>,
     source: &[u8],
     expected_arity: usize,
-    process_function: bool,
+    kind: ScriptKind,
 ) -> Result<(), String> {
-    let mut env = TypeEnv::new(function, source, expected_arity, process_function)?;
+    let mut env = TypeEnv::new(function, source, expected_arity, kind)?;
     analyze_node(function, source, &mut env)
 }
 
@@ -522,7 +534,7 @@ fn analyze_node(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> Result<(), 
             analyze_variable_declaration(node, source, env)?;
             return Ok(());
         }
-        "return_statement" if env.process_function => {
+        "return_statement" if env.kind == ScriptKind::Process => {
             return Err("on_message must not return".to_string());
         }
         "function_call" => validate_function_call(node, source, env)?,
@@ -630,7 +642,7 @@ fn validate_function_call(node: Node<'_>, source: &[u8], env: &mut TypeEnv) -> R
         if args != 1 {
             return Err(format!("ctx.emit expects 1 arg, got {args}"));
         }
-        if env.process_function {
+        if env.kind == ScriptKind::Process {
             validate_emit_payload_arg(node, source)?;
         }
     }
@@ -752,9 +764,22 @@ fn infer_dot_index_type(
     let field = field.utf8_text(source).unwrap_or_default();
     match table_binding.ty {
         StaticType::Ctx => match field {
-            field if field == script_field::<Context>("memory") => Ok((StaticType::Memory, AccessBinding::None)),
-            field if field == script_field::<Context>("source") => Ok((StaticType::Source, AccessBinding::Source)),
-            field if field == script_field::<Context>("emit") => Ok((StaticType::EmitFn, AccessBinding::None)),
+            field if field == script_field::<Context>("source") => {
+                Ok((StaticType::Source, AccessBinding::Source))
+            }
+            field if env.kind == ScriptKind::Process
+                && field == script_field::<Context>("memory") =>
+            {
+                Ok((StaticType::Memory, AccessBinding::None))
+            }
+            field if env.kind == ScriptKind::Process
+                && field == script_field::<Context>("emit") =>
+            {
+                Ok((StaticType::EmitFn, AccessBinding::None))
+            }
+            _ if env.kind == ScriptKind::Auth => {
+                Err(format!("invalid auth ctx field: {field}"))
+            }
             _ => Err(format!("invalid ctx field: {field}")),
         },
         StaticType::Msg => match field {
@@ -945,6 +970,19 @@ mod tests {
     use super::*;
     use tenon_extension::{AUTH_CREDENTIALS_FN, PROCESS_ON_MESSAGE_FN};
 
+    fn validate_extension_function(
+        source: &str,
+        function_name: &str,
+        expected_arity: usize,
+    ) -> Result<(), String> {
+        let kind = if function_name == PROCESS_ON_MESSAGE_FN {
+            ScriptKind::Process
+        } else {
+            ScriptKind::Auth
+        };
+        validate_function(source, function_name, expected_arity, kind)
+    }
+
     fn path_fields(path: &JsonPath) -> Vec<&str> {
         path.segments
             .iter()
@@ -1034,6 +1072,50 @@ end
     }
 
     #[test]
+    fn rejects_auth_memory_access() {
+        let error = validate_extension_function(
+            "function credentials(ctx) return ctx.memory.get('token') end",
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect_err("auth memory access");
+        assert!(error.contains("invalid auth ctx field: memory"));
+    }
+
+    #[test]
+    fn accept_auth_source_access() {
+        let r = validate_extension_function(
+            r#"
+function credentials(ctx)
+  return {
+    type = "custom",
+    username = ctx.source.version,
+    password = signature,
+    properties = {
+      timestamp = ts,
+      signature = signature
+    }
+  }
+end
+"#,
+            AUTH_CREDENTIALS_FN,
+            1,
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn rejects_auth_emit_access() {
+        let error = validate_extension_function(
+            "function credentials(ctx) ctx.emit({ token = 'x' }) end",
+            AUTH_CREDENTIALS_FN,
+            1,
+        )
+        .expect_err("auth emit access");
+        assert!(error.contains("invalid auth ctx field: emit"));
+    }
+
+    #[test]
     fn validates_assigned_extension_function() {
         validate_extension_function(
             "on_message = function(ctx, msg) ctx.emit(msg.payload) end",
@@ -1118,7 +1200,7 @@ end
         let tree = parse(source).expect("tree");
         let function = find_global_function(tree.root_node(), source.as_bytes(), PROCESS_ON_MESSAGE_FN)
             .expect("function");
-        let mut env = TypeEnv::new(function, source.as_bytes(), 2, true).expect("env");
+        let mut env = TypeEnv::new(function, source.as_bytes(), 2, ScriptKind::Process).expect("env");
         analyze_node(function, source.as_bytes(), &mut env).expect("analysis");
 
         assert_eq!(env.value("key"), StaticValue::String("temp".to_string()));
@@ -1140,7 +1222,7 @@ end
         let tree = parse(source).expect("tree");
         let function = find_global_function(tree.root_node(), source.as_bytes(), PROCESS_ON_MESSAGE_FN)
             .expect("function");
-        let mut env = TypeEnv::new(function, source.as_bytes(), 2, true).expect("env");
+        let mut env = TypeEnv::new(function, source.as_bytes(), 2, ScriptKind::Process).expect("env");
         analyze_node(function, source.as_bytes(), &mut env).expect("analysis");
 
         assert_eq!(env.value("key"), StaticValue::Unknown);

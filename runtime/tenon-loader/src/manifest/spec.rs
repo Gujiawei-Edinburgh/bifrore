@@ -49,29 +49,14 @@ pub(crate) struct MqttBrokerSpec {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum AuthSpec {
-    Static {
-        username: String,
-        password: String,
-    },
-    Script {
-        script: InlineScriptSpec,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthSpec {
+    pub(crate) script: InlineScriptSpec,
 }
 
 impl AuthSpec {
     pub(crate) fn validate(&self) -> Result<(), LoaderError> {
-        match self {
-            Self::Static { username, password } => {
-                require_non_empty("auth.username", username)?;
-                require_non_empty("auth.password", password)
-            }
-            Self::Script { script } => {
-                script.validate()?;
-                Ok(())
-            }
-        }
+        self.script.validate()
     }
 }
 

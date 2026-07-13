@@ -6,7 +6,6 @@ pub type ExtensionValue = serde_json::Value;
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum AuthResult {
     UsernamePassword { username: String, password: String },
-    BearerToken { token: String },
     ClientCertificate {
         cert_path: String,
         key_path: String,
@@ -24,12 +23,6 @@ impl AuthResult {
         Self::UsernamePassword {
             username: username.into(),
             password: password.into(),
-        }
-    }
-
-    pub fn bearer_token(token: impl Into<String>) -> Self {
-        Self::BearerToken {
-            token: token.into(),
         }
     }
 

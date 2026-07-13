@@ -1,4 +1,5 @@
 mod egress;
+mod auth;
 mod metrics;
 mod mqtt;
 mod pipeline;

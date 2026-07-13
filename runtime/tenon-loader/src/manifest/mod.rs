@@ -12,7 +12,7 @@ use spec::{
 use crate::{
     auth_plan, AuthPlan, DeploymentPlan, EgressPlan, ExecutionMode, LoaderError, LoaderErrorKind,
     MqttBrokerPlan, MqttSourcePlan, MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan,
-    ResourceId, ScriptModule, ScriptRuntime, UsernamePasswordAuth,
+    ResourceId, ScriptModule, ScriptRuntime,
 };
 
 const API_VERSION: &str = "tenon.apache.org/v1alpha1";
@@ -234,16 +234,10 @@ impl ResourceRegistry {
             None => Ok(AuthPlan {
                 kind: Some(auth_plan::Kind::None(NoAuth {})),
             }),
-            Some(AuthSpec::Static { username, password }) => Ok(AuthPlan {
-                kind: Some(auth_plan::Kind::UsernamePassword(UsernamePasswordAuth {
-                    username,
-                    password,
-                })),
-            }),
-            Some(AuthSpec::Script { script }) => Ok(AuthPlan {
+            Some(auth) => Ok(AuthPlan {
                 kind: Some(auth_plan::Kind::Script(ScriptModule {
                     runtime: ScriptRuntime::Lua as i32,
-                    source: script.source,
+                    source: auth.script.source,
                 })),
             }),
         }

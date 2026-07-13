@@ -3,5 +3,5 @@ pub use crate::daemon::v1::{
     JsonAccess, JsonPath, JsonPathSegment, MessageAccessPlan, MetadataAccess, MqttBrokerPlan,
     MqttClientIds, MqttSourceClientIds, MqttSourcePlan, MqttSubscriptionPlan, NoAuth,
     PayloadDecodePlan, ProcessPlan, PropertiesAccess, RawPayloadAccess, Resource, resource,
-    ResourceId, ScriptModule, ScriptRuntime, SourceAccess, TopicAccess, UsernamePasswordAuth,
+    ResourceId, ScriptModule, ScriptRuntime, SourceAccess, TopicAccess,
 };

@@ -1,10 +1,11 @@
+use crate::auth::resolve_auth;
 use crate::{WorkerError, WorkerResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tenon_extension::{ExtensionValue, Message, MqttMetadata, SourceContext, Topic};
-use tenon_message::plan::{auth_plan, MqttSourcePlan, ResourceId, UsernamePasswordAuth};
+use tenon_extension::{AuthResult, ExtensionValue, Message, MqttMetadata, SourceContext, Topic};
+use tenon_message::plan::{MqttSourcePlan, ResourceId};
 
 #[derive(Debug, Clone)]
 pub struct MqttAdapterConfig {
@@ -127,6 +128,14 @@ pub fn start_mqtt(
             let mut tasks = Vec::with_capacity(client_count as usize);
             let mut subscribed_clients = 0usize;
 
+            let auth = match resolve_auth(config.source.auth.as_ref(), &config.source_context()) {
+                Ok(auth) => auth,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                    return;
+                }
+            };
+
             for client_id in config.client_ids.iter() {
                 let mut mqtt_options =
                     MqttOptions::new(client_id.clone(), broker.host.clone(), broker.port as u16);
@@ -136,7 +145,10 @@ pub fn start_mqtt(
                 let mut connect_properties = rumqttc::v5::mqttbytes::v5::ConnectProperties::new();
                 connect_properties.session_expiry_interval = Some(config.session_expiry_interval);
                 mqtt_options.set_connect_properties(connect_properties);
-                apply_auth(&mut mqtt_options, config.source.auth.as_ref());
+                if let Err(error) = apply_auth(&mut mqtt_options, auth.as_ref()) {
+                    let _ = ready_tx.send(Err(error));
+                    return;
+                }
 
                 let (client, event_loop) =
                     AsyncClient::new(mqtt_options, config.queue_capacity.max(1));
@@ -189,15 +201,60 @@ pub fn start_mqtt(
     }
 }
 
-fn apply_auth(mqtt_options: &mut rumqttc::v5::MqttOptions, auth: Option<&tenon_message::plan::AuthPlan>) {
+fn apply_auth(
+    mqtt_options: &mut rumqttc::v5::MqttOptions,
+    auth: Option<&AuthResult>,
+) -> WorkerResult<()> {
     let Some(auth) = auth else {
-        return;
+        return Ok(());
     };
-    if let Some(auth_plan::Kind::UsernamePassword(UsernamePasswordAuth { username, password })) =
-        auth.kind.as_ref()
-    {
-        mqtt_options.set_credentials(username.clone(), password.clone());
+    match auth {
+        AuthResult::UsernamePassword { username, password } => {
+            mqtt_options.set_credentials(username.clone(), password.clone());
+            Ok(())
+        }
+        AuthResult::Custom {
+            username,
+            password,
+            properties,
+        } => {
+            if let (Some(username), Some(password)) = (username, password) {
+                mqtt_options.set_credentials(username.clone(), password.clone());
+            }
+            let mut connect_properties = mqtt_options
+                .connect_properties()
+                .unwrap_or_else(rumqttc::v5::mqttbytes::v5::ConnectProperties::new);
+            connect_properties.user_properties.extend(properties.clone());
+            mqtt_options.set_connect_properties(connect_properties);
+            Ok(())
+        }
+        AuthResult::ClientCertificate {
+            cert_path,
+            key_path,
+            ca_path,
+        } => {
+            let ca_path = ca_path.as_deref().ok_or_else(|| {
+                WorkerError::mqtt(
+                    "client-certificate MQTT auth requires ca_path for server certificate verification",
+                )
+            })?;
+            let ca = read_auth_file(ca_path)?;
+            let certificate = read_auth_file(cert_path)?;
+            let private_key = read_auth_file(key_path)?;
+            mqtt_options.set_transport(rumqttc::Transport::tls(
+                ca,
+                Some((certificate, private_key)),
+                None,
+            ));
+            Ok(())
+        }
     }
+}
+
+fn read_auth_file(path: &str) -> WorkerResult<Vec<u8>> {
+    std::fs::read(path).map_err(|error| {
+        WorkerError::mqtt(format!("failed to read MQTT TLS credential {path}: {error}"))
+    })
 }
 
 async fn subscribe_topics(

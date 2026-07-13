@@ -82,19 +82,14 @@ message MqttBrokerPlan {
 }
 
 message AuthPlan {
+  reserved 2;
   oneof kind {
     NoAuth none = 1;
-    UsernamePasswordAuth username_password = 2;
     ScriptModule script = 3;
   }
 }
 
 message NoAuth {}
-
-message UsernamePasswordAuth {
-  string username = 1;
-  string password = 2;
-}
 
 message MqttSubscriptionPlan {
   string topic = 1;

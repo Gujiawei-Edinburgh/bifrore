@@ -991,24 +991,6 @@ end
     }
 
     #[test]
-    fn validates_credentials_bearer_token_shape() {
-        validate_extension_function(
-            r#"
-function credentials(ctx)
-  local token = "token-" .. "value"
-  return {
-    type = "bearer-token",
-    token = token
-  }
-end
-"#,
-            AUTH_CREDENTIALS_FN,
-            1,
-        )
-        .expect("bearer-token credentials");
-    }
-
-    #[test]
     fn validates_credentials_client_certificate_shape() {
         validate_extension_function(
             r#"

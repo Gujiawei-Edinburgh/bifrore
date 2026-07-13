@@ -8,5 +8,5 @@ pub use loader::Loader;
 pub use tenon_message::plan::{
     auth_plan, AuthPlan, DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan,
     MqttSourcePlan, MqttSubscriptionPlan, NoAuth, PayloadDecodePlan, ProcessPlan, ResourceId,
-    ScriptModule, ScriptRuntime, UsernamePasswordAuth,
+    ScriptModule, ScriptRuntime,
 };

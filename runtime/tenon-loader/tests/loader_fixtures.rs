@@ -1,5 +1,5 @@
 use tenon_loader::{Loader, LoaderErrorKind};
-use tenon_message::{daemon::v1::json_path_segment, plan::AccessMode};
+use tenon_message::{daemon::v1::json_path_segment, plan::auth_plan, plan::AccessMode};
 
 fn fixture(path: &str) -> &'static str {
     match path {
@@ -34,6 +34,23 @@ fn loads_sensor_pipeline_fixture() {
     let id = plan.id.as_ref().expect("plan id");
     assert_eq!(id.name, "sensor-ingest");
     assert_eq!(plan.sources.len(), 2);
+
+    let first_auth = plan.sources[0]
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.kind.as_ref())
+        .expect("first auth");
+    assert!(matches!(
+        first_auth,
+        auth_plan::Kind::Script(script) if script.source.contains("function credentials")
+    ));
+
+    let script_auth = plan.sources[1]
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.kind.as_ref())
+        .expect("script auth");
+    assert!(matches!(script_auth, auth_plan::Kind::Script(script) if script.source.contains("function credentials")));
 
     let process = plan.process.as_ref().expect("process plan");
     assert!(process.source.contains("function on_message"));

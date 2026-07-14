@@ -13,8 +13,8 @@ spec:
         function credentials(ctx)
           return {
             type = "username-password",
-            username = "dev",
-            password = "dev"
+            username = "{{TENON_MQTT_USERNAME}}",
+            password = "{{TENON_MQTT_PASSWORD}}"
           }
         end
   subscriptions:
@@ -36,8 +36,8 @@ spec:
         function credentials(ctx)
           return {
             type = "username-password",
-            username = "dev",
-            password = "dev"
+            username = "{{TENON_MQTT_USERNAME}}",
+            password = "{{TENON_MQTT_PASSWORD}}"
           }
         end
   subscriptions:

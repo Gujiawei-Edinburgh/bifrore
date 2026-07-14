@@ -8,6 +8,7 @@ pub struct LoaderError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoaderErrorKind {
     EmptyManifest,
+    EnvironmentVariable,
     ManifestParsing,
     ResourceValidation,
     ReferenceResolution,

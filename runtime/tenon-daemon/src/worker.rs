@@ -3,7 +3,7 @@ use crate::DaemonResult;
 use prost::Message;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -39,16 +39,17 @@ pub struct WorkerDeployment {
     pub source_client_ids: Vec<MqttSourceClientIds>,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait WorkerManager {
-    fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle>;
+    async fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle>;
 
-    fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()>;
+    async fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()>;
 
-    fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()>;
+    async fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()>;
 
-    fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus>;
+    async fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus>;
 
-    fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats>;
+    async fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats>;
 }
 
 #[derive(Debug, Default)]
@@ -57,14 +58,14 @@ pub struct NoopWorkerManager {
 }
 
 impl WorkerManager for NoopWorkerManager {
-    fn start(&mut self, _deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
+    async fn start(&mut self, _deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         Ok(WorkerHandle {
             id: format!("worker-{id}"),
         })
     }
 
-    fn reload(
+    async fn reload(
         &mut self,
         _worker: &WorkerHandle,
         _plan: DeploymentPlan,
@@ -72,15 +73,15 @@ impl WorkerManager for NoopWorkerManager {
         Ok(())
     }
 
-    fn stop(&mut self, _worker: WorkerHandle) -> DaemonResult<()> {
+    async fn stop(&mut self, _worker: WorkerHandle) -> DaemonResult<()> {
         Ok(())
     }
 
-    fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
+    async fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
         Ok(WorkerStatus::Running)
     }
 
-    fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+    async fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
         Ok(WorkerStats::default())
     }
 }
@@ -124,7 +125,7 @@ impl UdsWorkerManager {
 }
 
 impl WorkerManager for UdsWorkerManager {
-    fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
+    async fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
         let id = self.next_worker_id(&deployment.plan)?;
         let socket_path = self.socket_path(&id);
         prepare_socket(&self.config.socket_dir, &socket_path)?;
@@ -167,7 +168,7 @@ impl WorkerManager for UdsWorkerManager {
         Ok(handle)
     }
 
-    fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()> {
+    async fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()> {
         let process = self.worker_mut(worker)?;
         send_worker_envelope(
             &mut process.stream,
@@ -179,7 +180,7 @@ impl WorkerManager for UdsWorkerManager {
         )
     }
 
-    fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()> {
+    async fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()> {
         let Some(mut process) = self.workers.remove(&worker.id) else {
             return Err(DaemonError::not_found(format!(
                 "worker not found: {}",
@@ -198,7 +199,7 @@ impl WorkerManager for UdsWorkerManager {
         send_result.and(stop_result)
     }
 
-    fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
+    async fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
         let process = self.worker_mut(worker)?;
         match process.child.try_wait() {
             Ok(Some(status)) if status.success() => {
@@ -217,31 +218,23 @@ impl WorkerManager for UdsWorkerManager {
         }
     }
 
-    fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+    async fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
         let timeout = self.config.connect_timeout;
         let process = self.worker_mut(worker)?;
-        process
-            .stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|error| DaemonError::worker(format!("failed to configure worker stats timeout: {error}")))?;
-        send_worker_envelope(
-            &mut process.stream,
-            WorkerEnvelope {
-                payload: Some(worker_envelope::Payload::GetWorkerStats(
-                    GetWorkerStatsRequest {},
-                )),
-            },
-        )?;
-        let response = read_worker_response(&mut process.stream)?;
-        let Some(worker_response_envelope::Payload::WorkerStats(response)) = response.payload else {
-            return Err(DaemonError::worker("worker stats response payload is missing"));
-        };
-        if !response.error.is_empty() {
-            return Err(DaemonError::worker(response.error));
-        }
-        response
-            .stats
-            .ok_or_else(|| DaemonError::worker("worker stats are missing"))
+            process
+                .stream
+                .set_nonblocking(true)
+                .map_err(|error| DaemonError::worker(format!("failed to configure worker stats stream: {error}")))?;
+            let stream = process
+                .stream
+                .try_clone()
+                .map_err(|error| DaemonError::worker(format!("failed to clone worker stats stream: {error}")))?;
+            let result = tokio::time::timeout(timeout, read_worker_stats(stream)).await;
+            let restore_result = process.stream.set_nonblocking(false);
+            restore_result
+                .map_err(|error| DaemonError::worker(format!("failed to restore worker stats stream: {error}")))?;
+        result
+            .map_err(|_| DaemonError::worker("timed out waiting for worker stats"))?
     }
 }
 
@@ -361,18 +354,46 @@ fn send_worker_envelope(stream: &mut UnixStream, envelope: WorkerEnvelope) -> Da
         .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))
 }
 
-fn read_worker_response(stream: &mut UnixStream) -> DaemonResult<WorkerResponseEnvelope> {
+async fn read_worker_stats(stream: UnixStream) -> DaemonResult<WorkerStats> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::UnixStream::from_std(stream).map_err(|error| {
+        DaemonError::worker(format!("failed to create async worker stats stream: {error}"))
+    })?;
+    let request = WorkerEnvelope {
+        payload: Some(worker_envelope::Payload::GetWorkerStats(
+            GetWorkerStatsRequest {},
+        )),
+    };
+    let frame = encode_frame(&request)
+        .map_err(|error| DaemonError::worker(format!("failed to encode worker stats request: {error}")))?;
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| DaemonError::worker(format!("failed to send worker stats request: {error}")))?;
+
     let mut header = [0u8; 4];
     stream
         .read_exact(&mut header)
+        .await
         .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
     let len = u32::from_le_bytes(header) as usize;
     let mut payload = vec![0u8; len];
     stream
         .read_exact(&mut payload)
+        .await
         .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
-    WorkerResponseEnvelope::decode(payload.as_slice())
-        .map_err(|error| DaemonError::worker(format!("failed to decode worker response: {error}")))
+    let response = WorkerResponseEnvelope::decode(payload.as_slice())
+        .map_err(|error| DaemonError::worker(format!("failed to decode worker response: {error}")))?;
+    let Some(worker_response_envelope::Payload::WorkerStats(response)) = response.payload else {
+        return Err(DaemonError::worker("worker stats response payload is missing"));
+    };
+    if !response.error.is_empty() {
+        return Err(DaemonError::worker(response.error));
+    }
+    response
+        .stats
+        .ok_or_else(|| DaemonError::worker("worker stats are missing"))
 }
 
 fn stop_child(child: &mut Child, timeout: Duration) -> DaemonResult<()> {
@@ -403,6 +424,7 @@ fn cleanup_failed_worker(mut child: Child, socket_path: &Path) {
 mod tests {
     use super::*;
     use crate::DaemonErrorKind;
+    use futures::executor::block_on;
     use std::io::Read;
     use tenon_message::codec::decode_frame;
     use tenon_message::daemon::v1::{worker_envelope, WorkerEnvelope};
@@ -447,9 +469,7 @@ mod tests {
         let handle = insert_test_worker(&mut manager, "worker-reload", daemon_stream);
         let plan = plan();
 
-        manager
-            .reload(&handle, plan.clone())
-            .expect("reload worker");
+        block_on(manager.reload(&handle, plan.clone())).expect("reload worker");
 
         let frame = read_frame(&mut worker_stream);
         let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
@@ -459,7 +479,7 @@ mod tests {
             }
             other => panic!("unexpected worker envelope: {other:?}"),
         }
-        manager.stop(handle).expect("stop worker");
+        block_on(manager.stop(handle)).expect("stop worker");
     }
 
     #[test]
@@ -471,7 +491,7 @@ mod tests {
         let (daemon_stream, mut worker_stream) = UnixStream::pair().expect("create socket pair");
         let handle = insert_test_worker(&mut manager, "worker-stop", daemon_stream);
 
-        manager.stop(handle.clone()).expect("stop worker");
+        block_on(manager.stop(handle.clone())).expect("stop worker");
 
         let frame = read_frame(&mut worker_stream);
         let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
@@ -489,8 +509,7 @@ mod tests {
             unique_socket_dir("missing-id"),
         ));
 
-        let error = manager
-            .start(deployment(DeploymentPlan::default()))
+        let error = block_on(manager.start(deployment(DeploymentPlan::default())))
             .expect_err("missing id should fail before spawn");
 
         assert_eq!(error.kind, DaemonErrorKind::InvalidState);
@@ -507,8 +526,7 @@ mod tests {
             id: "missing-worker".to_string(),
         };
 
-        let error = manager
-            .reload(&worker, plan())
+        let error = block_on(manager.reload(&worker, plan()))
             .expect_err("unknown worker should fail");
 
         assert_eq!(error.kind, DaemonErrorKind::NotFound);

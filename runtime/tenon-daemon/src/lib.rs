@@ -155,7 +155,9 @@ where
         if let Some(active_key) = self.active_key_for_pipeline(&id) {
             if let Some(mut deployment) = self.deployments.remove(&active_key) {
                 if can_reload_process_only(&deployment.plan, &plan) {
-                    self.worker_manager.reload(&deployment.worker, plan.clone())?;
+                    self.worker_manager
+                        .reload(&deployment.worker, plan.clone())
+                        .await?;
                     deployment.id = id;
                     deployment.plan = plan;
                     self.deployments.insert(key.clone(), deployment);
@@ -171,12 +173,12 @@ where
                         mode: DaemonApplyMode::HotReload,
                     });
                 }
-                self.worker_manager.stop(deployment.worker)?;
+                self.worker_manager.stop(deployment.worker).await?;
             }
         }
 
         let worker_deployment = self.worker_deployment(&plan).await?;
-        let worker = self.worker_manager.start(worker_deployment)?;
+        let worker = self.worker_manager.start(worker_deployment).await?;
         self.deployments
             .insert(key.clone(), ActiveDeployment { id, plan, worker });
         Ok(DaemonApplyResult {
@@ -190,42 +192,43 @@ where
         })
     }
 
-    pub fn stop(&mut self) -> DaemonResult<()> {
+    pub async fn stop(&mut self) -> DaemonResult<()> {
         let deployments = std::mem::take(&mut self.deployments);
         for deployment in deployments.into_values() {
-            self.worker_manager.stop(deployment.worker)?;
+            self.worker_manager.stop(deployment.worker).await?;
         }
         Ok(())
     }
 
-    pub fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
+    pub async fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
         let deployment = self
             .deployments
             .get(id)
             .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?;
-        self.worker_manager.status(&deployment.worker)
+        self.worker_manager.status(&deployment.worker).await
     }
 
-    pub fn worker_stats(&mut self, id: &ResourceId) -> DaemonResult<WorkerStats> {
+    pub async fn worker_stats(&mut self, id: &ResourceId) -> DaemonResult<WorkerStats> {
         let worker = self
             .deployments
             .get(id)
             .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?
             .worker
             .clone();
-        self.worker_manager.stats(&worker)
+        self.worker_manager.stats(&worker).await
     }
 
-    pub fn all_worker_stats(&mut self) -> DaemonResult<Vec<(ResourceId, WorkerStats)>> {
+    pub async fn all_worker_stats(&mut self) -> DaemonResult<Vec<(ResourceId, WorkerStats)>> {
         let workers: Vec<_> = self
             .deployments
             .values()
             .map(|deployment| (deployment.id.clone(), deployment.worker.clone()))
             .collect();
-        workers
-            .into_iter()
-            .map(|(id, worker)| self.worker_manager.stats(&worker).map(|stats| (id, stats)))
-            .collect()
+        let mut stats = Vec::with_capacity(workers.len());
+        for (id, worker) in workers {
+            stats.push((id, self.worker_manager.stats(&worker).await?));
+        }
+        Ok(stats)
     }
 
     fn active_key_for_pipeline(&self, id: &ResourceId) -> Option<DeploymentKey> {
@@ -449,7 +452,7 @@ mod tests {
     }
 
     impl WorkerManager for RecordingWorkerManager {
-        fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
+        async fn start(&mut self, deployment: WorkerDeployment) -> DaemonResult<WorkerHandle> {
             self.starts.push(deployment);
             self.next_id += 1;
             Ok(WorkerHandle {
@@ -457,7 +460,7 @@ mod tests {
             })
         }
 
-        fn reload(
+        async fn reload(
             &mut self,
             _worker: &WorkerHandle,
             plan: DeploymentPlan,
@@ -466,15 +469,15 @@ mod tests {
             Ok(())
         }
 
-        fn stop(&mut self, _worker: WorkerHandle) -> DaemonResult<()> {
+        async fn stop(&mut self, _worker: WorkerHandle) -> DaemonResult<()> {
             Ok(())
         }
 
-        fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
+        async fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
             Ok(WorkerStatus::Running)
         }
 
-        fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+        async fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
             Ok(WorkerStats::default())
         }
     }

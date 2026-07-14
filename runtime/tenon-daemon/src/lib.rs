@@ -15,6 +15,7 @@ pub use worker::{
 };
 
 use std::collections::HashMap;
+use tenon_message::daemon::v1::WorkerStats;
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 
 pub type DaemonResult<T> = Result<T, DaemonError>;
@@ -203,6 +204,28 @@ where
             .get(id)
             .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?;
         self.worker_manager.status(&deployment.worker)
+    }
+
+    pub fn worker_stats(&mut self, id: &ResourceId) -> DaemonResult<WorkerStats> {
+        let worker = self
+            .deployments
+            .get(id)
+            .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?
+            .worker
+            .clone();
+        self.worker_manager.stats(&worker)
+    }
+
+    pub fn all_worker_stats(&mut self) -> DaemonResult<Vec<(ResourceId, WorkerStats)>> {
+        let workers: Vec<_> = self
+            .deployments
+            .values()
+            .map(|deployment| (deployment.id.clone(), deployment.worker.clone()))
+            .collect();
+        workers
+            .into_iter()
+            .map(|(id, worker)| self.worker_manager.stats(&worker).map(|stats| (id, stats)))
+            .collect()
     }
 
     fn active_key_for_pipeline(&self, id: &ResourceId) -> Option<DeploymentKey> {
@@ -449,6 +472,10 @@ mod tests {
 
         fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
             Ok(WorkerStatus::Running)
+        }
+
+        fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+            Ok(WorkerStats::default())
         }
     }
 

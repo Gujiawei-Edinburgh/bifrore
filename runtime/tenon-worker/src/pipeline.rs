@@ -20,6 +20,7 @@ pub struct WorkerConfig {
     pub egress_queue_capacity: usize,
     pub egress_socket_path: Option<PathBuf>,
     pub egress_send_timeout: Duration,
+    pub detailed_metrics: bool,
 }
 
 impl Default for WorkerConfig {
@@ -33,6 +34,7 @@ impl Default for WorkerConfig {
             egress_queue_capacity: 4096,
             egress_socket_path: None,
             egress_send_timeout: Duration::from_millis(5),
+            detailed_metrics: true,
         }
     }
 }
@@ -62,7 +64,7 @@ impl ActivePipeline {
             pipeline_id.version.clone(),
         ));
         let processor = processor_from_plan(plan.process.clone(), context)?;
-        let metrics = Arc::new(WorkerMetrics::default());
+        let metrics = Arc::new(WorkerMetrics::new(config.detailed_metrics));
         let egress = EgressRuntime::start(
             plan.egress.clone(),
             EgressConfig {

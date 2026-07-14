@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WorkerMetrics {
+    detailed: bool,
     processed_messages: AtomicU64,
     processor_errors: AtomicU64,
     emitted_records: AtomicU64,
@@ -17,7 +18,32 @@ pub struct WorkerMetrics {
     egress_dropped_encode_error_records: AtomicU64,
 }
 
+impl Default for WorkerMetrics {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
 impl WorkerMetrics {
+    pub fn new(detailed: bool) -> Self {
+        Self {
+            detailed,
+            processed_messages: AtomicU64::new(0),
+            processor_errors: AtomicU64::new(0),
+            emitted_records: AtomicU64::new(0),
+            egress_enqueued_records: AtomicU64::new(0),
+            egress_delivered_records: AtomicU64::new(0),
+            egress_dropped_records: AtomicU64::new(0),
+            egress_dropped_queue_full_records: AtomicU64::new(0),
+            egress_dropped_stopped_records: AtomicU64::new(0),
+            egress_dropped_no_consumer_records: AtomicU64::new(0),
+            egress_dropped_slow_consumer_records: AtomicU64::new(0),
+            egress_dropped_incomplete_frame_records: AtomicU64::new(0),
+            egress_dropped_oversized_records: AtomicU64::new(0),
+            egress_dropped_encode_error_records: AtomicU64::new(0),
+        }
+    }
+
     pub fn record_processed_message(&self) {
         self.processed_messages.fetch_add(1, Ordering::Relaxed);
     }
@@ -53,7 +79,9 @@ impl WorkerMetrics {
     pub fn record_egress_dropped_records(&self, reason: EgressDropReason, count: usize) {
         self.egress_dropped_records
             .fetch_add(count as u64, Ordering::Relaxed);
-        reason.counter(self).fetch_add(count as u64, Ordering::Relaxed);
+        if self.detailed {
+            reason.counter(self).fetch_add(count as u64, Ordering::Relaxed);
+        }
     }
 
     pub fn snapshot(&self) -> WorkerMetricsSnapshot {
@@ -129,4 +157,27 @@ pub struct WorkerMetricsSnapshot {
     pub egress_dropped_incomplete_frame_records: u64,
     pub egress_dropped_oversized_records: u64,
     pub egress_dropped_encode_error_records: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detailed_drop_counters_can_be_disabled() {
+        let metrics = WorkerMetrics::new(false);
+        metrics.record_egress_dropped_record(EgressDropReason::SlowConsumer);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.egress_dropped_records, 1);
+        assert_eq!(snapshot.egress_dropped_slow_consumer_records, 0);
+    }
+
+    #[test]
+    fn detailed_drop_counters_are_enabled_by_default() {
+        let metrics = WorkerMetrics::default();
+        metrics.record_egress_dropped_record(EgressDropReason::SlowConsumer);
+
+        assert_eq!(metrics.snapshot().egress_dropped_slow_consumer_records, 1);
+    }
 }

@@ -1,8 +1,9 @@
 use crate::DaemonError;
 use crate::DaemonResult;
+use prost::Message;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tenon_message::codec::encode_frame;
 use tenon_message::daemon::v1::{
-    worker_envelope, ReloadWorkerRequest, StartWorkerRequest, StopWorkerRequest, WorkerEnvelope,
+    worker_envelope, worker_response_envelope, GetWorkerStatsRequest, ReloadWorkerRequest,
+    StartWorkerRequest, StopWorkerRequest, WorkerEnvelope, WorkerResponseEnvelope, WorkerStats,
 };
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 use wait_timeout::ChildExt;
@@ -45,6 +47,8 @@ pub trait WorkerManager {
     fn stop(&mut self, worker: WorkerHandle) -> DaemonResult<()>;
 
     fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus>;
+
+    fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats>;
 }
 
 #[derive(Debug, Default)]
@@ -74,6 +78,10 @@ impl WorkerManager for NoopWorkerManager {
 
     fn status(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
         Ok(WorkerStatus::Running)
+    }
+
+    fn stats(&mut self, _worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+        Ok(WorkerStats::default())
     }
 }
 
@@ -208,6 +216,33 @@ impl WorkerManager for UdsWorkerManager {
             ))),
         }
     }
+
+    fn stats(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStats> {
+        let timeout = self.config.connect_timeout;
+        let process = self.worker_mut(worker)?;
+        process
+            .stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| DaemonError::worker(format!("failed to configure worker stats timeout: {error}")))?;
+        send_worker_envelope(
+            &mut process.stream,
+            WorkerEnvelope {
+                payload: Some(worker_envelope::Payload::GetWorkerStats(
+                    GetWorkerStatsRequest {},
+                )),
+            },
+        )?;
+        let response = read_worker_response(&mut process.stream)?;
+        let Some(worker_response_envelope::Payload::WorkerStats(response)) = response.payload else {
+            return Err(DaemonError::worker("worker stats response payload is missing"));
+        };
+        if !response.error.is_empty() {
+            return Err(DaemonError::worker(response.error));
+        }
+        response
+            .stats
+            .ok_or_else(|| DaemonError::worker("worker stats are missing"))
+    }
 }
 
 impl UdsWorkerManager {
@@ -324,6 +359,20 @@ fn send_worker_envelope(stream: &mut UnixStream, envelope: WorkerEnvelope) -> Da
         .write_all(&frame)
         .and_then(|_| stream.flush())
         .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))
+}
+
+fn read_worker_response(stream: &mut UnixStream) -> DaemonResult<WorkerResponseEnvelope> {
+    let mut header = [0u8; 4];
+    stream
+        .read_exact(&mut header)
+        .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
+    let len = u32::from_le_bytes(header) as usize;
+    let mut payload = vec![0u8; len];
+    stream
+        .read_exact(&mut payload)
+        .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
+    WorkerResponseEnvelope::decode(payload.as_slice())
+        .map_err(|error| DaemonError::worker(format!("failed to decode worker response: {error}")))
 }
 
 fn stop_child(child: &mut Child, timeout: Duration) -> DaemonResult<()> {

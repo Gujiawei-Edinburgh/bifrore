@@ -202,12 +202,42 @@ message ReloadWorkerRequest {
 
 message StopWorkerRequest {}
 
+message GetWorkerStatsRequest {}
+
+message GetWorkerStatsResponse {
+  WorkerStats stats = 1;
+  string error = 2;
+}
+
+message WorkerStats {
+  uint64 processed_messages = 1;
+  uint64 processor_errors = 2;
+  uint64 emitted_records = 3;
+  uint64 egress_enqueued_records = 4;
+  uint64 egress_delivered_records = 5;
+  uint64 egress_dropped_records = 6;
+  uint64 egress_dropped_queue_full_records = 7;
+  uint64 egress_dropped_stopped_records = 8;
+  uint64 egress_dropped_no_consumer_records = 9;
+  uint64 egress_dropped_slow_consumer_records = 10;
+  uint64 egress_dropped_incomplete_frame_records = 11;
+  uint64 egress_dropped_oversized_records = 12;
+  uint64 egress_dropped_encode_error_records = 13;
+}
+
 message WorkerEnvelope {
   oneof payload {
     StartWorkerRequest start_worker = 1;
     Heartbeat heartbeat = 2;
     ReloadWorkerRequest reload_worker = 3;
     StopWorkerRequest stop_worker = 4;
+    GetWorkerStatsRequest get_worker_stats = 5;
+  }
+}
+
+message WorkerResponseEnvelope {
+  oneof payload {
+    GetWorkerStatsResponse worker_stats = 1;
   }
 }
 

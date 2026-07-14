@@ -1,10 +1,11 @@
 use crate::{ActivePipeline, WorkerConfig, WorkerError, WorkerResult};
 use prost::Message;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use tenon_message::daemon::v1::{
-    worker_envelope, ReloadWorkerRequest, StartWorkerRequest, StopWorkerRequest, WorkerEnvelope,
+    worker_envelope, GetWorkerStatsResponse, ReloadWorkerRequest, StartWorkerRequest,
+    StopWorkerRequest, WorkerEnvelope, WorkerResponseEnvelope, WorkerStats,
 };
 
 #[derive(Debug)]
@@ -39,6 +40,23 @@ impl WorkerService {
                     stop_pipeline(&mut active, request)?;
                     break;
                 }
+                Some(worker_envelope::Payload::GetWorkerStats(_)) => {
+                    let response = active
+                        .as_ref()
+                        .map(|pipeline| worker_stats(pipeline))
+                        .unwrap_or_else(|| GetWorkerStatsResponse {
+                            stats: Some(WorkerStats::default()),
+                            error: "worker has no active pipeline".to_string(),
+                        });
+                    write_worker_response(
+                        &mut stream,
+                        WorkerResponseEnvelope {
+                            payload: Some(
+                                tenon_message::daemon::v1::worker_response_envelope::Payload::WorkerStats(response),
+                            ),
+                        },
+                    )?;
+                }
                 Some(worker_envelope::Payload::Heartbeat(_)) => {
                     return Err(WorkerError::control(
                         "daemon must not send heartbeat to worker",
@@ -49,6 +67,28 @@ impl WorkerService {
         }
 
         Ok(())
+    }
+}
+
+fn worker_stats(pipeline: &ActivePipeline) -> GetWorkerStatsResponse {
+    let snapshot = pipeline.metrics().snapshot();
+    GetWorkerStatsResponse {
+        stats: Some(WorkerStats {
+            processed_messages: snapshot.processed_messages,
+            processor_errors: snapshot.processor_errors,
+            emitted_records: snapshot.emitted_records,
+            egress_enqueued_records: snapshot.egress_enqueued_records,
+            egress_delivered_records: snapshot.egress_delivered_records,
+            egress_dropped_records: snapshot.egress_dropped_records,
+            egress_dropped_queue_full_records: snapshot.egress_dropped_queue_full_records,
+            egress_dropped_stopped_records: snapshot.egress_dropped_stopped_records,
+            egress_dropped_no_consumer_records: snapshot.egress_dropped_no_consumer_records,
+            egress_dropped_slow_consumer_records: snapshot.egress_dropped_slow_consumer_records,
+            egress_dropped_incomplete_frame_records: snapshot.egress_dropped_incomplete_frame_records,
+            egress_dropped_oversized_records: snapshot.egress_dropped_oversized_records,
+            egress_dropped_encode_error_records: snapshot.egress_dropped_encode_error_records,
+        }),
+        error: String::new(),
     }
 }
 
@@ -107,6 +147,23 @@ fn read_worker_envelope(stream: &mut UnixStream) -> WorkerResult<WorkerEnvelope>
         .map_err(|error| WorkerError::control(format!("failed to read worker frame: {error}")))?;
     WorkerEnvelope::decode(payload.as_slice())
         .map_err(|error| WorkerError::control(format!("failed to decode worker frame: {error}")))
+}
+
+fn write_worker_response(
+    stream: &mut UnixStream,
+    response: WorkerResponseEnvelope,
+) -> WorkerResult<()> {
+    let mut payload = Vec::new();
+    response
+        .encode(&mut payload)
+        .map_err(|error| WorkerError::control(format!("failed to encode worker response: {error}")))?;
+    let length = u32::try_from(payload.len())
+        .map_err(|_| WorkerError::control("worker response is too large"))?;
+    stream
+        .write_all(&length.to_le_bytes())
+        .and_then(|_| stream.write_all(&payload))
+        .and_then(|_| stream.flush())
+        .map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))
 }
 
 #[cfg(test)]

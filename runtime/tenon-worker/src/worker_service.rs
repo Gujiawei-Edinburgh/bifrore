@@ -4,8 +4,9 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use tenon_message::daemon::v1::{
-    worker_envelope, GetWorkerStatsResponse, ReloadWorkerRequest, StartWorkerRequest,
-    StopWorkerRequest, WorkerEnvelope, WorkerResponseEnvelope, WorkerStats,
+    worker_envelope, worker_response_envelope, GetWorkerStatsResponse, ReloadWorkerRequest,
+    ReloadWorkerResponse, StartWorkerRequest, StartWorkerResponse, StopWorkerRequest,
+    StopWorkerResponse, WorkerEnvelope, WorkerResponseEnvelope, WorkerState, WorkerStats,
 };
 
 #[derive(Debug)]
@@ -31,13 +32,55 @@ impl WorkerService {
             let envelope = read_worker_envelope(&mut stream)?;
             match envelope.payload {
                 Some(worker_envelope::Payload::StartWorker(request)) => {
-                    replace_pipeline(&mut active, request, &self.config)?;
+                    let (state, error) = match replace_pipeline(&mut active, request, &self.config) {
+                        Ok(()) => (WorkerState::Running, String::new()),
+                        Err(error) => (WorkerState::Error, error.message),
+                    };
+                    write_worker_response(
+                        &mut stream,
+                        WorkerResponseEnvelope {
+                            payload: Some(worker_response_envelope::Payload::StartWorker(
+                                StartWorkerResponse {
+                                    state: state as i32,
+                                    error,
+                                },
+                            )),
+                        },
+                    )?;
                 }
                 Some(worker_envelope::Payload::ReloadWorker(request)) => {
-                    reload_pipeline(&mut active, request)?;
+                    let (state, error) = match reload_pipeline(&mut active, request) {
+                        Ok(()) => (WorkerState::Running, String::new()),
+                        Err(error) => (WorkerState::Error, error.message),
+                    };
+                    write_worker_response(
+                        &mut stream,
+                        WorkerResponseEnvelope {
+                            payload: Some(worker_response_envelope::Payload::ReloadWorker(
+                                ReloadWorkerResponse {
+                                    state: state as i32,
+                                    error,
+                                },
+                            )),
+                        },
+                    )?;
                 }
                 Some(worker_envelope::Payload::StopWorker(request)) => {
-                    stop_pipeline(&mut active, request)?;
+                    let (state, error) = match stop_pipeline(&mut active, request) {
+                        Ok(()) => (WorkerState::Stopped, String::new()),
+                        Err(error) => (WorkerState::Error, error.message),
+                    };
+                    write_worker_response(
+                        &mut stream,
+                        WorkerResponseEnvelope {
+                            payload: Some(worker_response_envelope::Payload::StopWorker(
+                                StopWorkerResponse {
+                                    state: state as i32,
+                                    error,
+                                },
+                            )),
+                        },
+                    )?;
                     break;
                 }
                 Some(worker_envelope::Payload::GetWorkerStats(_)) => {

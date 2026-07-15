@@ -202,6 +202,31 @@ message ReloadWorkerRequest {
 
 message StopWorkerRequest {}
 
+message StartWorkerResponse {
+  WorkerState state = 1;
+  string error = 2;
+}
+
+message ReloadWorkerResponse {
+  WorkerState state = 1;
+  string error = 2;
+}
+
+message StopWorkerResponse {
+  WorkerState state = 1;
+  string error = 2;
+}
+
+enum WorkerState {
+  WORKER_STATE_UNSPECIFIED = 0;
+  WORKER_STATE_INIT = 1;
+  WORKER_STATE_STARTING = 2;
+  WORKER_STATE_RUNNING = 3;
+  WORKER_STATE_STOPPING = 4;
+  WORKER_STATE_STOPPED = 5;
+  WORKER_STATE_ERROR = 6;
+}
+
 message GetWorkerStatsRequest {}
 
 message GetWorkerStatsResponse {
@@ -238,6 +263,9 @@ message WorkerEnvelope {
 message WorkerResponseEnvelope {
   oneof payload {
     GetWorkerStatsResponse worker_stats = 1;
+    StartWorkerResponse start_worker = 2;
+    ReloadWorkerResponse reload_worker = 3;
+    StopWorkerResponse stop_worker = 4;
   }
 }
 

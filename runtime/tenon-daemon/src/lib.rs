@@ -155,9 +155,14 @@ where
         if let Some(active_key) = self.active_key_for_pipeline(&id) {
             if let Some(mut deployment) = self.deployments.remove(&active_key) {
                 if can_reload_process_only(&deployment.plan, &plan) {
-                    self.worker_manager
+                    if let Err(error) = self
+                        .worker_manager
                         .reload(&deployment.worker, plan.clone())
-                        .await?;
+                        .await
+                    {
+                        self.deployments.insert(active_key, deployment);
+                        return Err(error);
+                    }
                     deployment.id = id;
                     deployment.plan = plan;
                     self.deployments.insert(key.clone(), deployment);

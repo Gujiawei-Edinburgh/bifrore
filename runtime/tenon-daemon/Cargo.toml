@@ -8,5 +8,5 @@ futures = "0.3"
 libc = "0.2"
 prost = "0.14"
 tenon-message = { path = "../tenon-message" }
-tokio = { version = "1.35", features = ["io-util", "net", "time"] }
+tokio = { version = "1.35", features = ["io-util", "net", "rt", "time"] }
 wait-timeout = "0.2"

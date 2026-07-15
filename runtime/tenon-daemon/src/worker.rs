@@ -3,6 +3,7 @@ use crate::DaemonResult;
 use prost::Message;
 use std::collections::HashMap;
 use std::fs;
+#[cfg(test)]
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -13,7 +14,8 @@ use std::time::Duration;
 use tenon_message::codec::encode_frame;
 use tenon_message::daemon::v1::{
     worker_envelope, worker_response_envelope, GetWorkerStatsRequest, ReloadWorkerRequest,
-    StartWorkerRequest, StopWorkerRequest, WorkerEnvelope, WorkerResponseEnvelope, WorkerStats,
+    StartWorkerRequest, StopWorkerRequest, WorkerEnvelope, WorkerResponseEnvelope, WorkerState,
+    WorkerStats,
 };
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 use wait_timeout::ChildExt;
@@ -145,7 +147,7 @@ impl WorkerManager for UdsWorkerManager {
                 return Err(error);
             }
         };
-        send_worker_envelope(
+        let response = request_worker_response(
             &mut stream,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
@@ -153,6 +155,13 @@ impl WorkerManager for UdsWorkerManager {
                     source_client_ids: deployment.source_client_ids,
                 })),
             },
+            self.config.connect_timeout,
+        )
+        .await?;
+        check_worker_response(
+            response,
+            WorkerResponseKind::Start,
+            WorkerState::Running,
         )?;
 
         let handle = WorkerHandle { id: id.clone() };
@@ -169,14 +178,22 @@ impl WorkerManager for UdsWorkerManager {
     }
 
     async fn reload(&mut self, worker: &WorkerHandle, plan: DeploymentPlan) -> DaemonResult<()> {
+        let timeout = self.config.connect_timeout;
         let process = self.worker_mut(worker)?;
-        send_worker_envelope(
+        let response = request_worker_response(
             &mut process.stream,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::ReloadWorker(ReloadWorkerRequest {
                     plan: Some(plan),
                 })),
             },
+            timeout,
+        )
+        .await?;
+        check_worker_response(
+            response,
+            WorkerResponseKind::Reload,
+            WorkerState::Running,
         )
     }
 
@@ -188,15 +205,24 @@ impl WorkerManager for UdsWorkerManager {
             )));
         };
         process.status = WorkerStatus::Stopping;
-        let send_result = send_worker_envelope(
+        let response_result = request_worker_response(
             &mut process.stream,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StopWorker(StopWorkerRequest {})),
             },
-        );
+            self.config.stop_timeout,
+        )
+        .await
+        .and_then(|response| {
+            check_worker_response(
+                response,
+                WorkerResponseKind::Stop,
+                WorkerState::Stopped,
+            )
+        });
         let stop_result = stop_child(&mut process.child, self.config.stop_timeout);
         cleanup_socket(&process.socket_path);
-        send_result.and(stop_result)
+        response_result.and(stop_result)
     }
 
     async fn status(&mut self, worker: &WorkerHandle) -> DaemonResult<WorkerStatus> {
@@ -345,6 +371,7 @@ fn wait_until_readable(listener: &UnixListener, timeout: Duration) -> DaemonResu
     }
 }
 
+#[cfg(test)]
 fn send_worker_envelope(stream: &mut UnixStream, envelope: WorkerEnvelope) -> DaemonResult<()> {
     let frame = encode_frame(&envelope)
         .map_err(|error| DaemonError::worker(format!("failed to encode worker frame: {error}")))?;
@@ -352,6 +379,89 @@ fn send_worker_envelope(stream: &mut UnixStream, envelope: WorkerEnvelope) -> Da
         .write_all(&frame)
         .and_then(|_| stream.flush())
         .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))
+}
+
+enum WorkerResponseKind {
+    Start,
+    Reload,
+    Stop,
+}
+
+async fn request_worker_response(
+    stream: &mut UnixStream,
+    request: WorkerEnvelope,
+    timeout: Duration,
+) -> DaemonResult<WorkerResponseEnvelope> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| DaemonError::worker(format!("failed to configure worker stream: {error}")))?;
+    let cloned = stream
+        .try_clone()
+        .map_err(|error| DaemonError::worker(format!("failed to clone worker stream: {error}")))?;
+    let result = tokio::time::timeout(timeout, async move {
+        let mut stream = tokio::net::UnixStream::from_std(cloned).map_err(|error| {
+            DaemonError::worker(format!("failed to create async worker stream: {error}"))
+        })?;
+        let frame = encode_frame(&request)
+            .map_err(|error| DaemonError::worker(format!("failed to encode worker request: {error}")))?;
+        stream
+            .write_all(&frame)
+            .await
+            .map_err(|error| DaemonError::worker(format!("failed to send worker request: {error}")))?;
+        let mut header = [0u8; 4];
+        stream
+            .read_exact(&mut header)
+            .await
+            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
+        let len = u32::from_le_bytes(header) as usize;
+        let mut payload = vec![0u8; len];
+        stream
+            .read_exact(&mut payload)
+            .await
+            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
+        WorkerResponseEnvelope::decode(payload.as_slice())
+            .map_err(|error| DaemonError::worker(format!("failed to decode worker response: {error}")))
+    })
+    .await;
+    let restore_result = stream.set_nonblocking(false);
+    restore_result
+        .map_err(|error| DaemonError::worker(format!("failed to restore worker stream: {error}")))?;
+    result.map_err(|_| DaemonError::worker("timed out waiting for worker response"))?
+}
+
+fn check_worker_response(
+    envelope: WorkerResponseEnvelope,
+    expected: WorkerResponseKind,
+    expected_state: WorkerState,
+) -> DaemonResult<()> {
+    let payload = envelope
+        .payload
+        .ok_or_else(|| DaemonError::worker("worker response payload is missing"))?;
+    let (state, error) = match (expected, payload) {
+        (WorkerResponseKind::Start, worker_response_envelope::Payload::StartWorker(response)) => {
+            (response.state, response.error)
+        }
+        (WorkerResponseKind::Reload, worker_response_envelope::Payload::ReloadWorker(response)) => {
+            (response.state, response.error)
+        }
+        (WorkerResponseKind::Stop, worker_response_envelope::Payload::StopWorker(response)) => {
+            (response.state, response.error)
+        }
+        _ => return Err(DaemonError::worker("unexpected worker response payload")),
+    };
+    if !error.is_empty() {
+        return Err(DaemonError::worker(error));
+    }
+    let actual_state = WorkerState::try_from(state)
+        .map_err(|_| DaemonError::worker("worker returned an unknown state"))?;
+    if actual_state != expected_state {
+        return Err(DaemonError::worker(format!(
+            "worker returned unexpected state: expected={expected_state:?} actual={actual_state:?}"
+        )));
+    }
+    Ok(())
 }
 
 async fn read_worker_stats(stream: UnixStream) -> DaemonResult<WorkerStats> {
@@ -424,11 +534,22 @@ fn cleanup_failed_worker(mut child: Child, socket_path: &Path) {
 mod tests {
     use super::*;
     use crate::DaemonErrorKind;
-    use futures::executor::block_on;
-    use std::io::Read;
+    use std::future::Future;
+    use std::io::{Read, Write};
     use tenon_message::codec::decode_frame;
-    use tenon_message::daemon::v1::{worker_envelope, WorkerEnvelope};
+    use tenon_message::daemon::v1::{
+        worker_envelope, worker_response_envelope, ReloadWorkerResponse, StopWorkerResponse,
+        WorkerEnvelope, WorkerResponseEnvelope, WorkerState,
+    };
     use tenon_message::plan::MqttSourceClientIds;
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create test runtime")
+            .block_on(future)
+    }
 
     #[test]
     fn send_worker_envelope_writes_length_prefixed_proto_frame() {
@@ -465,20 +586,52 @@ mod tests {
             "/bin/unused",
             unique_socket_dir("reload"),
         ));
-        let (daemon_stream, mut worker_stream) = UnixStream::pair().expect("create socket pair");
+        let (daemon_stream, worker_stream) = UnixStream::pair().expect("create socket pair");
         let handle = insert_test_worker(&mut manager, "worker-reload", daemon_stream);
         let plan = plan();
+        let expected_plan = plan.clone();
+        let responder = std::thread::spawn(move || {
+            let mut worker_stream = worker_stream;
+            let frame = read_frame(&mut worker_stream);
+            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            match envelope.payload {
+                Some(worker_envelope::Payload::ReloadWorker(request)) => {
+                    assert_eq!(request.plan, Some(expected_plan));
+                    send_worker_response(
+                        &mut worker_stream,
+                        WorkerResponseEnvelope {
+                            payload: Some(worker_response_envelope::Payload::ReloadWorker(
+                                ReloadWorkerResponse {
+                                    state: WorkerState::Running as i32,
+                                    error: String::new(),
+                                },
+                            )),
+                        },
+                    );
+                }
+                other => panic!("unexpected worker envelope: {other:?}"),
+            }
+            let frame = read_frame(&mut worker_stream);
+            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            assert!(matches!(
+                envelope.payload,
+                Some(worker_envelope::Payload::StopWorker(_))
+            ));
+            send_worker_response(
+                &mut worker_stream,
+                WorkerResponseEnvelope {
+                    payload: Some(worker_response_envelope::Payload::StopWorker(
+                        StopWorkerResponse {
+                            state: WorkerState::Stopped as i32,
+                            error: String::new(),
+                        },
+                    )),
+                },
+            );
+        });
 
         block_on(manager.reload(&handle, plan.clone())).expect("reload worker");
-
-        let frame = read_frame(&mut worker_stream);
-        let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
-        match envelope.payload {
-            Some(worker_envelope::Payload::ReloadWorker(request)) => {
-                assert_eq!(request.plan, Some(plan));
-            }
-            other => panic!("unexpected worker envelope: {other:?}"),
-        }
+        responder.join().expect("worker responder");
         block_on(manager.stop(handle)).expect("stop worker");
     }
 
@@ -488,17 +641,31 @@ mod tests {
             "/bin/unused",
             unique_socket_dir("stop"),
         ));
-        let (daemon_stream, mut worker_stream) = UnixStream::pair().expect("create socket pair");
+        let (daemon_stream, worker_stream) = UnixStream::pair().expect("create socket pair");
         let handle = insert_test_worker(&mut manager, "worker-stop", daemon_stream);
+        let responder = std::thread::spawn(move || {
+            let mut worker_stream = worker_stream;
+            let frame = read_frame(&mut worker_stream);
+            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            assert!(matches!(
+                envelope.payload,
+                Some(worker_envelope::Payload::StopWorker(_))
+            ));
+            send_worker_response(
+                &mut worker_stream,
+                WorkerResponseEnvelope {
+                    payload: Some(worker_response_envelope::Payload::StopWorker(
+                        StopWorkerResponse {
+                            state: WorkerState::Stopped as i32,
+                            error: String::new(),
+                        },
+                    )),
+                },
+            );
+        });
 
         block_on(manager.stop(handle.clone())).expect("stop worker");
-
-        let frame = read_frame(&mut worker_stream);
-        let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
-        assert!(matches!(
-            envelope.payload,
-            Some(worker_envelope::Payload::StopWorker(_))
-        ));
+        responder.join().expect("worker responder");
         assert!(manager.worker_mut(&handle).is_err());
     }
 
@@ -566,6 +733,11 @@ mod tests {
         frame.resize(4 + len, 0);
         stream.read_exact(&mut frame[4..]).expect("read frame body");
         frame
+    }
+
+    fn send_worker_response(stream: &mut UnixStream, response: WorkerResponseEnvelope) {
+        let frame = encode_frame(&response).expect("encode response");
+        stream.write_all(&frame).expect("write response");
     }
 
     fn plan() -> DeploymentPlan {

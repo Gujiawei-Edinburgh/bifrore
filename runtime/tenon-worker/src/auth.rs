@@ -1,5 +1,6 @@
 use crate::{WorkerError, WorkerResult};
 use mlua::{Function, Lua, LuaOptions, StdLib, Table, Value};
+use std::env;
 use tenon_extension::{AuthResult, SourceContext, AUTH_CREDENTIALS_FN};
 use tenon_message::plan::{auth_plan, AuthPlan};
 
@@ -17,8 +18,76 @@ pub(crate) fn resolve_auth(
         .ok_or_else(|| WorkerError::mqtt("MQTT auth plan kind is missing"))?;
     match kind {
         auth_plan::Kind::None(_) => Ok(None),
-        auth_plan::Kind::Script(script) => evaluate_script(&script.source, source).map(Some),
+        auth_plan::Kind::Script(script) => evaluate_script(&script.source, source)
+            .and_then(expand_auth_result)
+            .map(Some),
     }
+}
+
+fn expand_auth_result(result: AuthResult) -> WorkerResult<AuthResult> {
+    match result {
+        AuthResult::UsernamePassword { username, password } => Ok(
+            AuthResult::username_password(expand_auth_value(&username)?, expand_auth_value(&password)?),
+        ),
+        AuthResult::ClientCertificate {
+            cert_path,
+            key_path,
+            ca_path,
+        } => Ok(AuthResult::client_certificate(
+            expand_auth_value(&cert_path)?,
+            expand_auth_value(&key_path)?,
+            ca_path
+                .as_deref()
+                .map(expand_auth_value)
+                .transpose()?,
+        )),
+        AuthResult::Custom {
+            username,
+            password,
+            properties,
+        } => Ok(AuthResult::custom(
+            username.as_deref().map(expand_auth_value).transpose()?,
+            password.as_deref().map(expand_auth_value).transpose()?,
+            properties
+                .into_iter()
+                .map(|(key, value)| Ok((key, expand_auth_value(&value)?)))
+                .collect::<WorkerResult<Vec<_>>>()?,
+        )),
+    }
+}
+
+fn expand_auth_value(value: &str) -> WorkerResult<String> {
+    let mut expanded = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = value[cursor..].find("{{") {
+        let start = cursor + relative_start;
+        expanded.push_str(&value[cursor..start]);
+        let name_start = start + 2;
+        let Some(relative_end) = value[name_start..].find("}}") else {
+            return Err(WorkerError::mqtt(
+                "unterminated authentication environment placeholder; expected `}}`",
+            ));
+        };
+        let end = name_start + relative_end;
+        let name = &value[name_start..end];
+        if name.is_empty() {
+            return Err(WorkerError::mqtt(
+                "authentication environment placeholder must contain a variable name",
+            ));
+        }
+        let replacement = env::var(name).map_err(|error| match error {
+            env::VarError::NotPresent => {
+                WorkerError::mqtt(format!("environment variable {name} is not set"))
+            }
+            env::VarError::NotUnicode(_) => {
+                WorkerError::mqtt(format!("environment variable {name} is not valid UTF-8"))
+            }
+        })?;
+        expanded.push_str(&replacement);
+        cursor = end + 2;
+    }
+    expanded.push_str(&value[cursor..]);
+    Ok(expanded)
 }
 
 fn evaluate_script(source: &str, context: &SourceContext) -> WorkerResult<AuthResult> {
@@ -190,6 +259,44 @@ end
                 ],
             )
         );
+    }
+
+    #[test]
+    fn expands_environment_values_after_auth_result_parsing() {
+        std::env::set_var("TENON_TEST_USERNAME", "dev");
+        std::env::set_var("TENON_TEST_PASSWORD", "dev");
+        std::env::set_var("TENON_TEST_PROPERTY", "signature");
+
+        let result = evaluate_script(
+            r#"
+function credentials(ctx)
+  return {
+    type = "custom",
+    username = "{{TENON_TEST_USERNAME}}",
+    password = "{{TENON_TEST_PASSWORD}}",
+    properties = {
+      mechanism = "{{TENON_TEST_PROPERTY}}"
+    }
+  }
+end
+"#,
+            &source(),
+        )
+        .and_then(expand_auth_result)
+            .expect("auth result");
+
+        assert_eq!(
+            result,
+            AuthResult::custom(
+                Some("dev".to_string()),
+                Some("dev".to_string()),
+                vec![("mechanism".to_string(), "signature".to_string())],
+            )
+        );
+
+        std::env::remove_var("TENON_TEST_USERNAME");
+        std::env::remove_var("TENON_TEST_PASSWORD");
+        std::env::remove_var("TENON_TEST_PROPERTY");
     }
 
     #[test]

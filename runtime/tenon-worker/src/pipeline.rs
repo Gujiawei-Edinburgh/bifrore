@@ -21,6 +21,7 @@ pub struct WorkerConfig {
     pub egress_socket_path: Option<PathBuf>,
     pub egress_send_timeout: Duration,
     pub detailed_metrics: bool,
+    pub process_reload_timeout: Duration,
 }
 
 impl Default for WorkerConfig {
@@ -35,6 +36,7 @@ impl Default for WorkerConfig {
             egress_socket_path: None,
             egress_send_timeout: Duration::from_millis(5),
             detailed_metrics: true,
+            process_reload_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -47,6 +49,7 @@ pub struct ActivePipeline {
     process_thread: Option<JoinHandle<()>>,
     egress: Option<EgressRuntime>,
     metrics: Arc<WorkerMetrics>,
+    process_reload_timeout: Duration,
 }
 
 impl ActivePipeline {
@@ -115,6 +118,7 @@ impl ActivePipeline {
             process_thread,
             egress: Some(egress),
             metrics,
+            process_reload_timeout: config.process_reload_timeout,
         })
     }
 
@@ -133,9 +137,20 @@ impl ActivePipeline {
             .process
             .clone()
             .ok_or_else(|| WorkerError::pipeline("process plan is missing"))?;
+        let (reload_tx, reload_rx) = flume::bounded(1);
         self.process_tx
-            .send(ProcessCommand::Reload(process))
+            .send(ProcessCommand::Reload {
+                process,
+                completion: reload_tx,
+            })
             .map_err(|_| WorkerError::pipeline("process thread is not running"))?;
+        reload_rx
+            .recv_timeout(self.process_reload_timeout)
+            .map_err(|error| {
+                WorkerError::pipeline(format!(
+                    "timed out waiting for process reload completion: {error}"
+                ))
+            })??;
         self.plan.process = plan.process;
         self.plan.id = plan.id;
         Ok(())
@@ -167,7 +182,10 @@ fn default_egress_socket_path() -> PathBuf {
 }
 
 enum ProcessCommand {
-    Reload(tenon_message::plan::ProcessPlan),
+    Reload {
+        process: tenon_message::plan::ProcessPlan,
+        completion: Sender<WorkerResult<()>>,
+    },
 }
 
 fn start_process_loop(
@@ -179,15 +197,27 @@ fn start_process_loop(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         loop {
-            while let Ok(command) = process_rx.try_recv() {
-                processor = handle_process_command(processor, command);
-            }
-            match intake_rx.recv() {
-                Ok(delivery) => process_delivery(&mut *processor, delivery, &egress, &metrics),
-                Err(_) => break,
+            match flume::Selector::new()
+                .recv(&process_rx, ProcessEvent::Command)
+                .recv(&intake_rx, ProcessEvent::Delivery)
+                .wait()
+            {
+                ProcessEvent::Command(Ok(command)) => {
+                    processor = handle_process_command(processor, command);
+                }
+                ProcessEvent::Command(Err(_)) => {}
+                ProcessEvent::Delivery(Ok(delivery)) => {
+                    process_delivery(&mut *processor, delivery, &egress, &metrics)
+                }
+                ProcessEvent::Delivery(Err(_)) => break,
             }
         }
     })
+}
+
+enum ProcessEvent {
+    Command(Result<ProcessCommand, flume::RecvError>),
+    Delivery(Result<IncomingDelivery, flume::RecvError>),
 }
 
 fn handle_process_command(
@@ -195,18 +225,32 @@ fn handle_process_command(
     command: ProcessCommand,
 ) -> Box<dyn Processor> {
     match command {
-        ProcessCommand::Reload(process) => {
-            replace_processor(processor, process)
+        ProcessCommand::Reload {
+            process,
+            completion,
+        } => {
+            let result = replace_processor(processor.as_ref(), process);
+            match result {
+                Ok(processor) => {
+                    let _ = completion.send(Ok(()));
+                    processor
+                }
+                Err(error) => {
+                    let _ = completion.send(Err(error.clone()));
+                    log::error!("process reload failed: {error}");
+                    processor
+                }
+            }
         }
     }
 }
 
 fn replace_processor(
-    processor: Box<dyn Processor>,
+    processor: &dyn Processor,
     process: tenon_message::plan::ProcessPlan,
-) -> Box<dyn Processor> {
-    let context = processor.into_context();
-    processor_from_plan(Some(process), context).expect("process plan exists")
+) -> WorkerResult<Box<dyn Processor>> {
+    let context = processor.context().clone();
+    processor_from_plan(Some(process), context)
 }
 
 fn process_delivery(
@@ -295,6 +339,7 @@ mod tests {
             process_thread: None,
             egress: None,
             metrics: Arc::new(WorkerMetrics::default()),
+            process_reload_timeout: Duration::from_secs(10),
         };
         let mut target = plan;
         target.sources[0].client_count = 2;
@@ -429,6 +474,10 @@ mod tests {
 
         fn into_context(self: Box<Self>) -> Context {
             Context::with_empty_memory(SourceContext::new("sensor", "r1"))
+        }
+
+        fn context(&self) -> &Context {
+            panic!("fake processor context is not used by these tests")
         }
     }
 }

@@ -20,6 +20,8 @@ use tenon_message::{
 pub trait Processor: Send + 'static {
     fn process(&mut self, message: &Message) -> WorkerResult<InvocationOutcome>;
 
+    fn context(&self) -> &Context;
+
     fn into_context(self: Box<Self>) -> Context;
 }
 
@@ -69,6 +71,10 @@ impl Processor for LuaProcessor {
             .and_then(validate_on_message_return)
             .map_err(lua_error)?;
         Ok(self.context.drain_outcome())
+    }
+
+    fn context(&self) -> &Context {
+        &self.context
     }
 
     fn into_context(self: Box<Self>) -> Context {

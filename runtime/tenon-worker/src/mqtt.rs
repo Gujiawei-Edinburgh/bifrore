@@ -57,6 +57,9 @@ pub struct MqttAdapterHandle {
     runtime_thread: Option<JoinHandle<()>>,
 }
 
+const MQTT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const MQTT_CLIENT_STARTUP_BATCH_SIZE: usize = 32;
+
 impl MqttAdapterHandle {
     pub fn stop(mut self) -> WorkerResult<()> {
         if let Some(stop) = self.stop.take() {
@@ -83,11 +86,9 @@ pub fn start_mqtt(
     use rumqttc::v5::{AsyncClient, MqttOptions};
     use std::sync::mpsc;
 
-    let broker = config
-        .source
-        .broker
-        .clone()
-        .ok_or_else(|| WorkerError::mqtt("MQTT broker plan is missing"))?;
+    if config.source.broker.is_none() {
+        return Err(WorkerError::mqtt("MQTT broker plan is missing"));
+    }
     let topics: Vec<String> = config
         .source
         .subscriptions
@@ -126,7 +127,8 @@ pub fn start_mqtt(
         runtime.block_on(async move {
             let (shutdown_tx, _) = tokio::sync::watch::channel(false);
             let mut tasks = Vec::with_capacity(client_count as usize);
-            let mut subscribed_clients = 0usize;
+            let (client_ready_tx, mut client_ready_rx) =
+                tokio::sync::mpsc::channel::<WorkerResult<()>>(client_count.max(1));
 
             let auth = match resolve_auth(config.source.auth.as_ref(), &config.source_context()) {
                 Ok(auth) => auth,
@@ -136,43 +138,104 @@ pub fn start_mqtt(
                 }
             };
 
-            for client_id in config.client_ids.iter() {
-                let mut mqtt_options =
-                    MqttOptions::new(client_id.clone(), broker.host.clone(), broker.port as u16);
-                mqtt_options.set_keep_alive(Duration::from_secs(config.keep_alive_secs.into()));
-                mqtt_options.set_clean_start(config.clean_start);
-                mqtt_options.set_manual_acks(true);
-                let mut connect_properties = rumqttc::v5::mqttbytes::v5::ConnectProperties::new();
-                connect_properties.session_expiry_interval = Some(config.session_expiry_interval);
-                mqtt_options.set_connect_properties(connect_properties);
-                if let Err(error) = apply_auth(&mut mqtt_options, auth.as_ref()) {
-                    let _ = ready_tx.send(Err(error));
-                    return;
+            for client_batch in config
+                .client_ids
+                .chunks(MQTT_CLIENT_STARTUP_BATCH_SIZE)
+            {
+                let mut subscription_tasks = tokio::task::JoinSet::new();
+                for client_id in client_batch {
+                    let client_id = client_id.clone();
+                    let config = config.clone();
+                    let topics = topics.clone();
+                    let auth = auth.clone();
+                    subscription_tasks.spawn(async move {
+                        let broker = config
+                            .source
+                            .broker
+                            .clone()
+                            .expect("validated broker");
+                        let mut mqtt_options = MqttOptions::new(
+                            client_id.clone(),
+                            broker.host,
+                            broker.port as u16,
+                        );
+                        mqtt_options.set_keep_alive(Duration::from_secs(config.keep_alive_secs.into()));
+                        mqtt_options.set_clean_start(config.clean_start);
+                        mqtt_options.set_manual_acks(true);
+                        let mut connect_properties =
+                            rumqttc::v5::mqttbytes::v5::ConnectProperties::new();
+                        connect_properties.session_expiry_interval =
+                            Some(config.session_expiry_interval);
+                        mqtt_options.set_connect_properties(connect_properties);
+                        apply_auth(&mut mqtt_options, auth.as_ref())?;
+
+                        let (client, event_loop) =
+                            AsyncClient::new(mqtt_options, config.queue_capacity.max(1));
+                        subscribe_topics(&client, &config, &topics).await?;
+                        Ok::<_, WorkerError>((client, event_loop, client_id))
+                    });
                 }
 
-                let (client, event_loop) =
-                    AsyncClient::new(mqtt_options, config.queue_capacity.max(1));
-                if subscribe_topics(&client, &config, &topics).await.is_err() {
-                    continue;
+                while let Some(result) = subscription_tasks.join_next().await {
+                    match result {
+                        Ok(Ok((client, event_loop, client_id))) => {
+                            let handler = handler_runtime.clone();
+                            let shutdown_rx = shutdown_tx.subscribe();
+                            let source_context = config.source_context();
+                            tasks.push(tokio::spawn(run_event_loop(
+                                client,
+                                event_loop,
+                                source_context,
+                                handler,
+                                shutdown_rx,
+                                topics.len(),
+                                client_ready_tx.clone(),
+                            )));
+                            log::debug!("MQTT client subscriptions enqueued for client {client_id}");
+                        }
+                        Ok(Err(error)) => {
+                            log::error!("failed to enqueue MQTT subscriptions: {error}");
+                        }
+                        Err(error) => {
+                            log::error!("MQTT subscription task failed: {error}");
+                        }
+                    }
                 }
-
-                subscribed_clients += 1;
-                let handler = handler_runtime.clone();
-                let shutdown_rx = shutdown_tx.subscribe();
-                let source_context = config.source_context();
-                tasks.push(tokio::spawn(run_event_loop(
-                    client.clone(),
-                    event_loop,
-                    source_context,
-                    handler,
-                    shutdown_rx,
-                )));
             }
 
-            if subscribed_clients == 0 {
+            if tasks.is_empty() {
                 let _ = ready_tx.send(Err(WorkerError::mqtt("no MQTT clients subscribed")));
             } else {
-                let _ = ready_tx.send(Ok(()));
+                let mut readiness_error = None;
+                let startup_deadline =
+                    tokio::time::Instant::now() + MQTT_STARTUP_TIMEOUT;
+                for _ in 0..tasks.len() {
+                    let remaining = startup_deadline.saturating_duration_since(
+                        tokio::time::Instant::now(),
+                    );
+                    match tokio::time::timeout(remaining, client_ready_rx.recv()).await {
+                        Err(_) => {
+                            readiness_error = Some(WorkerError::mqtt(
+                                "timeout waiting for MQTT subscription readiness",
+                            ));
+                            break;
+                        }
+                        Ok(Some(Ok(()))) => {}
+                        Ok(Some(Err(error))) => {
+                            readiness_error = Some(error);
+                            break;
+                        }
+                        Ok(None) => {
+                            readiness_error = Some(WorkerError::mqtt(
+                                "MQTT event loop ended before subscriptions were ready",
+                            ));
+                            break;
+                        }
+                    }
+                }
+                let _ = ready_tx.send(
+                    readiness_error.map_or(Ok(()), Err),
+                );
             }
 
             let _ = stop_rx.await;
@@ -183,7 +246,7 @@ pub fn start_mqtt(
         });
     });
 
-    match ready_rx.recv_timeout(Duration::from_secs(10)) {
+    match ready_rx.recv_timeout(MQTT_STARTUP_TIMEOUT) {
         Ok(Ok(())) => Ok(MqttAdapterHandle {
             stop: Some(stop_tx),
             runtime_thread: Some(runtime_thread),
@@ -278,7 +341,11 @@ async fn run_event_loop(
     source_context: SourceContext,
     handler: DeliveryHandler,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    expected_subscriptions: usize,
+    ready_tx: tokio::sync::mpsc::Sender<WorkerResult<()>>,
 ) {
+    let mut ready_tx = Some(ready_tx);
+    let mut acknowledged_subscriptions = 0usize;
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -288,19 +355,50 @@ async fn run_event_loop(
             }
             event = event_loop.poll() => {
                 match event {
-                    Ok(rumqttc::v5::Event::Incoming(rumqttc::v5::mqttbytes::v5::Packet::Publish(publish))) => {
-                        let message = build_message(source_context.clone(), &publish);
-                        handler(IncomingDelivery {
-                            message,
-                            ack: Some(DeferredAck {
-                                client: client.clone(),
-                                publish,
-                            }),
-                        });
+                    Ok(rumqttc::v5::Event::Incoming(packet)) => {
+                        match packet {
+                            rumqttc::v5::mqttbytes::v5::Packet::SubAck(suback) => {
+                                if suback.return_codes.iter().any(|code| {
+                                    !matches!(
+                                        code,
+                                        rumqttc::v5::mqttbytes::v5::SubscribeReasonCode::Success(_)
+                                    )
+                                }) {
+                                    if let Some(ready_tx) = ready_tx.take() {
+                                        let _ = ready_tx.send(Err(WorkerError::mqtt(
+                                            "MQTT broker rejected a subscription",
+                                        ))).await;
+                                    }
+                                    break;
+                                }
+                                acknowledged_subscriptions += suback.return_codes.len();
+                                if acknowledged_subscriptions >= expected_subscriptions {
+                                    if let Some(ready_tx) = ready_tx.take() {
+                                        let _ = ready_tx.send(Ok(())).await;
+                                    }
+                                }
+                            }
+                            rumqttc::v5::mqttbytes::v5::Packet::Publish(publish) => {
+                                let message = build_message(source_context.clone(), &publish);
+                                handler(IncomingDelivery {
+                                    message,
+                                    ack: Some(DeferredAck {
+                                        client: client.clone(),
+                                        publish,
+                                    }),
+                                });
+                            }
+                            _ => {}
+                        }
                     }
                     Ok(_) => {}
                     Err(error) => {
                         log::error!("MQTT event loop error: {error}");
+                        if let Some(ready_tx) = ready_tx.take() {
+                            let _ = ready_tx.send(Err(WorkerError::mqtt(format!(
+                                "MQTT event loop failed before subscriptions were ready: {error}"
+                            )))).await;
+                        }
                         break;
                     }
                 }

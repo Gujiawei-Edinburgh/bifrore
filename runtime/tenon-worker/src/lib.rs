@@ -4,14 +4,14 @@ mod metrics;
 mod mqtt;
 mod pipeline;
 mod processor;
-mod supervisor;
+mod failure_tracker;
 mod worker_service;
 
 pub use egress::{Egress, EgressConfig, EgressRuntime};
 pub use metrics::{EgressDropReason, WorkerMetrics, WorkerMetricsSnapshot};
 pub use pipeline::{ActivePipeline, WorkerConfig};
 pub use processor::{LuaProcessor, Processor};
-pub use supervisor::{WorkerComponent, WorkerFailure, WorkerSupervisor};
+pub use failure_tracker::{WorkerComponent, WorkerFailure, WorkerFailureTracker};
 pub use worker_service::WorkerService;
 
 pub type WorkerResult<T> = Result<T, WorkerError>;

@@ -1,7 +1,7 @@
 use crate::egress::{Egress, EgressConfig, EgressRuntime};
 use crate::mqtt::{start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle};
 use crate::processor::{processor_from_plan, Processor};
-use crate::{WorkerComponent, WorkerError, WorkerFailure, WorkerMetrics, WorkerResult, WorkerSupervisor};
+use crate::{WorkerComponent, WorkerError, WorkerFailure, WorkerFailureTracker, WorkerMetrics, WorkerResult};
 use flume::{Receiver, Sender};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ pub struct ActivePipeline {
     egress: Option<EgressRuntime>,
     metrics: Arc<WorkerMetrics>,
     process_reload_timeout: Duration,
-    supervisor: WorkerSupervisor,
+    failure_tracker: WorkerFailureTracker,
 }
 
 impl ActivePipeline {
@@ -69,7 +69,7 @@ impl ActivePipeline {
         ));
         let processor = processor_from_plan(plan.process.clone(), context)?;
         let metrics = Arc::new(WorkerMetrics::new(config.detailed_metrics));
-        let (failure_tx, supervisor) = WorkerSupervisor::start();
+        let (failure_tx, failure_tracker) = WorkerFailureTracker::start();
         let egress = EgressRuntime::start(
             plan.egress.clone(),
             EgressConfig {
@@ -84,7 +84,7 @@ impl ActivePipeline {
         let egress = match egress {
             Ok(egress) => egress,
             Err(error) => {
-                supervisor.stop();
+                failure_tracker.stop();
                 return Err(error);
             }
         };
@@ -133,7 +133,7 @@ impl ActivePipeline {
                         let _ = process_thread.join();
                     }
                     let _ = egress.stop();
-                    supervisor.stop();
+                    failure_tracker.stop();
                     return Err(error);
                 }
             };
@@ -149,7 +149,7 @@ impl ActivePipeline {
             egress: Some(egress),
             metrics,
             process_reload_timeout: config.process_reload_timeout,
-            supervisor,
+            failure_tracker,
         })
     }
 
@@ -192,7 +192,7 @@ impl ActivePipeline {
     }
 
     pub fn failure(&self) -> Option<WorkerFailure> {
-        self.supervisor.failure()
+        self.failure_tracker.failure()
     }
 
     pub fn stop(mut self) -> WorkerResult<()> {
@@ -208,7 +208,7 @@ impl ActivePipeline {
         if let Some(egress) = self.egress.take() {
             egress.stop()?;
         }
-        self.supervisor.stop();
+        self.failure_tracker.stop();
         Ok(())
     }
 }
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn reload_process_rejects_source_changes() {
         let plan = plan();
-        let (_, supervisor) = WorkerSupervisor::start();
+        let (_, failure_tracker) = WorkerFailureTracker::start();
         let mut pipeline = ActivePipeline {
             plan: plan.clone(),
             mqtt_handles: Vec::new(),
@@ -386,7 +386,7 @@ mod tests {
             egress: None,
             metrics: Arc::new(WorkerMetrics::default()),
             process_reload_timeout: Duration::from_secs(10),
-            supervisor,
+            failure_tracker,
         };
         let mut target = plan;
         target.sources[0].client_count = 2;

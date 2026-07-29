@@ -1,5 +1,5 @@
 use crate::{EgressDropReason, WorkerError, WorkerMetrics, WorkerResult};
-use crate::supervisor::{WorkerComponent, WorkerFailure};
+use crate::failure_tracker::{WorkerComponent, WorkerFailure};
 use flume::{Receiver, Sender, TrySendError};
 use mio::net::{UnixListener, UnixStream};
 use mio::{Events, Interest, Poll, Token};

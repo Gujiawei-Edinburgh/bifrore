@@ -37,7 +37,7 @@ impl WorkerService {
         loop {
             if let Some(failure) = active.as_ref().and_then(ActivePipeline::failure) {
                 let error = WorkerError::pipeline(format!(
-                    "worker supervisor reported {:?} failure: {}",
+                    "worker failure tracker reported {:?} failure: {}",
                     failure.component, failure.message
                 ));
                 if let Some(pipeline) = active.take() {

@@ -1,6 +1,6 @@
 use crate::auth::resolve_auth;
 use crate::{WorkerError, WorkerResult};
-use crate::supervisor::{WorkerComponent, WorkerFailure};
+use crate::failure_tracker::{WorkerComponent, WorkerFailure};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -350,6 +350,7 @@ async fn run_event_loop(
 ) {
     let mut ready_tx = Some(ready_tx);
     let mut acknowledged_subscriptions = 0usize;
+    let mut recovering_connection = false;
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -360,6 +361,7 @@ async fn run_event_loop(
             event = event_loop.poll() => {
                 match event {
                     Ok(rumqttc::v5::Event::Incoming(packet)) => {
+                        recovering_connection = false;
                         match packet {
                             rumqttc::v5::mqttbytes::v5::Packet::SubAck(suback) => {
                                 if suback.return_codes.iter().any(|code| {
@@ -396,6 +398,13 @@ async fn run_event_loop(
                         }
                     }
                     Ok(_) => {}
+                    Err(error) if is_recoverable_mqtt_error(&error) => {
+                        if !recovering_connection {
+                            log::warn!("MQTT connection interrupted; retrying: {error}");
+                            recovering_connection = true;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                     Err(error) => {
                         log::error!("MQTT event loop error: {error}");
                         let _ = failure_tx.send(WorkerFailure::fatal(
@@ -413,6 +422,18 @@ async fn run_event_loop(
             }
         }
     }
+}
+
+fn is_recoverable_mqtt_error(error: &rumqttc::v5::ConnectionError) -> bool {
+    matches!(
+        error,
+        rumqttc::v5::ConnectionError::Timeout(_)
+            | rumqttc::v5::ConnectionError::Io(_)
+            | rumqttc::v5::ConnectionError::MqttState(
+                rumqttc::v5::StateError::Io(_)
+                    | rumqttc::v5::StateError::ServerDisconnect { .. }
+            )
+    )
 }
 
 fn build_message(

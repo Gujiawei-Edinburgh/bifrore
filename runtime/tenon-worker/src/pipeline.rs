@@ -1,7 +1,7 @@
 use crate::egress::{Egress, EgressConfig, EgressRuntime};
 use crate::mqtt::{start_mqtt, IncomingDelivery, MqttAdapterConfig, MqttAdapterHandle};
 use crate::processor::{processor_from_plan, Processor};
-use crate::{WorkerError, WorkerMetrics, WorkerResult};
+use crate::{WorkerComponent, WorkerError, WorkerFailure, WorkerMetrics, WorkerResult, WorkerSupervisor};
 use flume::{Receiver, Sender};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,6 +50,7 @@ pub struct ActivePipeline {
     egress: Option<EgressRuntime>,
     metrics: Arc<WorkerMetrics>,
     process_reload_timeout: Duration,
+    supervisor: WorkerSupervisor,
 }
 
 impl ActivePipeline {
@@ -68,6 +69,7 @@ impl ActivePipeline {
         ));
         let processor = processor_from_plan(plan.process.clone(), context)?;
         let metrics = Arc::new(WorkerMetrics::new(config.detailed_metrics));
+        let (failure_tx, supervisor) = WorkerSupervisor::start();
         let egress = EgressRuntime::start(
             plan.egress.clone(),
             EgressConfig {
@@ -77,7 +79,15 @@ impl ActivePipeline {
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
-        )?;
+            Some(failure_tx.clone())
+        );
+        let egress = match egress {
+            Ok(egress) => egress,
+            Err(error) => {
+                supervisor.stop();
+                return Err(error);
+            }
+        };
         let process_egress = egress.egress();
         let sources = plan.sources.clone();
         let (intake_tx, intake_rx) = flume::bounded(config.intake_queue_capacity.max(1));
@@ -88,8 +98,9 @@ impl ActivePipeline {
             processor,
             process_egress,
             Arc::clone(&metrics),
+            failure_tx.clone(),
         ));
-        let mut mqtt_handles = Vec::with_capacity(sources.len());
+        let mut mqtt_handles: Vec<MqttAdapterHandle> = Vec::with_capacity(sources.len());
 
         for (source_index, source) in sources.into_iter().enumerate() {
             let handler_tx = intake_tx.clone();
@@ -102,11 +113,30 @@ impl ActivePipeline {
                     .map(|group| group.client_ids.clone())
                     .unwrap_or_default(),
             );
-            let handle = start_mqtt(adapter_config, std::sync::Arc::new(move |delivery| {
-                if handler_tx.send(delivery).is_err() {
-                    log::error!("worker intake queue is closed; dropping MQTT delivery");
+            let handle = match start_mqtt(
+                adapter_config,
+                std::sync::Arc::new(move |delivery| {
+                    if handler_tx.send(delivery).is_err() {
+                        log::error!("worker intake queue is closed; dropping MQTT delivery");
+                    }
+                }),
+                failure_tx.clone(),
+            ) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    for handle in mqtt_handles {
+                        let _ = handle.stop();
+                    }
+                    drop(intake_tx);
+                    drop(process_tx);
+                    if let Some(process_thread) = process_thread {
+                        let _ = process_thread.join();
+                    }
+                    let _ = egress.stop();
+                    supervisor.stop();
+                    return Err(error);
                 }
-            }))?;
+            };
             mqtt_handles.push(handle);
         }
 
@@ -119,6 +149,7 @@ impl ActivePipeline {
             egress: Some(egress),
             metrics,
             process_reload_timeout: config.process_reload_timeout,
+            supervisor,
         })
     }
 
@@ -160,6 +191,10 @@ impl ActivePipeline {
         &self.metrics
     }
 
+    pub fn failure(&self) -> Option<WorkerFailure> {
+        self.supervisor.failure()
+    }
+
     pub fn stop(mut self) -> WorkerResult<()> {
         for handle in self.mqtt_handles.drain(..) {
             handle.stop()?;
@@ -173,6 +208,7 @@ impl ActivePipeline {
         if let Some(egress) = self.egress.take() {
             egress.stop()?;
         }
+        self.supervisor.stop();
         Ok(())
     }
 }
@@ -194,23 +230,32 @@ fn start_process_loop(
     mut processor: Box<dyn Processor>,
     egress: Egress,
     metrics: Arc<WorkerMetrics>,
+    failure_tx: Sender<WorkerFailure>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        loop {
-            match flume::Selector::new()
-                .recv(&process_rx, ProcessEvent::Command)
-                .recv(&intake_rx, ProcessEvent::Delivery)
-                .wait()
-            {
-                ProcessEvent::Command(Ok(command)) => {
-                    processor = handle_process_command(processor, command);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loop {
+                match flume::Selector::new()
+                    .recv(&process_rx, ProcessEvent::Command)
+                    .recv(&intake_rx, ProcessEvent::Delivery)
+                    .wait()
+                {
+                    ProcessEvent::Command(Ok(command)) => {
+                        processor = handle_process_command(processor, command);
+                    }
+                    ProcessEvent::Command(Err(_)) => break,
+                    ProcessEvent::Delivery(Ok(delivery)) => {
+                        process_delivery(&mut *processor, delivery, &egress, &metrics)
+                    }
+                    ProcessEvent::Delivery(Err(_)) => break,
                 }
-                ProcessEvent::Command(Err(_)) => {}
-                ProcessEvent::Delivery(Ok(delivery)) => {
-                    process_delivery(&mut *processor, delivery, &egress, &metrics)
-                }
-                ProcessEvent::Delivery(Err(_)) => break,
             }
+        }));
+        if result.is_err() {
+            let _ = failure_tx.send(WorkerFailure::fatal(
+                WorkerComponent::Processor,
+                "processor thread panicked",
+            ));
         }
     })
 }
@@ -331,6 +376,7 @@ mod tests {
     #[test]
     fn reload_process_rejects_source_changes() {
         let plan = plan();
+        let (_, supervisor) = WorkerSupervisor::start();
         let mut pipeline = ActivePipeline {
             plan: plan.clone(),
             mqtt_handles: Vec::new(),
@@ -340,6 +386,7 @@ mod tests {
             egress: None,
             metrics: Arc::new(WorkerMetrics::default()),
             process_reload_timeout: Duration::from_secs(10),
+            supervisor,
         };
         let mut target = plan;
         target.sources[0].client_count = 2;
@@ -435,6 +482,7 @@ mod tests {
                 ..EgressConfig::default()
             },
             Arc::new(WorkerMetrics::default()),
+            None,
         )
         .expect("egress runtime")
     }

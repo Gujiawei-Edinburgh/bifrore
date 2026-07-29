@@ -1,4 +1,5 @@
 use crate::{EgressDropReason, WorkerError, WorkerMetrics, WorkerResult};
+use crate::supervisor::{WorkerComponent, WorkerFailure};
 use flume::{Receiver, Sender, TrySendError};
 use mio::net::{UnixListener, UnixStream};
 use mio::{Events, Interest, Poll, Token};
@@ -78,10 +79,11 @@ pub struct EgressRuntime {
 }
 
 impl EgressRuntime {
-    pub fn start(
+    pub(crate) fn start(
         plan: Option<EgressPlan>,
         config: EgressConfig,
         metrics: Arc<WorkerMetrics>,
+        failure_tx: Option<Sender<WorkerFailure>>,
     ) -> WorkerResult<Self> {
         let _plan = plan.ok_or_else(|| WorkerError::pipeline("egress plan is missing"))?;
         let listener = bind_egress_listener(&config.socket_path)?;
@@ -96,6 +98,7 @@ impl EgressRuntime {
             consumer_sender,
             Arc::clone(&consumer_connected),
             Arc::clone(&stop_accept),
+            failure_tx.clone(),
         ));
         let drain_thread = Some(start_egress_drain_loop(
             receiver,
@@ -104,6 +107,7 @@ impl EgressRuntime {
             metrics,
             config.batch_budget,
             config.send_timeout,
+            failure_tx,
         ));
         Ok(Self {
             egress: Egress { sender },
@@ -226,12 +230,21 @@ fn start_egress_drain_loop(
     metrics: Arc<WorkerMetrics>,
     budget: BatchBudget,
     send_timeout: Duration,
+    failure_tx: Option<Sender<WorkerFailure>>,
 ) -> JoinHandle<()> {
+    let panic_failure_tx = failure_tx.clone();
     std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut transport = match EgressTransport::new(consumer_receiver, consumer_connected) {
             Ok(transport) => transport,
             Err(error) => {
                 log::error!("egress transport failed to start: {error}");
+                if let Some(failure_tx) = &failure_tx {
+                    let _ = failure_tx.send(WorkerFailure::fatal(
+                        WorkerComponent::Egress,
+                        format!("egress transport failed to start: {error}"),
+                    ));
+                }
                 drain_and_drop(receiver, &metrics);
                 return;
             }
@@ -263,6 +276,15 @@ fn start_egress_drain_loop(
                         metrics.record_egress_dropped_records(reason, record_count);
                     }
                 }
+            }
+        }
+        }));
+        if result.is_err() {
+            if let Some(failure_tx) = panic_failure_tx {
+                let _ = failure_tx.send(WorkerFailure::fatal(
+                    WorkerComponent::Egress,
+                    "egress drain thread panicked",
+                ));
             }
         }
     })
@@ -307,16 +329,39 @@ fn start_egress_accept_loop(
     consumer_sender: Sender<UnixStream>,
     consumer_connected: Arc<AtomicBool>,
     stop_accept: Arc<AtomicBool>,
+    failure_tx: Option<Sender<WorkerFailure>>,
 ) -> JoinHandle<()> {
+    let panic_failure_tx = failure_tx.clone();
     std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut acceptor = match EgressAcceptor::new(listener) {
             Ok(acceptor) => acceptor,
             Err(error) => {
                 log::error!("egress accept loop failed to start: {error}");
+                if let Some(failure_tx) = &failure_tx {
+                    let _ = failure_tx.send(WorkerFailure::fatal(
+                        WorkerComponent::Egress,
+                        format!("egress accept loop failed to start: {error}"),
+                    ));
+                }
                 return;
             }
         };
-        acceptor.run(consumer_sender, consumer_connected, stop_accept);
+        acceptor.run(
+            consumer_sender,
+            consumer_connected,
+            stop_accept,
+            failure_tx,
+        );
+        }));
+        if result.is_err() {
+            if let Some(failure_tx) = panic_failure_tx {
+                let _ = failure_tx.send(WorkerFailure::fatal(
+                    WorkerComponent::Egress,
+                    "egress accept thread panicked",
+                ));
+            }
+        }
     })
 }
 
@@ -343,6 +388,7 @@ impl EgressAcceptor {
         consumer_sender: Sender<UnixStream>,
         consumer_connected: Arc<AtomicBool>,
         stop_accept: Arc<AtomicBool>,
+        failure_tx: Option<Sender<WorkerFailure>>,
     ) {
         while !stop_accept.load(Ordering::Acquire) {
             match self.accept_poll.poll(&mut self.events, None) {
@@ -354,6 +400,12 @@ impl EgressAcceptor {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => {
                     log::error!("egress accept poll failed: {error}");
+                    if let Some(failure_tx) = &failure_tx {
+                        let _ = failure_tx.send(WorkerFailure::fatal(
+                            WorkerComponent::Egress,
+                            format!("egress accept poll failed: {error}"),
+                        ));
+                    }
                     break;
                 }
             }
@@ -825,6 +877,7 @@ mod tests {
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
+            None,
         )
         .expect("egress runtime");
         let mut consumer = StdUnixStream::connect(&socket_path).expect("connect egress socket");
@@ -864,6 +917,7 @@ mod tests {
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
+            None,
         )
         .expect("egress runtime");
         let _first = StdUnixStream::connect(&socket_path).expect("first consumer");
@@ -893,6 +947,7 @@ mod tests {
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
+            None,
         )
         .expect("egress runtime");
         let first = StdUnixStream::connect(&socket_path).expect("first consumer");
@@ -938,6 +993,7 @@ mod tests {
                 ..EgressConfig::default()
             },
             Arc::clone(&metrics),
+            None,
         )
         .expect("egress runtime");
 

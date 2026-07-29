@@ -1,5 +1,6 @@
 use crate::auth::resolve_auth;
 use crate::{WorkerError, WorkerResult};
+use crate::supervisor::{WorkerComponent, WorkerFailure};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -82,6 +83,7 @@ struct DeferredAck {
 pub fn start_mqtt(
     config: MqttAdapterConfig,
     handler: DeliveryHandler,
+    failure_tx: flume::Sender<WorkerFailure>,
 ) -> WorkerResult<MqttAdapterHandle> {
     use rumqttc::v5::{AsyncClient, MqttOptions};
     use std::sync::mpsc;
@@ -190,6 +192,7 @@ pub fn start_mqtt(
                                 shutdown_rx,
                                 topics.len(),
                                 client_ready_tx.clone(),
+                                failure_tx.clone(),
                             )));
                             log::debug!("MQTT client subscriptions enqueued for client {client_id}");
                         }
@@ -343,6 +346,7 @@ async fn run_event_loop(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     expected_subscriptions: usize,
     ready_tx: tokio::sync::mpsc::Sender<WorkerResult<()>>,
+    failure_tx: flume::Sender<WorkerFailure>,
 ) {
     let mut ready_tx = Some(ready_tx);
     let mut acknowledged_subscriptions = 0usize;
@@ -394,6 +398,10 @@ async fn run_event_loop(
                     Ok(_) => {}
                     Err(error) => {
                         log::error!("MQTT event loop error: {error}");
+                        let _ = failure_tx.send(WorkerFailure::fatal(
+                            WorkerComponent::Mqtt,
+                            format!("MQTT event loop failed: {error}"),
+                        ));
                         if let Some(ready_tx) = ready_tx.take() {
                             let _ = ready_tx.send(Err(WorkerError::mqtt(format!(
                                 "MQTT event loop failed before subscriptions were ready: {error}"

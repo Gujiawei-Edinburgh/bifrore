@@ -3,6 +3,7 @@ use prost::Message;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
 use tenon_message::daemon::v1::{
     worker_envelope, worker_response_envelope, GetWorkerStatsResponse, ReloadWorkerRequest,
     ReloadWorkerResponse, StartWorkerRequest, StartWorkerResponse, StopWorkerRequest,
@@ -26,10 +27,28 @@ impl WorkerService {
                 socket_path.display()
             ))
         })?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .map_err(|error| {
+                WorkerError::control(format!("failed to configure worker control timeout: {error}"))
+            })?;
         let mut active = None;
 
         loop {
-            let envelope = read_worker_envelope(&mut stream)?;
+            if let Some(failure) = active.as_ref().and_then(ActivePipeline::failure) {
+                let error = WorkerError::pipeline(format!(
+                    "worker supervisor reported {:?} failure: {}",
+                    failure.component, failure.message
+                ));
+                if let Some(pipeline) = active.take() {
+                    let _ = pipeline.stop();
+                }
+                return Err(error);
+            }
+
+            let Some(envelope) = read_worker_envelope(&mut stream)? else {
+                continue;
+            };
             match envelope.payload {
                 Some(worker_envelope::Payload::StartWorker(request)) => {
                     let (state, error) = match replace_pipeline(&mut active, request, &self.config) {
@@ -178,17 +197,24 @@ fn stop_pipeline(
     Ok(())
 }
 
-fn read_worker_envelope(stream: &mut UnixStream) -> WorkerResult<WorkerEnvelope> {
+fn read_worker_envelope(stream: &mut UnixStream) -> WorkerResult<Option<WorkerEnvelope>> {
     let mut header = [0u8; 4];
-    stream
-        .read_exact(&mut header)
-        .map_err(|error| WorkerError::control(format!("failed to read worker frame: {error}")))?;
+    match stream.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => return Ok(None),
+        Err(error) => {
+            return Err(WorkerError::control(format!(
+                "failed to read worker frame: {error}"
+            )))
+        }
+    }
     let len = u32::from_le_bytes(header) as usize;
     let mut payload = vec![0u8; len];
     stream
         .read_exact(&mut payload)
         .map_err(|error| WorkerError::control(format!("failed to read worker frame: {error}")))?;
     WorkerEnvelope::decode(payload.as_slice())
+        .map(Some)
         .map_err(|error| WorkerError::control(format!("failed to decode worker frame: {error}")))
 }
 

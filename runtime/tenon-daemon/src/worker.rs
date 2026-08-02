@@ -631,8 +631,8 @@ mod tests {
         });
 
         block_on(manager.reload(&handle, plan.clone())).expect("reload worker");
-        responder.join().expect("worker responder");
         block_on(manager.stop(handle)).expect("stop worker");
+        responder.join().expect("worker responder");
     }
 
     #[test]

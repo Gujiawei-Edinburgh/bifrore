@@ -31,28 +31,79 @@ message PutPipelineRequest {
 message PutPipelineResponse {
   bool accepted = 1;
   ResourceId id = 2;
-  ApplyMode mode = 3;
+  StartMode mode = 3;
   string message = 4;
 }
 
-message ApplyResourceRequest {
+message GetPipelineRequest {
   string pipeline_name = 1;
   optional string pipeline_ver = 2;
 }
 
-message ApplyResourceResponse {
+message GetPipelineResponse {
+  bool found = 1;
+  DeploymentPlan pipeline = 2;
+  string message = 3;
+}
+
+message ListPipelinesRequest {}
+
+message ListPipelinesResponse {
+  repeated ResourceId pipelines = 1;
+  string message = 2;
+}
+
+message DeletePipelineRequest {
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
+}
+
+message DeletePipelineResponse {
+  bool deleted = 1;
+  ResourceId id = 2;
+  string message = 3;
+}
+
+message StartPipelineRequest {
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
+}
+
+message StartPipelineResponse {
   bool accepted = 1;
   ResourceId active_pipeline_id = 2;
-  ApplyMode mode = 3;
+  StartMode mode = 3;
   string message = 4;
 }
 
-enum ApplyMode {
-  APPLY_MODE_UNSPECIFIED = 0;
-  APPLY_MODE_STARTED = 1;
-  APPLY_MODE_HOT_RELOAD = 2;
-  APPLY_MODE_REJECTED_RESTART_REQUIRED = 3;
-  APPLY_MODE_REJECTED_WORKER_ERROR = 4;
+message StopPipelineRequest {
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
+}
+
+message StopPipelineResponse {
+  bool stopped = 1;
+  WorkerState state = 2;
+  string message = 3;
+}
+
+message GetPipelineStatusRequest {
+  string pipeline_name = 1;
+  optional string pipeline_ver = 2;
+}
+
+message GetPipelineStatusResponse {
+  ResourceId id = 1;
+  WorkerState state = 2;
+  string message = 3;
+}
+
+enum StartMode {
+  START_MODE_UNSPECIFIED = 0;
+  START_MODE_STARTED = 1;
+  START_MODE_HOT_RELOAD = 2;
+  START_MODE_REJECTED_RESTART_REQUIRED = 3;
+  START_MODE_REJECTED_WORKER_ERROR = 4;
 }
 
 enum ExecutionMode {
@@ -277,7 +328,17 @@ message DaemonEnvelope {
   oneof payload {
     PutPipelineRequest put_pipeline = 3;
     PutPipelineResponse put_pipeline_response = 4;
-    ApplyResourceRequest apply_resource = 13;
-    ApplyResourceResponse apply_resource_response = 14;
+    GetPipelineRequest get_pipeline = 5;
+    GetPipelineResponse get_pipeline_response = 6;
+    ListPipelinesRequest list_pipelines = 7;
+    ListPipelinesResponse list_pipelines_response = 8;
+    DeletePipelineRequest delete_pipeline = 9;
+    DeletePipelineResponse delete_pipeline_response = 10;
+    StartPipelineRequest start_pipeline = 13;
+    StartPipelineResponse start_pipeline_response = 14;
+    StopPipelineRequest stop_pipeline = 15;
+    StopPipelineResponse stop_pipeline_response = 16;
+    GetPipelineStatusRequest get_pipeline_status = 17;
+    GetPipelineStatusResponse get_pipeline_status_response = 18;
   }
 }

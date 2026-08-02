@@ -11,19 +11,19 @@ message PutPipelineRequest {
 message PutPipelineResponse {
   bool accepted = 1;
   tenon.daemon.v1.ResourceId id = 2;
-  tenon.daemon.v1.ApplyMode mode = 3;
+  tenon.daemon.v1.StartMode mode = 3;
   string message = 4;
 }
 
-message ApplyResourceRequest {
+message StartPipelineRequest {
   string pipeline_name = 1;
   optional string pipeline_ver = 2;
 }
 
-message ApplyResourceResponse {
+message StartPipelineResponse {
   bool accepted = 1;
   tenon.daemon.v1.ResourceId active_pipeline_id = 2;
-  tenon.daemon.v1.ApplyMode mode = 3;
+  tenon.daemon.v1.StartMode mode = 3;
   string message = 4;
 }
 
@@ -43,7 +43,7 @@ message ControlPlaneEnvelope {
     GetPipelineResponse get_pipeline_response = 4;
     PutPipelineRequest put_pipeline = 6;
     PutPipelineResponse put_pipeline_response = 7;
-    ApplyResourceRequest apply_resource = 10;
-    ApplyResourceResponse apply_resource_response = 11;
+    StartPipelineRequest start_pipeline = 10;
+    StartPipelineResponse start_pipeline_response = 11;
   }
 }

@@ -1,9 +1,12 @@
 use crate::{
-    DaemonApplyMode, DaemonError, DaemonErrorKind, DaemonStore, TenonDaemon, WorkerManager,
+    DaemonStartMode, DaemonError, DaemonErrorKind, DaemonStore, TenonDaemon, WorkerManager,
+    WorkerStatus,
 };
 use tenon_message::daemon::v1::{
-    ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
-    PutPipelineResponse,
+    StartMode, StartPipelineRequest, StartPipelineResponse, DeletePipelineRequest,
+    DeletePipelineResponse, GetPipelineRequest, GetPipelineResponse, GetPipelineStatusRequest,
+    GetPipelineStatusResponse, ListPipelinesRequest, ListPipelinesResponse, PutPipelineRequest,
+    PutPipelineResponse, StopPipelineRequest, StopPipelineResponse, WorkerState,
 };
 
 pub struct DaemonService<L, S> {
@@ -23,52 +26,195 @@ where
         &self.daemon
     }
 
+    // Resource APIs persist and validate the desired pipeline definition.
     pub async fn handle_put_pipeline(
         &mut self,
         request: PutPipelineRequest,
     ) -> PutPipelineResponse {
         let Some(pipeline) = request.pipeline else {
-            return put_rejected(ApplyMode::RejectedWorkerError, "pipeline is missing");
+            return put_rejected(StartMode::RejectedWorkerError, "pipeline is missing");
         };
 
         match self.daemon.put_pipeline(pipeline).await {
             Ok(result) => PutPipelineResponse {
                 accepted: true,
                 id: Some(result.id),
-                mode: ApplyMode::Unspecified as i32,
+                mode: StartMode::Unspecified as i32,
                 message: String::new(),
             },
-            Err(error) => put_rejected(apply_error_mode(&error), error.message),
+            Err(error) => put_rejected(start_error_mode(&error), error.message),
         }
     }
 
-    pub async fn handle_apply_resource(
-        &mut self,
-        request: ApplyResourceRequest,
-    ) -> ApplyResourceResponse {
+    pub async fn handle_get_pipeline(
+        &self,
+        request: GetPipelineRequest,
+    ) -> GetPipelineResponse {
         match self
             .daemon
-            .apply_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
+            .get_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
             .await
         {
-            Ok(result) => ApplyResourceResponse {
-                accepted: true,
-                active_pipeline_id: Some(result.id),
-                mode: apply_mode_from_daemon(result.mode) as i32,
+            Ok(Some(result)) => GetPipelineResponse {
+                found: true,
+                pipeline: Some(result.plan),
                 message: String::new(),
             },
-            Err(error) => ApplyResourceResponse {
-                accepted: false,
-                active_pipeline_id: None,
-                mode: apply_error_mode(&error) as i32,
+            Ok(None) => GetPipelineResponse {
+                found: false,
+                pipeline: None,
+                message: String::new(),
+            },
+            Err(error) => GetPipelineResponse {
+                found: false,
+                pipeline: None,
                 message: error.message,
             },
         }
     }
 
+    pub async fn handle_list_pipelines(
+        &self,
+        _request: ListPipelinesRequest,
+    ) -> ListPipelinesResponse {
+        match self.daemon.list_pipelines().await {
+            Ok(pipelines) => ListPipelinesResponse {
+                pipelines,
+                message: String::new(),
+            },
+            Err(error) => ListPipelinesResponse {
+                pipelines: Vec::new(),
+                message: error.message,
+            },
+        }
+    }
+
+    pub async fn handle_delete_pipeline(
+        &mut self,
+        request: DeletePipelineRequest,
+    ) -> DeletePipelineResponse {
+        match self
+            .daemon
+            .delete_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
+            .await
+        {
+            Ok(Some(id)) => DeletePipelineResponse {
+                deleted: true,
+                id: Some(id),
+                message: String::new(),
+            },
+            Ok(None) => DeletePipelineResponse {
+                deleted: false,
+                id: None,
+                message: "pipeline resource not found".to_string(),
+            },
+            Err(error) => DeletePipelineResponse {
+                deleted: false,
+                id: None,
+                message: error.message,
+            },
+        }
+    }
+
+    // Deployment APIs control the worker running a persisted pipeline.
+    pub async fn handle_start_pipeline(
+        &mut self,
+        request: StartPipelineRequest,
+    ) -> StartPipelineResponse {
+        match self
+            .daemon
+            .start_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
+            .await
+        {
+            Ok(result) => StartPipelineResponse {
+                accepted: true,
+                active_pipeline_id: Some(result.id),
+                mode: start_mode_from_daemon(result.mode) as i32,
+                message: String::new(),
+            },
+            Err(error) => StartPipelineResponse {
+                accepted: false,
+                active_pipeline_id: None,
+                mode: start_error_mode(&error) as i32,
+                message: error.message,
+            },
+        }
+    }
+
+    pub async fn handle_stop_pipeline(
+        &mut self,
+        request: StopPipelineRequest,
+    ) -> StopPipelineResponse {
+        match self
+            .daemon
+            .stop_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
+            .await
+        {
+            Ok(state) => StopPipelineResponse {
+                stopped: true,
+                state: worker_state(state),
+                message: String::new(),
+            },
+            Err(error) => StopPipelineResponse {
+                stopped: false,
+                state: WorkerState::Error as i32,
+                message: error.message,
+            },
+        }
+    }
+
+    pub async fn handle_get_pipeline_status(
+        &mut self,
+        request: GetPipelineStatusRequest,
+    ) -> GetPipelineStatusResponse {
+        let pipeline = match self
+            .daemon
+            .get_pipeline(&request.pipeline_name, request.pipeline_ver.as_deref())
+            .await
+        {
+            Ok(Some(pipeline)) => pipeline,
+            Ok(None) => {
+                return GetPipelineStatusResponse {
+                    id: None,
+                    state: WorkerState::Error as i32,
+                    message: "pipeline resource not found".to_string(),
+                }
+            }
+            Err(error) => {
+                return GetPipelineStatusResponse {
+                    id: None,
+                    state: WorkerState::Error as i32,
+                    message: error.message,
+                }
+            }
+        };
+        match self.daemon.worker_status(&pipeline.id).await {
+            Ok(state) => GetPipelineStatusResponse {
+                id: Some(pipeline.id),
+                state: worker_state(state),
+                message: String::new(),
+            },
+            Err(error) => GetPipelineStatusResponse {
+                id: Some(pipeline.id),
+                state: WorkerState::Error as i32,
+                message: error.message,
+            },
+        }
+    }
 }
 
-fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutPipelineResponse {
+fn worker_state(status: WorkerStatus) -> i32 {
+    (match status {
+        WorkerStatus::Init => WorkerState::Init,
+        WorkerStatus::Starting => WorkerState::Starting,
+        WorkerStatus::Running => WorkerState::Running,
+        WorkerStatus::Stopping => WorkerState::Stopping,
+        WorkerStatus::Stopped => WorkerState::Stopped,
+        WorkerStatus::Error => WorkerState::Error,
+    }) as i32
+}
+
+fn put_rejected(mode: StartMode, message: impl Into<String>) -> PutPipelineResponse {
     PutPipelineResponse {
         accepted: false,
         id: None,
@@ -77,19 +223,19 @@ fn put_rejected(mode: ApplyMode, message: impl Into<String>) -> PutPipelineRespo
     }
 }
 
-fn apply_error_mode(error: &DaemonError) -> ApplyMode {
+fn start_error_mode(error: &DaemonError) -> StartMode {
     match error.kind {
-        DaemonErrorKind::Worker => ApplyMode::RejectedWorkerError,
+        DaemonErrorKind::Worker => StartMode::RejectedWorkerError,
         DaemonErrorKind::Store | DaemonErrorKind::InvalidState | DaemonErrorKind::NotFound => {
-            ApplyMode::RejectedWorkerError
+            StartMode::RejectedWorkerError
         }
     }
 }
 
-fn apply_mode_from_daemon(mode: DaemonApplyMode) -> ApplyMode {
+fn start_mode_from_daemon(mode: DaemonStartMode) -> StartMode {
     match mode {
-        DaemonApplyMode::Started => ApplyMode::Started,
-        DaemonApplyMode::HotReload => ApplyMode::HotReload,
+        DaemonStartMode::Started => StartMode::Started,
+        DaemonStartMode::HotReload => StartMode::HotReload,
     }
 }
 
@@ -115,7 +261,7 @@ mod tests {
                 .await;
 
             assert!(response.accepted);
-            assert_eq!(ApplyMode::try_from(response.mode), Ok(ApplyMode::Unspecified));
+            assert_eq!(StartMode::try_from(response.mode), Ok(StartMode::Unspecified));
             assert_eq!(
                 response.id,
                 Some(id("sensor-pipeline", "r1"))
@@ -137,6 +283,42 @@ mod tests {
     }
 
     #[test]
+    fn manages_pipeline_resource_lifecycle() {
+        block_on(async {
+            let mut service = service();
+            let put = service
+                .handle_put_pipeline(PutPipelineRequest {
+                    pipeline: Some(plan("function on_message(ctx, msg) end")),
+                })
+                .await;
+            let id = put.id.clone().expect("pipeline id");
+
+            let get = service
+                .handle_get_pipeline(GetPipelineRequest {
+                    pipeline_name: id.name.clone(),
+                    pipeline_ver: None,
+                })
+                .await;
+            assert!(get.found);
+            assert_eq!(get.pipeline.and_then(|plan| plan.id), Some(id.clone()));
+
+            let list = service
+                .handle_list_pipelines(ListPipelinesRequest {})
+                .await;
+            assert_eq!(list.pipelines, vec![id.clone()]);
+
+            let delete = service
+                .handle_delete_pipeline(DeletePipelineRequest {
+                    pipeline_name: id.name.clone(),
+                    pipeline_ver: None,
+                })
+                .await;
+            assert!(delete.deleted);
+            assert_eq!(delete.id, Some(id));
+        });
+    }
+
+    #[test]
     fn rejects_put_pipeline_without_process_access_plan() {
         block_on(async {
             let mut service = service();
@@ -153,7 +335,7 @@ mod tests {
             assert!(response.message.contains("process access_plan is missing"));
 
             let apply = service
-                .handle_apply_resource(ApplyResourceRequest {
+                .handle_start_pipeline(StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: None,
                 })
@@ -195,7 +377,7 @@ mod tests {
                 .await;
 
             let apply = service
-                .handle_apply_resource(ApplyResourceRequest {
+                .handle_start_pipeline(StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: None,
                 })
@@ -206,7 +388,7 @@ mod tests {
                 apply.active_pipeline_id,
                 Some(id("sensor-pipeline", "r1"))
             );
-            assert_eq!(ApplyMode::try_from(apply.mode), Ok(ApplyMode::Started));
+            assert_eq!(StartMode::try_from(apply.mode), Ok(StartMode::Started));
         });
     }
 
@@ -226,7 +408,7 @@ mod tests {
                 .await;
 
             let apply = service
-                .handle_apply_resource(ApplyResourceRequest {
+                .handle_start_pipeline(StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: Some("r1".to_string()),
                 })
@@ -250,7 +432,7 @@ mod tests {
                 })
                 .await;
             service
-                .handle_apply_resource(ApplyResourceRequest {
+                .handle_start_pipeline(StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: None,
                 })
@@ -270,7 +452,7 @@ mod tests {
                 })
                 .await;
             let apply = service
-                .handle_apply_resource(ApplyResourceRequest {
+                .handle_start_pipeline(StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: None,
                 })
@@ -285,7 +467,7 @@ mod tests {
                 .clone();
 
             assert!(apply.accepted);
-            assert_eq!(ApplyMode::try_from(apply.mode), Ok(ApplyMode::HotReload));
+            assert_eq!(StartMode::try_from(apply.mode), Ok(StartMode::HotReload));
             assert_eq!(current_worker_id, original_worker_id);
         });
     }

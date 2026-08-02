@@ -1,5 +1,6 @@
 use crate::{DaemonError, DaemonResult};
 use prost::Message;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::future::Future;
 use tenon_message::plan::{DeploymentPlan, MqttClientIds, ResourceId};
@@ -27,6 +28,15 @@ pub trait DaemonStore {
         &'a self,
         name: &'a str,
     ) -> impl Future<Output = DaemonResult<Option<ResourceId>>> + Send + 'a;
+
+    fn list_pipeline_ids<'a>(
+        &'a self,
+    ) -> impl Future<Output = DaemonResult<Vec<ResourceId>>> + Send + 'a;
+
+    fn delete_pipeline<'a>(
+        &'a mut self,
+        id: &'a ResourceId,
+    ) -> impl Future<Output = DaemonResult<bool>> + Send + 'a;
 
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
@@ -93,6 +103,63 @@ impl DaemonStore for InMemoryDaemonStore {
         }
     }
 
+    fn list_pipeline_ids<'a>(
+        &'a self,
+    ) -> impl Future<Output = DaemonResult<Vec<ResourceId>>> + Send + 'a {
+        async move {
+            let prefix = store_key(PIPELINE_KEY_PREFIX, b"");
+            let mut ids = Vec::new();
+            for (key, value) in &self.entries {
+                if !key.starts_with(&prefix) {
+                    continue;
+                }
+                let plan = DeploymentPlan::decode(value.as_slice()).map_err(|error| {
+                    DaemonError::store(format!("failed to decode {PLAN_LABEL}: {error}"))
+                })?;
+                ids.push(required_pipeline_id(plan.id.as_ref())?.clone());
+            }
+            ids.sort_by(compare_pipeline_ids);
+            Ok(ids)
+        }
+    }
+
+    fn delete_pipeline<'a>(
+        &'a mut self,
+        id: &'a ResourceId,
+    ) -> impl Future<Output = DaemonResult<bool>> + Send + 'a {
+        async move {
+            required_pipeline_id(Some(id))?;
+            let key = pipeline_key(id);
+            let Some(plan) = self.load_message::<DeploymentPlan>(&key, PLAN_LABEL)? else {
+                return Ok(false);
+            };
+            self.entries.remove(&key);
+            self.entries.remove(&pipeline_metadata_key(&id.name));
+            for source_index in 0..plan.sources.len() {
+                let source_id = ResourceId {
+                    name: format!("{}:source:{source_index}", id.name),
+                    version: "client-ids".to_string(),
+                };
+                self.entries.remove(&client_ids_key(&source_id));
+            }
+
+            let latest = self
+                .entries
+                .iter()
+                .filter(|(key, _)| key.starts_with(&pipeline_key_prefix(&id.name)))
+                .filter_map(|(_, value)| {
+                    DeploymentPlan::decode(value.as_slice())
+                        .ok()
+                        .and_then(|plan| plan.id)
+                })
+                .max_by(compare_pipeline_ids);
+            if let Some(latest) = latest {
+                self.save_message(pipeline_metadata_key(&id.name), &latest);
+            }
+            Ok(true)
+        }
+    }
+
     fn save_mqtt_client_ids<'a>(
         &'a mut self,
         key: &'a ResourceId,
@@ -154,6 +221,10 @@ fn pipeline_key(id: &ResourceId) -> Vec<u8> {
     store_key(PIPELINE_KEY_PREFIX, pipeline_id_label(id).as_bytes())
 }
 
+fn pipeline_key_prefix(name: &str) -> Vec<u8> {
+    store_key(PIPELINE_KEY_PREFIX, format!("{name}:").as_bytes())
+}
+
 fn pipeline_metadata_key(name: &str) -> Vec<u8> {
     store_key(PIPELINE_METADATA_KEY_PREFIX, name.as_bytes())
 }
@@ -164,6 +235,18 @@ fn client_ids_key(id: &ResourceId) -> Vec<u8> {
 
 fn pipeline_id_label(id: &ResourceId) -> String {
     format!("{}:{}", id.name, id.version)
+}
+
+fn compare_pipeline_ids(left: &ResourceId, right: &ResourceId) -> Ordering {
+    left.name.cmp(&right.name).then_with(|| {
+        match (
+            left.version.strip_prefix('r').and_then(|v| v.parse::<u64>().ok()),
+            right.version.strip_prefix('r').and_then(|v| v.parse::<u64>().ok()),
+        ) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            _ => left.version.cmp(&right.version),
+        }
+    })
 }
 
 fn store_key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
@@ -236,6 +319,36 @@ mod tests {
 
             assert_eq!(error.kind, crate::DaemonErrorKind::InvalidState);
             assert!(error.message.contains("already exists"));
+        });
+    }
+
+    #[test]
+    fn lists_and_deletes_pipeline_revisions() {
+        block_on(async {
+            let mut store = InMemoryDaemonStore::new();
+            let first = plan();
+            let mut first = first;
+            first.id.as_mut().expect("first id").version = "r1".to_string();
+            let mut second = first.clone();
+            second.id.as_mut().expect("first id").version = "r2".to_string();
+            let first_id = first.id.clone().expect("first id");
+            let second_id = second.id.clone().expect("second id");
+
+            store.save_pipeline(first).await.expect("save first");
+            store.save_pipeline(second).await.expect("save second");
+
+            assert_eq!(store.list_pipeline_ids().await.expect("list"), vec![
+                first_id.clone(),
+                second_id.clone(),
+            ]);
+            assert!(store.delete_pipeline(&first_id).await.expect("delete first"));
+            assert_eq!(
+                store
+                    .load_latest_pipeline_id("sensor-pipeline")
+                    .await
+                    .expect("latest"),
+                Some(second_id)
+            );
         });
     }
 

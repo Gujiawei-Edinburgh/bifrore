@@ -3,8 +3,10 @@ use futures::channel::{mpsc, oneshot};
 use futures::{SinkExt, StreamExt};
 use std::future::Future;
 use tenon_message::daemon::v1::{
-    ApplyMode, ApplyResourceRequest, ApplyResourceResponse, PutPipelineRequest,
-    PutPipelineResponse,
+    StartMode, StartPipelineRequest, StartPipelineResponse, DeletePipelineRequest,
+    DeletePipelineResponse, GetPipelineRequest, GetPipelineResponse, GetPipelineStatusRequest,
+    GetPipelineStatusResponse, ListPipelinesRequest, ListPipelinesResponse, PutPipelineRequest,
+    PutPipelineResponse, StopPipelineRequest, StopPipelineResponse,
 };
 
 pub trait DaemonClient {
@@ -13,10 +15,35 @@ pub trait DaemonClient {
         request: PutPipelineRequest,
     ) -> impl Future<Output = PutPipelineResponse> + Send + '_;
 
-    fn apply_resource(
+    fn start_pipeline(
         &self,
-        request: ApplyResourceRequest,
-    ) -> impl Future<Output = ApplyResourceResponse> + Send + '_;
+        request: StartPipelineRequest,
+    ) -> impl Future<Output = StartPipelineResponse> + Send + '_;
+
+    fn get_pipeline(
+        &self,
+        request: GetPipelineRequest,
+    ) -> impl Future<Output = GetPipelineResponse> + Send + '_;
+
+    fn list_pipelines(
+        &self,
+        request: ListPipelinesRequest,
+    ) -> impl Future<Output = ListPipelinesResponse> + Send + '_;
+
+    fn delete_pipeline(
+        &self,
+        request: DeletePipelineRequest,
+    ) -> impl Future<Output = DeletePipelineResponse> + Send + '_;
+
+    fn stop_pipeline(
+        &self,
+        request: StopPipelineRequest,
+    ) -> impl Future<Output = StopPipelineResponse> + Send + '_;
+
+    fn get_pipeline_status(
+        &self,
+        request: GetPipelineStatusRequest,
+    ) -> impl Future<Output = GetPipelineStatusResponse> + Send + '_;
 }
 
 pub trait DaemonServer {
@@ -83,16 +110,95 @@ impl DaemonClient for InProcDaemonClient {
             .unwrap_or_else(|_| put_pipeline_failed("daemon service dropped response"))
     }
 
-    async fn apply_resource(&self, request: ApplyResourceRequest) -> ApplyResourceResponse {
+    async fn start_pipeline(&self, request: StartPipelineRequest) -> StartPipelineResponse {
         let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::ApplyResource { request, reply };
+        let command = DaemonCommand::StartPipeline { request, reply };
         let mut sender = self.sender.clone();
         if sender.send(command).await.is_err() {
-            return apply_resource_failed("daemon service is stopped");
+            return start_pipeline_failed("daemon service is stopped");
         }
         receiver
             .await
-            .unwrap_or_else(|_| apply_resource_failed("daemon service dropped response"))
+            .unwrap_or_else(|_| start_pipeline_failed("daemon service dropped response"))
+    }
+
+    async fn get_pipeline(&self, request: GetPipelineRequest) -> GetPipelineResponse {
+        let (reply, receiver) = oneshot::channel();
+        let command = DaemonCommand::GetPipeline { request, reply };
+        let mut sender = self.sender.clone();
+        if sender.send(command).await.is_err() {
+            return GetPipelineResponse {
+                found: false,
+                pipeline: None,
+                message: "daemon service is stopped".to_string(),
+            };
+        }
+        receiver.await.unwrap_or_else(|_| GetPipelineResponse {
+            found: false,
+            pipeline: None,
+            message: "daemon service dropped response".to_string(),
+        })
+    }
+
+    async fn list_pipelines(&self, request: ListPipelinesRequest) -> ListPipelinesResponse {
+        let (reply, receiver) = oneshot::channel();
+        let command = DaemonCommand::ListPipelines { request, reply };
+        let mut sender = self.sender.clone();
+        if sender.send(command).await.is_err() {
+            return ListPipelinesResponse {
+                pipelines: Vec::new(),
+                message: "daemon service is stopped".to_string(),
+            };
+        }
+        receiver.await.unwrap_or_else(|_| ListPipelinesResponse {
+            pipelines: Vec::new(),
+            message: "daemon service dropped response".to_string(),
+        })
+    }
+
+    async fn delete_pipeline(&self, request: DeletePipelineRequest) -> DeletePipelineResponse {
+        let (reply, receiver) = oneshot::channel();
+        let command = DaemonCommand::DeletePipeline { request, reply };
+        let mut sender = self.sender.clone();
+        if sender.send(command).await.is_err() {
+            return DeletePipelineResponse {
+                deleted: false,
+                id: None,
+                message: "daemon service is stopped".to_string(),
+            };
+        }
+        receiver.await.unwrap_or_else(|_| DeletePipelineResponse {
+            deleted: false,
+            id: None,
+            message: "daemon service dropped response".to_string(),
+        })
+    }
+
+    async fn stop_pipeline(&self, request: StopPipelineRequest) -> StopPipelineResponse {
+        let (reply, receiver) = oneshot::channel();
+        let command = DaemonCommand::StopPipeline { request, reply };
+        let mut sender = self.sender.clone();
+        if sender.send(command).await.is_err() {
+            return stop_pipeline_failed("daemon service is stopped");
+        }
+        receiver
+            .await
+            .unwrap_or_else(|_| stop_pipeline_failed("daemon service dropped response"))
+    }
+
+    async fn get_pipeline_status(
+        &self,
+        request: GetPipelineStatusRequest,
+    ) -> GetPipelineStatusResponse {
+        let (reply, receiver) = oneshot::channel();
+        let command = DaemonCommand::GetPipelineStatus { request, reply };
+        let mut sender = self.sender.clone();
+        if sender.send(command).await.is_err() {
+            return pipeline_status_failed("daemon service is stopped");
+        }
+        receiver
+            .await
+            .unwrap_or_else(|_| pipeline_status_failed("daemon service dropped response"))
     }
 }
 
@@ -107,8 +213,28 @@ where
                 let response = self.service.handle_put_pipeline(request).await;
                 let _ = reply.send(response);
             }
-            DaemonCommand::ApplyResource { request, reply } => {
-                let response = self.service.handle_apply_resource(request).await;
+            DaemonCommand::StartPipeline { request, reply } => {
+                let response = self.service.handle_start_pipeline(request).await;
+                let _ = reply.send(response);
+            }
+            DaemonCommand::GetPipeline { request, reply } => {
+                let response = self.service.handle_get_pipeline(request).await;
+                let _ = reply.send(response);
+            }
+            DaemonCommand::ListPipelines { request, reply } => {
+                let response = self.service.handle_list_pipelines(request).await;
+                let _ = reply.send(response);
+            }
+            DaemonCommand::DeletePipeline { request, reply } => {
+                let response = self.service.handle_delete_pipeline(request).await;
+                let _ = reply.send(response);
+            }
+            DaemonCommand::StopPipeline { request, reply } => {
+                let response = self.service.handle_stop_pipeline(request).await;
+                let _ = reply.send(response);
+            }
+            DaemonCommand::GetPipelineStatus { request, reply } => {
+                let response = self.service.handle_get_pipeline_status(request).await;
                 let _ = reply.send(response);
             }
         }
@@ -140,9 +266,29 @@ enum DaemonCommand {
         request: PutPipelineRequest,
         reply: oneshot::Sender<PutPipelineResponse>,
     },
-    ApplyResource {
-        request: ApplyResourceRequest,
-        reply: oneshot::Sender<ApplyResourceResponse>,
+    StartPipeline {
+        request: StartPipelineRequest,
+        reply: oneshot::Sender<StartPipelineResponse>,
+    },
+    GetPipeline {
+        request: GetPipelineRequest,
+        reply: oneshot::Sender<GetPipelineResponse>,
+    },
+    ListPipelines {
+        request: ListPipelinesRequest,
+        reply: oneshot::Sender<ListPipelinesResponse>,
+    },
+    DeletePipeline {
+        request: DeletePipelineRequest,
+        reply: oneshot::Sender<DeletePipelineResponse>,
+    },
+    StopPipeline {
+        request: StopPipelineRequest,
+        reply: oneshot::Sender<StopPipelineResponse>,
+    },
+    GetPipelineStatus {
+        request: GetPipelineStatusRequest,
+        reply: oneshot::Sender<GetPipelineStatusResponse>,
     },
 }
 
@@ -150,16 +296,32 @@ fn put_pipeline_failed(message: impl Into<String>) -> PutPipelineResponse {
     PutPipelineResponse {
         accepted: false,
         id: None,
-        mode: ApplyMode::RejectedWorkerError as i32,
+        mode: StartMode::RejectedWorkerError as i32,
         message: message.into(),
     }
 }
 
-fn apply_resource_failed(message: impl Into<String>) -> ApplyResourceResponse {
-    ApplyResourceResponse {
+fn start_pipeline_failed(message: impl Into<String>) -> StartPipelineResponse {
+    StartPipelineResponse {
         accepted: false,
         active_pipeline_id: None,
-        mode: ApplyMode::RejectedWorkerError as i32,
+        mode: StartMode::RejectedWorkerError as i32,
+        message: message.into(),
+    }
+}
+
+fn stop_pipeline_failed(message: impl Into<String>) -> StopPipelineResponse {
+    StopPipelineResponse {
+        stopped: false,
+        state: tenon_message::daemon::v1::WorkerState::Error as i32,
+        message: message.into(),
+    }
+}
+
+fn pipeline_status_failed(message: impl Into<String>) -> GetPipelineStatusResponse {
+    GetPipelineStatusResponse {
+        id: None,
+        state: tenon_message::daemon::v1::WorkerState::Error as i32,
         message: message.into(),
     }
 }
@@ -169,7 +331,7 @@ mod tests {
     use super::*;
     use crate::{InMemoryDaemonStore, NoopWorkerManager, TenonDaemon};
     use futures::executor::block_on;
-    use tenon_message::daemon::v1::ApplyMode;
+    use tenon_message::daemon::v1::StartMode;
     use tenon_message::plan::{
         DeploymentPlan, EgressPlan, ExecutionMode, MqttBrokerPlan, MqttSourcePlan,
         MqttSubscriptionPlan, PayloadDecodePlan, ProcessPlan, ResourceId, ScriptRuntime,
@@ -214,16 +376,16 @@ mod tests {
                 };
                 let _ = client.put_pipeline(put_request).await;
 
-                let apply_request = ApplyResourceRequest {
+                let start_request = StartPipelineRequest {
                     pipeline_name: "sensor-pipeline".to_string(),
                     pipeline_ver: None,
                 };
-                client.apply_resource(apply_request).await
+                client.start_pipeline(start_request).await
             };
             let (response, _) = futures::join!(requests, server.serve());
 
             assert!(response.accepted);
-            assert_eq!(ApplyMode::try_from(response.mode), Ok(ApplyMode::Started));
+            assert_eq!(StartMode::try_from(response.mode), Ok(StartMode::Started));
             assert_eq!(response.active_pipeline_id, Some(id("sensor-pipeline", "r1")));
         });
     }

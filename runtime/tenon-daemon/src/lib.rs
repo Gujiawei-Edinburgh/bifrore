@@ -75,20 +75,26 @@ pub struct ActiveDeployment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DaemonApplyMode {
+pub enum DaemonStartMode {
     Started,
     HotReload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaemonApplyResult {
+pub struct DaemonStartResult {
     pub id: ResourceId,
-    pub mode: DaemonApplyMode,
+    pub mode: DaemonStartMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonPutPipelineResult {
     pub id: ResourceId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DaemonGetPipelineResult {
+    pub id: ResourceId,
+    pub plan: DeploymentPlan,
 }
 
 pub type DeploymentKey = ResourceId;
@@ -131,21 +137,63 @@ where
         Ok(DaemonPutPipelineResult { id })
     }
 
-    pub async fn apply_pipeline(
+    pub async fn get_pipeline(
+        &self,
+        pipeline_name: &str,
+        pipeline_ver: Option<&str>,
+    ) -> DaemonResult<Option<DaemonGetPipelineResult>> {
+        let Some(id) = self
+            .find_pipeline_key(pipeline_name, pipeline_ver)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(plan) = self.store.load_pipeline(&id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(DaemonGetPipelineResult { id, plan }))
+    }
+
+    pub async fn list_pipelines(&self) -> DaemonResult<Vec<ResourceId>> {
+        self.store.list_pipeline_ids().await
+    }
+
+    pub async fn delete_pipeline(
         &mut self,
         pipeline_name: &str,
         pipeline_ver: Option<&str>,
-    ) -> DaemonResult<DaemonApplyResult> {
+    ) -> DaemonResult<Option<ResourceId>> {
+        let Some(id) = self
+            .find_pipeline_key(pipeline_name, pipeline_ver)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if let Some(deployment) = self.deployments.remove(&id) {
+            self.worker_manager.stop(deployment.worker).await?;
+        }
+        if self.store.delete_pipeline(&id).await? {
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn start_pipeline(
+        &mut self,
+        pipeline_name: &str,
+        pipeline_ver: Option<&str>,
+    ) -> DaemonResult<DaemonStartResult> {
         let id = self.get_pipeline_key(pipeline_name, pipeline_ver).await?;
         let plan = self
             .store
             .load_pipeline(&id)
             .await?
             .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
-        self.apply(plan).await
+        self.start(plan).await
     }
 
-    async fn apply(&mut self, plan: DeploymentPlan) -> DaemonResult<DaemonApplyResult> {
+    async fn start(&mut self, plan: DeploymentPlan) -> DaemonResult<DaemonStartResult> {
         let id = plan
             .id
             .clone()
@@ -166,7 +214,7 @@ where
                     deployment.id = id;
                     deployment.plan = plan;
                     self.deployments.insert(key.clone(), deployment);
-                    return Ok(DaemonApplyResult {
+                    return Ok(DaemonStartResult {
                         id: self
                             .deployments
                             .get(&key)
@@ -175,7 +223,7 @@ where
                             })?
                             .id
                             .clone(),
-                        mode: DaemonApplyMode::HotReload,
+                        mode: DaemonStartMode::HotReload,
                     });
                 }
                 self.worker_manager.stop(deployment.worker).await?;
@@ -186,14 +234,14 @@ where
         let worker = self.worker_manager.start(worker_deployment).await?;
         self.deployments
             .insert(key.clone(), ActiveDeployment { id, plan, worker });
-        Ok(DaemonApplyResult {
+        Ok(DaemonStartResult {
             id: self
                 .deployments
                 .get(&key)
                 .ok_or_else(|| DaemonError::invalid_state("deployment missing after apply"))?
                 .id
                 .clone(),
-            mode: DaemonApplyMode::Started,
+            mode: DaemonStartMode::Started,
         })
     }
 
@@ -203,6 +251,26 @@ where
             self.worker_manager.stop(deployment.worker).await?;
         }
         Ok(())
+    }
+
+    pub async fn stop_pipeline(
+        &mut self,
+        pipeline_name: &str,
+        pipeline_ver: Option<&str>,
+    ) -> DaemonResult<WorkerStatus> {
+        let id = self
+            .find_pipeline_key(pipeline_name, pipeline_ver)
+            .await?
+            .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
+        if !self.deployments.contains_key(&id) {
+            return Err(DaemonError::not_found("pipeline worker is not running"));
+        }
+        let deployment = self
+            .deployments
+            .remove(&id)
+            .ok_or_else(|| DaemonError::not_found("pipeline worker is not running"))?;
+        self.worker_manager.stop(deployment.worker).await?;
+        Ok(WorkerStatus::Stopped)
     }
 
     pub async fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
@@ -263,6 +331,24 @@ where
             name: pipeline_name.to_string(),
             version: version.to_string(),
         })
+    }
+
+    async fn find_pipeline_key(
+        &self,
+        pipeline_name: &str,
+        pipeline_ver: Option<&str>,
+    ) -> DaemonResult<Option<ResourceId>> {
+        if pipeline_name.trim().is_empty() {
+            return Err(DaemonError::invalid_state("pipeline name is missing"));
+        }
+        if let Some(version) = pipeline_ver.filter(|version| !version.trim().is_empty()) {
+            let id = ResourceId {
+                name: pipeline_name.to_string(),
+                version: version.to_string(),
+            };
+            return Ok(self.store.load_pipeline(&id).await?.map(|_| id));
+        }
+        self.store.load_latest_pipeline_id(pipeline_name).await
     }
 
     async fn assign_pipeline_revision(
@@ -405,7 +491,7 @@ mod tests {
             daemon.put_pipeline(plan("a", 2)).await.expect("put");
 
             daemon
-                .apply_pipeline("sensor-pipeline", None)
+                .start_pipeline("sensor-pipeline", None)
                 .await
                 .expect("apply");
 
@@ -426,13 +512,13 @@ mod tests {
             let mut daemon = daemon();
             daemon.put_pipeline(plan("a", 2)).await.expect("put r1");
             daemon
-                .apply_pipeline("sensor-pipeline", None)
+                .start_pipeline("sensor-pipeline", None)
                 .await
                 .expect("apply r1");
 
             daemon.put_pipeline(plan("b", 2)).await.expect("put r2");
             daemon
-                .apply_pipeline("sensor-pipeline", None)
+                .start_pipeline("sensor-pipeline", None)
                 .await
                 .expect("apply r2");
 

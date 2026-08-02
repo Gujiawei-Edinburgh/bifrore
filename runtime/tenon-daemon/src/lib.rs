@@ -72,6 +72,7 @@ pub struct ActiveDeployment {
     pub id: ResourceId,
     pub plan: DeploymentPlan,
     pub worker: WorkerHandle,
+    pub status: WorkerStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +104,7 @@ pub struct TenonDaemon<M, P> {
     worker_manager: M,
     store: P,
     deployments: HashMap<DeploymentKey, ActiveDeployment>,
+    worker_statuses: HashMap<DeploymentKey, WorkerStatus>,
 }
 
 impl<M, P> TenonDaemon<M, P>
@@ -115,6 +117,7 @@ where
             worker_manager,
             store,
             deployments: HashMap::new(),
+            worker_statuses: HashMap::new(),
         }
     }
 
@@ -173,6 +176,7 @@ where
             self.worker_manager.stop(deployment.worker).await?;
         }
         if self.store.delete_pipeline(&id).await? {
+            self.worker_statuses.remove(&id);
             Ok(Some(id))
         } else {
             Ok(None)
@@ -213,6 +217,10 @@ where
                     }
                     deployment.id = id;
                     deployment.plan = plan;
+                    deployment.status = WorkerStatus::Running;
+                    self.worker_statuses
+                        .insert(active_key, WorkerStatus::Stopped);
+                    self.worker_statuses.insert(key.clone(), WorkerStatus::Running);
                     self.deployments.insert(key.clone(), deployment);
                     return Ok(DaemonStartResult {
                         id: self
@@ -227,13 +235,24 @@ where
                     });
                 }
                 self.worker_manager.stop(deployment.worker).await?;
+                self.worker_statuses
+                    .insert(active_key, WorkerStatus::Stopped);
             }
         }
 
         let worker_deployment = self.worker_deployment(&plan).await?;
         let worker = self.worker_manager.start(worker_deployment).await?;
         self.deployments
-            .insert(key.clone(), ActiveDeployment { id, plan, worker });
+            .insert(
+                key.clone(),
+                ActiveDeployment {
+                    id,
+                    plan,
+                    worker,
+                    status: WorkerStatus::Running,
+                },
+            );
+        self.worker_statuses.insert(key.clone(), WorkerStatus::Running);
         Ok(DaemonStartResult {
             id: self
                 .deployments
@@ -249,6 +268,8 @@ where
         let deployments = std::mem::take(&mut self.deployments);
         for deployment in deployments.into_values() {
             self.worker_manager.stop(deployment.worker).await?;
+            self.worker_statuses
+                .insert(deployment.id, WorkerStatus::Stopped);
         }
         Ok(())
     }
@@ -263,22 +284,59 @@ where
             .await?
             .ok_or_else(|| DaemonError::not_found("pipeline resource not found"))?;
         if !self.deployments.contains_key(&id) {
-            return Err(DaemonError::not_found("pipeline worker is not running"));
+            return self
+                .worker_statuses
+                .get(&id)
+                .copied()
+                .filter(|status| *status == WorkerStatus::Stopped)
+                .ok_or_else(|| DaemonError::not_found("pipeline worker is not running"));
         }
         let deployment = self
             .deployments
             .remove(&id)
             .ok_or_else(|| DaemonError::not_found("pipeline worker is not running"))?;
         self.worker_manager.stop(deployment.worker).await?;
+        self.worker_statuses.insert(id, WorkerStatus::Stopped);
         Ok(WorkerStatus::Stopped)
     }
 
     pub async fn worker_status(&mut self, id: &ResourceId) -> DaemonResult<WorkerStatus> {
-        let deployment = self
+        let Some(worker) = self.deployments.get(id).map(|deployment| deployment.worker.clone()) else {
+            return self
+                .worker_statuses
+                .get(id)
+                .copied()
+                .ok_or_else(|| DaemonError::not_found("deployment worker not found"));
+        };
+        let status = self.worker_manager.status(&worker).await?;
+        if let Some(deployment) = self.deployments.get_mut(id) {
+            deployment.status = status;
+        }
+        Ok(status)
+    }
+
+    #[cfg(test)]
+    pub async fn refresh_worker_statuses(
+        &mut self,
+    ) -> DaemonResult<Vec<(ResourceId, WorkerStatus)>> {
+        let workers: Vec<_> = self
             .deployments
-            .get(id)
-            .ok_or_else(|| DaemonError::not_found("deployment worker not found"))?;
-        self.worker_manager.status(&deployment.worker).await
+            .values()
+            .map(|deployment| (deployment.id.clone(), deployment.worker.clone()))
+            .collect();
+        let mut statuses = Vec::with_capacity(workers.len());
+        for (id, worker) in workers {
+            let status = match self.worker_manager.status(&worker).await {
+                Ok(status) => status,
+                Err(_) => WorkerStatus::Error,
+            };
+            if let Some(deployment) = self.deployments.get_mut(&id) {
+                deployment.status = status;
+            }
+            self.worker_statuses.insert(id.clone(), status);
+            statuses.push((id, status));
+        }
+        Ok(statuses)
     }
 
     pub async fn worker_stats(&mut self, id: &ResourceId) -> DaemonResult<WorkerStats> {
@@ -502,6 +560,47 @@ mod tests {
                     "sensor-pipeline-0-0".to_string(),
                     "sensor-pipeline-0-1".to_string()
                 ]
+            );
+        });
+    }
+
+    #[test]
+    fn refreshes_and_stores_worker_status() {
+        block_on(async {
+            let mut daemon = daemon();
+            daemon.put_pipeline(plan("a", 1)).await.expect("put");
+            daemon
+                .start_pipeline("sensor-pipeline", None)
+                .await
+                .expect("start");
+
+            assert_eq!(
+                daemon
+                    .worker_status(&ResourceId {
+                        name: "sensor-pipeline".to_string(),
+                        version: "r1".to_string(),
+                    })
+                    .await
+                    .expect("status"),
+                WorkerStatus::Running
+            );
+            assert_eq!(
+                daemon.refresh_worker_statuses().await.expect("refresh"),
+                vec![(
+                    ResourceId {
+                        name: "sensor-pipeline".to_string(),
+                        version: "r1".to_string(),
+                    },
+                    WorkerStatus::Running,
+                )]
+            );
+            assert_eq!(
+                daemon
+                    .deployments()
+                    .next()
+                    .expect("deployment")
+                    .status,
+                WorkerStatus::Running
             );
         });
     }

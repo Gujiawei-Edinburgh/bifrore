@@ -75,7 +75,11 @@ impl TenonWorker {
         }
     }
 
-    pub fn run_uds(self, socket_path: impl AsRef<std::path::Path>) -> WorkerResult<()> {
-        self.service.run_uds(socket_path.as_ref())
+    pub fn run_uds(
+        self,
+        socket_path: impl AsRef<std::path::Path>,
+        worker_id: &str,
+    ) -> WorkerResult<()> {
+        self.service.run_uds(socket_path.as_ref(), worker_id)
     }
 }

@@ -280,6 +280,18 @@ enum WorkerState {
 
 message GetWorkerStatsRequest {}
 
+message WorkerHelloRequest {
+  string worker_id = 1;
+  uint32 protocol_version = 2;
+}
+
+message WorkerHelloResponse {
+  string worker_id = 1;
+  uint32 protocol_version = 2;
+  WorkerState state = 3;
+  string error = 4;
+}
+
 message GetWorkerStatsResponse {
   WorkerStats stats = 1;
   string error = 2;
@@ -308,6 +320,7 @@ message WorkerEnvelope {
     ReloadWorkerRequest reload_worker = 3;
     StopWorkerRequest stop_worker = 4;
     GetWorkerStatsRequest get_worker_stats = 5;
+    WorkerHelloRequest worker_hello = 6;
   }
 }
 
@@ -317,6 +330,7 @@ message WorkerResponseEnvelope {
     StartWorkerResponse start_worker = 2;
     ReloadWorkerResponse reload_worker = 3;
     StopWorkerResponse stop_worker = 4;
+    WorkerHelloResponse worker_hello = 5;
   }
 }
 

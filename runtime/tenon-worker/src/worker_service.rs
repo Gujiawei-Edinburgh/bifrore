@@ -1,9 +1,6 @@
 use crate::{ActivePipeline, WorkerConfig, WorkerError, WorkerResult};
-use prost::Message;
 use std::fs;
 use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
 use std::time::Duration;
 use tenon_message::daemon::v1::{
     worker_envelope, worker_response_envelope, GetWorkerStatsResponse, ReloadWorkerRequest,
@@ -11,6 +8,7 @@ use tenon_message::daemon::v1::{
     StopWorkerResponse, WorkerEnvelope, WorkerHelloResponse, WorkerResponseEnvelope, WorkerState,
     WorkerStats,
 };
+use tenon_transport::{Transport, UdsConnection, UdsTransportConfig, UdsTransportProvider};
 
 #[derive(Debug)]
 pub struct WorkerService {
@@ -41,20 +39,22 @@ impl WorkerService {
             })?;
         }
         let _ = fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path).map_err(|error| {
+        let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig::default());
+        let listener = provider.bind(socket_path).map_err(|error| {
             WorkerError::control(format!(
                 "failed to bind worker socket {}: {error}",
                 socket_path.display()
             ))
         })?;
         let mut active = None;
-        let mut stream = None;
+        let mut stream: Option<UdsConnection> = None;
 
         loop {
             if stream.is_none() {
-                let (mut candidate, _) = listener.accept().await.map_err(|error| {
+                let candidate = listener.accept().await.map_err(|error| {
                     WorkerError::control(format!("failed to accept daemon worker connection: {error}"))
                 })?;
+                let mut candidate = candidate;
                 if let Err(error) = accept_handshake(&mut candidate, worker_id, &active).await {
                     log::warn!("rejecting worker control connection: {error}");
                     continue;
@@ -67,11 +67,11 @@ impl WorkerService {
             tokio::select! {
                 accepted = listener.accept() => {
                     match accepted {
-                        Ok((_extra, _)) => log::warn!("rejecting additional worker control connection"),
+                        Ok(_extra) => log::warn!("rejecting additional worker control connection"),
                         Err(error) => log::warn!("failed to accept additional worker connection: {error}"),
                     }
                 }
-                result = read_worker_envelope(current) => {
+                result = current.receive::<WorkerEnvelope>() => {
                     match result {
                         Ok(envelope) => match handle_worker_envelope(
                             current,
@@ -116,13 +116,14 @@ enum ConnectionResult {
 }
 
 async fn accept_handshake(
-    stream: &mut UnixStream,
+    stream: &mut UdsConnection,
     worker_id: &str,
     active: &Option<ActivePipeline>,
 ) -> WorkerResult<()> {
-    let envelope = tokio::time::timeout(Duration::from_secs(10), read_worker_envelope(stream))
+    let envelope = tokio::time::timeout(Duration::from_secs(10), stream.receive::<WorkerEnvelope>())
         .await
-        .map_err(|_| WorkerError::control("timed out waiting for worker hello"))??;
+        .map_err(|_| WorkerError::control("timed out waiting for worker hello"))?
+        .map_err(|error| WorkerError::control(format!("failed to read worker hello: {error}")))?;
     let Some(worker_envelope::Payload::WorkerHello(request)) = envelope.payload else {
         return Err(WorkerError::control("worker hello is required before control requests"));
     };
@@ -133,9 +134,7 @@ async fn accept_handshake(
     } else {
         None
     };
-    write_worker_response(
-        stream,
-        WorkerResponseEnvelope {
+    stream.send(&WorkerResponseEnvelope {
             payload: Some(worker_response_envelope::Payload::WorkerHello(
                 WorkerHelloResponse {
                     worker_id: worker_id.to_string(),
@@ -150,9 +149,7 @@ async fn accept_handshake(
                     error: hello_error.clone().unwrap_or_default(),
                 },
             )),
-        },
-    )
-    .await?;
+        }).await.map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
     if hello_error.is_some() {
         return Err(WorkerError::control("worker hello was rejected"));
     }
@@ -160,7 +157,7 @@ async fn accept_handshake(
 }
 
 async fn handle_worker_envelope(
-    stream: &mut UnixStream,
+    stream: &mut UdsConnection,
     envelope: WorkerEnvelope,
     active: &mut Option<ActivePipeline>,
     config: &WorkerConfig,
@@ -177,17 +174,14 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Running, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    write_worker_response(
-                        stream,
-                        WorkerResponseEnvelope {
+                    stream.send(&WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::StartWorker(
                                 StartWorkerResponse {
                                     state: state as i32,
                                     error,
                                 },
                             )),
-                        },
-                    ).await?;
+                        }).await.map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
                     return Ok(ConnectionResult::Continue);
                 }
                 Some(worker_envelope::Payload::ReloadWorker(request)) => {
@@ -195,17 +189,14 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Running, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    write_worker_response(
-                        stream,
-                        WorkerResponseEnvelope {
+                    stream.send(&WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::ReloadWorker(
                                 ReloadWorkerResponse {
                                     state: state as i32,
                                     error,
                                 },
                             )),
-                        },
-                    ).await?;
+                        }).await.map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
                     return Ok(ConnectionResult::Continue);
                 }
                 Some(worker_envelope::Payload::StopWorker(request)) => {
@@ -213,17 +204,14 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Stopped, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    write_worker_response(
-                        stream,
-                        WorkerResponseEnvelope {
+                    stream.send(&WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::StopWorker(
                                 StopWorkerResponse {
                                     state: state as i32,
                                     error,
                                 },
                             )),
-                        },
-                    ).await?;
+                        }).await.map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
                     return Ok(ConnectionResult::Stop);
                 }
                 Some(worker_envelope::Payload::GetWorkerStats(_)) => {
@@ -234,14 +222,11 @@ async fn handle_worker_envelope(
                             stats: Some(WorkerStats::default()),
                             error: "worker has no active pipeline".to_string(),
                         });
-                    write_worker_response(
-                        stream,
-                        WorkerResponseEnvelope {
+                    stream.send(&WorkerResponseEnvelope {
                             payload: Some(
                                 tenon_message::daemon::v1::worker_response_envelope::Payload::WorkerStats(response),
                             ),
-                        },
-                    ).await?;
+                        }).await.map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
                     return Ok(ConnectionResult::Continue);
                 }
                 Some(worker_envelope::Payload::Heartbeat(_)) => {
@@ -321,49 +306,15 @@ fn stop_pipeline(
     Ok(())
 }
 
-async fn read_worker_envelope(stream: &mut UnixStream) -> WorkerResult<WorkerEnvelope> {
-    let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await.map_err(|error| {
-        WorkerError::control(format!("failed to read worker frame: {error}"))
-    })?;
-    let len = u32::from_le_bytes(header) as usize;
-    let mut payload = vec![0u8; len];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(|error| WorkerError::control(format!("failed to read worker frame: {error}")))?;
-    WorkerEnvelope::decode(payload.as_slice())
-        .map_err(|error| WorkerError::control(format!("failed to decode worker frame: {error}")))
-}
-
-async fn write_worker_response(
-    stream: &mut UnixStream,
-    response: WorkerResponseEnvelope,
-) -> WorkerResult<()> {
-    let mut payload = Vec::new();
-    response
-        .encode(&mut payload)
-        .map_err(|error| WorkerError::control(format!("failed to encode worker response: {error}")))?;
-    let length = u32::try_from(payload.len())
-        .map_err(|_| WorkerError::control("worker response is too large"))?;
-    stream
-        .write_all(&length.to_le_bytes())
-        .await
-        .map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))?;
-    stream
-        .write_all(&payload)
-        .await
-        .map_err(|error| WorkerError::control(format!("failed to write worker response: {error}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UnixStream;
+    use tenon_transport::{FramedTransport, TransportConfig};
     use tenon_message::daemon::v1::{
         worker_envelope, worker_response_envelope, StopWorkerRequest, WorkerEnvelope,
         WorkerHelloRequest, WorkerResponseEnvelope,
     };
-    use tenon_message::codec::encode_frame;
 
     #[test]
     fn stop_without_active_pipeline_is_ok() {
@@ -382,27 +333,24 @@ mod tests {
             .build()
             .expect("runtime")
             .block_on(async {
-                let (mut daemon_stream, mut worker_stream) =
+                let (daemon_stream, worker_stream) =
                     UnixStream::pair().expect("socket pair");
+                let mut daemon_stream = FramedTransport::new(daemon_stream, TransportConfig::default());
+                let mut worker_stream = FramedTransport::new(worker_stream, TransportConfig::default());
                 let request = WorkerEnvelope {
                     payload: Some(worker_envelope::Payload::WorkerHello(WorkerHelloRequest {
                         worker_id: "worker-1".to_string(),
                         protocol_version: 1,
                     })),
                 };
-                daemon_stream
-                    .write_all(&encode_frame(&request).expect("encode hello"))
-                    .await
-                    .expect("write hello");
+                daemon_stream.send(&request).await.expect("write hello");
                 accept_handshake(&mut worker_stream, "worker-1", &None)
                     .await
                     .expect("accept handshake");
-                let mut header = [0u8; 4];
-                daemon_stream.read_exact(&mut header).await.expect("read header");
-                let mut payload = vec![0; u32::from_le_bytes(header) as usize];
-                daemon_stream.read_exact(&mut payload).await.expect("read response");
-                let response = WorkerResponseEnvelope::decode(payload.as_slice())
-                    .expect("decode response");
+                let response = daemon_stream
+                    .receive::<WorkerResponseEnvelope>()
+                    .await
+                    .expect("read response");
                 assert!(matches!(
                     response.payload,
                     Some(worker_response_envelope::Payload::WorkerHello(_))

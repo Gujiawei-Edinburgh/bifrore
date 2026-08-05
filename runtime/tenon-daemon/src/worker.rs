@@ -1,13 +1,11 @@
 use crate::DaemonError;
 use crate::DaemonResult;
-use prost::Message;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tenon_message::codec::encode_frame;
 use tenon_message::daemon::v1::{
     worker_envelope, worker_response_envelope, GetWorkerStatsRequest, ReloadWorkerRequest,
     StartWorkerRequest, StopWorkerRequest, WorkerEnvelope, WorkerHelloRequest,
@@ -15,9 +13,7 @@ use tenon_message::daemon::v1::{
 };
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 use wait_timeout::ChildExt;
-use tokio::net::UnixStream;
-#[cfg(test)]
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tenon_transport::{Transport, UdsConnection, UdsTransportConfig, UdsTransportProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerHandle {
@@ -326,7 +322,7 @@ impl UdsWorkerManager {
 #[derive(Debug)]
 struct UdsWorkerProcess {
     child: Child,
-    stream: UnixStream,
+    stream: UdsConnection,
     socket_path: PathBuf,
     status: WorkerStatus,
 }
@@ -356,28 +352,26 @@ fn cleanup_socket(socket_path: &Path) {
     let _ = fs::remove_file(socket_path);
 }
 
-async fn connect_worker(path: &Path, timeout: Duration) -> DaemonResult<UnixStream> {
+async fn connect_worker(
+    path: &Path,
+    timeout: Duration,
+) -> DaemonResult<UdsConnection> {
     let path = path.to_owned();
     let display_path = path.clone();
-    tokio::time::timeout(timeout, async move {
-        loop {
-            match tokio::net::UnixStream::connect(&path).await {
-                Ok(stream) => return Ok(stream),
-                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
+    let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig {
+        connect_timeout: timeout,
+        ..UdsTransportConfig::default()
+    });
+    provider.connect(path).await.map_err(|error| {
         DaemonError::worker(format!(
-            "timed out connecting to worker UDS {}",
+            "failed to connect to worker UDS {}: {error}",
             display_path.display()
         ))
-    })?
+    })
 }
 
 async fn handshake_worker(
-    stream: &mut UnixStream,
+    stream: &mut UdsConnection,
     worker_id: &str,
     timeout: Duration,
 ) -> DaemonResult<()> {
@@ -419,17 +413,11 @@ fn check_worker_hello(
 
 #[cfg(test)]
 async fn send_worker_envelope(
-    stream: &mut UnixStream,
+    stream: &mut UdsConnection,
     envelope: WorkerEnvelope,
 ) -> DaemonResult<()> {
-    let frame = encode_frame(&envelope)
-        .map_err(|error| DaemonError::worker(format!("failed to encode worker frame: {error}")))?;
     stream
-        .write_all(&frame)
-        .await
-        .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))?;
-    stream
-        .flush()
+        .send(&envelope)
         .await
         .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))
 }
@@ -443,32 +431,19 @@ enum WorkerResponseKind {
 const WORKER_PROTOCOL_VERSION: u32 = 1;
 
 async fn request_worker_response(
-    stream: &mut UnixStream,
+    stream: &mut UdsConnection,
     request: WorkerEnvelope,
     timeout: Duration,
 ) -> DaemonResult<WorkerResponseEnvelope> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let result = tokio::time::timeout(timeout, async move {
-        let frame = encode_frame(&request)
-            .map_err(|error| DaemonError::worker(format!("failed to encode worker request: {error}")))?;
         stream
-            .write_all(&frame)
+            .send(&request)
             .await
             .map_err(|error| DaemonError::worker(format!("failed to send worker request: {error}")))?;
-        let mut header = [0u8; 4];
         stream
-            .read_exact(&mut header)
+            .receive::<WorkerResponseEnvelope>()
             .await
-            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
-        let len = u32::from_le_bytes(header) as usize;
-        let mut payload = vec![0u8; len];
-        stream
-            .read_exact(&mut payload)
-            .await
-            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))?;
-        WorkerResponseEnvelope::decode(payload.as_slice())
-            .map_err(|error| DaemonError::worker(format!("failed to decode worker response: {error}")))
+            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))
     })
     .await;
     result.map_err(|_| DaemonError::worker("timed out waiting for worker response"))?
@@ -536,12 +511,13 @@ mod tests {
     use super::*;
     use crate::DaemonErrorKind;
     use std::future::Future;
-    use tenon_message::codec::decode_frame;
     use tenon_message::daemon::v1::{
         worker_envelope, worker_response_envelope, ReloadWorkerResponse, StopWorkerResponse,
         WorkerEnvelope, WorkerResponseEnvelope, WorkerState,
     };
     use tenon_message::plan::MqttSourceClientIds;
+    use tenon_transport::TransportConfig;
+    use tokio::net::UnixStream;
 
     fn block_on<F: Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
@@ -554,8 +530,10 @@ mod tests {
     #[test]
     fn send_worker_envelope_writes_length_prefixed_proto_frame() {
         block_on(async {
-            let (mut daemon_stream, mut worker_stream) =
+            let (daemon_stream, worker_stream) =
                 UnixStream::pair().expect("create socket pair");
+            let mut daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
+            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
             let plan = plan();
             let deployment = deployment(plan.clone());
 
@@ -571,8 +549,7 @@ mod tests {
             .await
             .expect("send frame");
 
-            let frame = read_frame(&mut worker_stream).await;
-            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             match envelope.payload {
                 Some(worker_envelope::Payload::StartWorker(request)) => {
                     assert_eq!(request.plan, Some(plan));
@@ -597,10 +574,10 @@ mod tests {
         block_on(async {
             let (daemon_stream, worker_stream) =
                 UnixStream::pair().expect("create socket pair");
+            let daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
             let responder = tokio::spawn(async move {
-            let mut worker_stream = worker_stream;
-            let frame = read_frame(&mut worker_stream).await;
-            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
+            let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             match envelope.payload {
                 Some(worker_envelope::Payload::ReloadWorker(request)) => {
                     assert_eq!(request.plan, Some(expected_plan));
@@ -618,8 +595,7 @@ mod tests {
                 }
                 other => panic!("unexpected worker envelope: {other:?}"),
             }
-            let frame = read_frame(&mut worker_stream).await;
-            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             assert!(matches!(
                 envelope.payload,
                 Some(worker_envelope::Payload::StopWorker(_))
@@ -659,10 +635,10 @@ mod tests {
         block_on(async {
             let (daemon_stream, worker_stream) =
                 UnixStream::pair().expect("create socket pair");
+            let daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
             let responder = tokio::spawn(async move {
-            let mut worker_stream = worker_stream;
-            let frame = read_frame(&mut worker_stream).await;
-            let envelope: WorkerEnvelope = decode_frame(&frame).expect("decode frame");
+            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
+            let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             assert!(matches!(
                 envelope.payload,
                 Some(worker_envelope::Payload::StopWorker(_))
@@ -720,7 +696,7 @@ mod tests {
     async fn insert_test_worker(
         manager: &mut UdsWorkerManager,
         id: &str,
-        stream: UnixStream,
+        stream: UdsConnection,
     ) -> WorkerHandle {
         let handle = WorkerHandle { id: id.to_string() };
         manager.workers.insert(
@@ -742,23 +718,11 @@ mod tests {
             .expect("spawn sleep child")
     }
 
-    async fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
-        let mut header = [0u8; 4];
-        stream.read_exact(&mut header).await.expect("read frame header");
-        let len = u32::from_le_bytes(header) as usize;
-        let mut frame = Vec::with_capacity(4 + len);
-        frame.extend_from_slice(&header);
-        frame.resize(4 + len, 0);
-        stream
-            .read_exact(&mut frame[4..])
-            .await
-            .expect("read frame body");
-        frame
-    }
-
-    async fn send_worker_response(stream: &mut UnixStream, response: WorkerResponseEnvelope) {
-        let frame = encode_frame(&response).expect("encode response");
-        stream.write_all(&frame).await.expect("write response");
+    async fn send_worker_response(
+        stream: &mut UdsConnection,
+        response: WorkerResponseEnvelope,
+    ) {
+        stream.send(&response).await.expect("write response");
     }
 
     fn plan() -> DeploymentPlan {

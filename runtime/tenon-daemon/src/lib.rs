@@ -4,8 +4,7 @@ mod store;
 mod worker;
 
 pub use client::{
-    DaemonClient, DaemonServer, DaemonTransportProvider, InProcDaemonClient, InProcDaemonConfig,
-    InProcDaemonServer, InProcDaemonTransportProvider,
+    create_in_proc_daemon, DaemonClient, DaemonServer, InProcDaemonClient, InProcDaemonServer,
 };
 pub use service::DaemonService;
 pub use store::{DaemonStore, InMemoryDaemonStore};

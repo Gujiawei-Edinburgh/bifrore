@@ -16,5 +16,4 @@ pub mod egress {
     }
 }
 
-pub mod codec;
 pub mod plan;

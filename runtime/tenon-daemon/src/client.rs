@@ -1,12 +1,14 @@
 use crate::{DaemonService, DaemonStore, WorkerManager};
-use futures::channel::{mpsc, oneshot};
-use futures::{SinkExt, StreamExt};
 use std::future::Future;
 use tenon_message::daemon::v1::{
     StartMode, StartPipelineRequest, StartPipelineResponse, DeletePipelineRequest,
     DeletePipelineResponse, GetPipelineRequest, GetPipelineResponse, GetPipelineStatusRequest,
     GetPipelineStatusResponse, ListPipelinesRequest, ListPipelinesResponse, PutPipelineRequest,
     PutPipelineResponse, StopPipelineRequest, StopPipelineResponse,
+};
+use tenon_transport::{
+    InProcClient, InProcRequest, InProcServer, InProcTransportConfig,
+    InProcTransportProvider, Transport,
 };
 
 pub trait DaemonClient {
@@ -50,155 +52,100 @@ pub trait DaemonServer {
     fn serve(self) -> impl Future<Output = ()>;
 }
 
-pub trait DaemonTransportProvider<L, S>
-where
-    L: WorkerManager,
-    S: DaemonStore,
-{
-    type Client: DaemonClient;
-    type Server: DaemonServer;
-    type Config;
-
-    fn create(service: DaemonService<L, S>, config: Self::Config) -> (Self::Client, Self::Server);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InProcDaemonConfig {
-    pub channel_capacity: usize,
-}
-
-pub struct InProcDaemonTransportProvider;
-
 #[derive(Clone)]
 pub struct InProcDaemonClient {
-    sender: mpsc::Sender<DaemonCommand>,
+    transport: InProcClient<DaemonRequest, DaemonResponse>,
 }
 
 pub struct InProcDaemonServer<L, S> {
     service: DaemonService<L, S>,
-    receiver: mpsc::Receiver<DaemonCommand>,
+    transport: InProcServer<DaemonRequest, DaemonResponse>,
 }
 
-impl<L, S> DaemonTransportProvider<L, S> for InProcDaemonTransportProvider
+pub fn create_in_proc_daemon<L, S>(
+    service: DaemonService<L, S>,
+    config: InProcTransportConfig,
+) -> (InProcDaemonClient, InProcDaemonServer<L, S>)
 where
     L: WorkerManager,
     S: DaemonStore,
 {
-    type Client = InProcDaemonClient;
-    type Server = InProcDaemonServer<L, S>;
-    type Config = InProcDaemonConfig;
-
-    fn create(service: DaemonService<L, S>, config: Self::Config) -> (Self::Client, Self::Server) {
-        let (sender, receiver) = mpsc::channel(config.channel_capacity);
-        (
-            InProcDaemonClient { sender },
-            InProcDaemonServer { service, receiver },
-        )
-    }
+    let provider = Transport::provide::<InProcTransportProvider>(config);
+    let (transport, server_transport) = provider.create::<
+            DaemonRequest,
+            DaemonResponse,
+        >();
+    (
+        InProcDaemonClient { transport },
+        InProcDaemonServer {
+            service,
+            transport: server_transport,
+        },
+    )
 }
 
 impl DaemonClient for InProcDaemonClient {
     async fn put_pipeline(&self, request: PutPipelineRequest) -> PutPipelineResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::PutPipeline { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return put_pipeline_failed("daemon service is stopped");
+        match self.transport.request(DaemonRequest::PutPipeline(request)).await {
+            Ok(DaemonResponse::PutPipeline(response)) => response,
+            Ok(_) => put_pipeline_failed("unexpected daemon response"),
+            Err(error) => put_pipeline_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver
-            .await
-            .unwrap_or_else(|_| put_pipeline_failed("daemon service dropped response"))
     }
 
     async fn start_pipeline(&self, request: StartPipelineRequest) -> StartPipelineResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::StartPipeline { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return start_pipeline_failed("daemon service is stopped");
+        match self.transport.request(DaemonRequest::StartPipeline(request)).await {
+            Ok(DaemonResponse::StartPipeline(response)) => response,
+            Ok(_) => start_pipeline_failed("unexpected daemon response"),
+            Err(error) => start_pipeline_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver
-            .await
-            .unwrap_or_else(|_| start_pipeline_failed("daemon service dropped response"))
     }
 
     async fn get_pipeline(&self, request: GetPipelineRequest) -> GetPipelineResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::GetPipeline { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return GetPipelineResponse {
-                found: false,
-                pipeline: None,
-                message: "daemon service is stopped".to_string(),
-            };
+        match self.transport.request(DaemonRequest::GetPipeline(request)).await {
+            Ok(DaemonResponse::GetPipeline(response)) => response,
+            Ok(_) => get_pipeline_failed("unexpected daemon response"),
+            Err(error) => get_pipeline_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver.await.unwrap_or_else(|_| GetPipelineResponse {
-            found: false,
-            pipeline: None,
-            message: "daemon service dropped response".to_string(),
-        })
     }
 
     async fn list_pipelines(&self, request: ListPipelinesRequest) -> ListPipelinesResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::ListPipelines { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return ListPipelinesResponse {
-                pipelines: Vec::new(),
-                message: "daemon service is stopped".to_string(),
-            };
+        match self.transport.request(DaemonRequest::ListPipelines(request)).await {
+            Ok(DaemonResponse::ListPipelines(response)) => response,
+            Ok(_) => list_pipelines_failed("unexpected daemon response"),
+            Err(error) => list_pipelines_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver.await.unwrap_or_else(|_| ListPipelinesResponse {
-            pipelines: Vec::new(),
-            message: "daemon service dropped response".to_string(),
-        })
     }
 
     async fn delete_pipeline(&self, request: DeletePipelineRequest) -> DeletePipelineResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::DeletePipeline { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return DeletePipelineResponse {
-                deleted: false,
-                id: None,
-                message: "daemon service is stopped".to_string(),
-            };
+        match self.transport.request(DaemonRequest::DeletePipeline(request)).await {
+            Ok(DaemonResponse::DeletePipeline(response)) => response,
+            Ok(_) => delete_pipeline_failed("unexpected daemon response"),
+            Err(error) => delete_pipeline_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver.await.unwrap_or_else(|_| DeletePipelineResponse {
-            deleted: false,
-            id: None,
-            message: "daemon service dropped response".to_string(),
-        })
     }
 
     async fn stop_pipeline(&self, request: StopPipelineRequest) -> StopPipelineResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::StopPipeline { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return stop_pipeline_failed("daemon service is stopped");
+        match self.transport.request(DaemonRequest::StopPipeline(request)).await {
+            Ok(DaemonResponse::StopPipeline(response)) => response,
+            Ok(_) => stop_pipeline_failed("unexpected daemon response"),
+            Err(error) => stop_pipeline_failed(format!("daemon transport failed: {error:?}")),
         }
-        receiver
-            .await
-            .unwrap_or_else(|_| stop_pipeline_failed("daemon service dropped response"))
     }
 
     async fn get_pipeline_status(
         &self,
         request: GetPipelineStatusRequest,
     ) -> GetPipelineStatusResponse {
-        let (reply, receiver) = oneshot::channel();
-        let command = DaemonCommand::GetPipelineStatus { request, reply };
-        let mut sender = self.sender.clone();
-        if sender.send(command).await.is_err() {
-            return pipeline_status_failed("daemon service is stopped");
-        }
-        receiver
+        match self
+            .transport
+            .request(DaemonRequest::GetPipelineStatus(request))
             .await
-            .unwrap_or_else(|_| pipeline_status_failed("daemon service dropped response"))
+        {
+            Ok(DaemonResponse::GetPipelineStatus(response)) => response,
+            Ok(_) => pipeline_status_failed("unexpected daemon response"),
+            Err(error) => pipeline_status_failed(format!("daemon transport failed: {error:?}")),
+        }
     }
 }
 
@@ -207,37 +154,44 @@ where
     L: WorkerManager,
     S: DaemonStore,
 {
-    async fn handle_command(&mut self, command: DaemonCommand) {
-        match command {
-            DaemonCommand::PutPipeline { request, reply } => {
+    async fn handle_command(
+        &mut self,
+        mut command: InProcRequest<DaemonRequest, DaemonResponse>,
+    ) {
+        let request = command
+            .take_request()
+            .expect("in-process request was already taken");
+        let response = match request {
+            DaemonRequest::PutPipeline(request) => {
                 let response = self.service.handle_put_pipeline(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::PutPipeline(response)
             }
-            DaemonCommand::StartPipeline { request, reply } => {
+            DaemonRequest::StartPipeline(request) => {
                 let response = self.service.handle_start_pipeline(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::StartPipeline(response)
             }
-            DaemonCommand::GetPipeline { request, reply } => {
+            DaemonRequest::GetPipeline(request) => {
                 let response = self.service.handle_get_pipeline(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::GetPipeline(response)
             }
-            DaemonCommand::ListPipelines { request, reply } => {
+            DaemonRequest::ListPipelines(request) => {
                 let response = self.service.handle_list_pipelines(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::ListPipelines(response)
             }
-            DaemonCommand::DeletePipeline { request, reply } => {
+            DaemonRequest::DeletePipeline(request) => {
                 let response = self.service.handle_delete_pipeline(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::DeletePipeline(response)
             }
-            DaemonCommand::StopPipeline { request, reply } => {
+            DaemonRequest::StopPipeline(request) => {
                 let response = self.service.handle_stop_pipeline(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::StopPipeline(response)
             }
-            DaemonCommand::GetPipelineStatus { request, reply } => {
+            DaemonRequest::GetPipelineStatus(request) => {
                 let response = self.service.handle_get_pipeline_status(request).await;
-                let _ = reply.send(response);
+                DaemonResponse::GetPipelineStatus(response)
             }
-        }
+        };
+        let _ = command.respond(response);
     }
 
     pub fn service(&self) -> &DaemonService<L, S> {
@@ -255,41 +209,30 @@ where
     S: DaemonStore,
 {
     async fn serve(mut self) {
-        while let Some(command) = self.receiver.next().await {
+        while let Some(command) = self.transport.receive().await {
             self.handle_command(command).await;
         }
     }
 }
 
-enum DaemonCommand {
-    PutPipeline {
-        request: PutPipelineRequest,
-        reply: oneshot::Sender<PutPipelineResponse>,
-    },
-    StartPipeline {
-        request: StartPipelineRequest,
-        reply: oneshot::Sender<StartPipelineResponse>,
-    },
-    GetPipeline {
-        request: GetPipelineRequest,
-        reply: oneshot::Sender<GetPipelineResponse>,
-    },
-    ListPipelines {
-        request: ListPipelinesRequest,
-        reply: oneshot::Sender<ListPipelinesResponse>,
-    },
-    DeletePipeline {
-        request: DeletePipelineRequest,
-        reply: oneshot::Sender<DeletePipelineResponse>,
-    },
-    StopPipeline {
-        request: StopPipelineRequest,
-        reply: oneshot::Sender<StopPipelineResponse>,
-    },
-    GetPipelineStatus {
-        request: GetPipelineStatusRequest,
-        reply: oneshot::Sender<GetPipelineStatusResponse>,
-    },
+enum DaemonRequest {
+    PutPipeline(PutPipelineRequest),
+    StartPipeline(StartPipelineRequest),
+    GetPipeline(GetPipelineRequest),
+    ListPipelines(ListPipelinesRequest),
+    DeletePipeline(DeletePipelineRequest),
+    StopPipeline(StopPipelineRequest),
+    GetPipelineStatus(GetPipelineStatusRequest),
+}
+
+enum DaemonResponse {
+    PutPipeline(PutPipelineResponse),
+    StartPipeline(StartPipelineResponse),
+    GetPipeline(GetPipelineResponse),
+    ListPipelines(ListPipelinesResponse),
+    DeletePipeline(DeletePipelineResponse),
+    StopPipeline(StopPipelineResponse),
+    GetPipelineStatus(GetPipelineStatusResponse),
 }
 
 fn put_pipeline_failed(message: impl Into<String>) -> PutPipelineResponse {
@@ -306,6 +249,29 @@ fn start_pipeline_failed(message: impl Into<String>) -> StartPipelineResponse {
         accepted: false,
         active_pipeline_id: None,
         mode: StartMode::RejectedWorkerError as i32,
+        message: message.into(),
+    }
+}
+
+fn get_pipeline_failed(message: impl Into<String>) -> GetPipelineResponse {
+    GetPipelineResponse {
+        found: false,
+        pipeline: None,
+        message: message.into(),
+    }
+}
+
+fn list_pipelines_failed(message: impl Into<String>) -> ListPipelinesResponse {
+    ListPipelinesResponse {
+        pipelines: Vec::new(),
+        message: message.into(),
+    }
+}
+
+fn delete_pipeline_failed(message: impl Into<String>) -> DeletePipelineResponse {
+    DeletePipelineResponse {
+        deleted: false,
+        id: None,
         message: message.into(),
     }
 }
@@ -341,9 +307,9 @@ mod tests {
     #[test]
     fn in_proc_client_puts_pipeline_through_server() {
         block_on(async {
-            let (client, server) = InProcDaemonTransportProvider::create(
+            let (client, server) = create_in_proc_daemon(
                 service(),
-                InProcDaemonConfig {
+                InProcTransportConfig {
                     channel_capacity: 8,
                 },
             );
@@ -364,9 +330,9 @@ mod tests {
     #[test]
     fn in_proc_client_applies_latest_pipeline() {
         block_on(async {
-            let (client, server) = InProcDaemonTransportProvider::create(
+            let (client, server) = create_in_proc_daemon(
                 service(),
-                InProcDaemonConfig {
+                InProcTransportConfig {
                     channel_capacity: 8,
                 },
             );

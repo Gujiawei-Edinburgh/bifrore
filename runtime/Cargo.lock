@@ -1056,6 +1056,7 @@ dependencies = [
  "libc",
  "prost",
  "tenon-message",
+ "tenon-transport",
  "tokio",
  "wait-timeout",
 ]
@@ -1095,6 +1096,14 @@ name = "tenon-oss"
 version = "0.1.0"
 
 [[package]]
+name = "tenon-transport"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tokio",
+]
+
+[[package]]
 name = "tenon-worker"
 version = "0.1.0"
 dependencies = [
@@ -1108,6 +1117,7 @@ dependencies = [
  "serde_json",
  "tenon-extension",
  "tenon-message",
+ "tenon-transport",
  "tokio",
 ]
 

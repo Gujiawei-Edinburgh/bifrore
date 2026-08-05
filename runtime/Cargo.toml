@@ -7,5 +7,6 @@ members = [
   "tenon-daemon",
   "tenon-worker",
   "tenon-message",
+  "tenon-transport",
   "tenon-oss",
 ]

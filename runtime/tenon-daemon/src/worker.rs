@@ -13,7 +13,9 @@ use tenon_message::daemon::v1::{
 };
 use tenon_message::plan::{DeploymentPlan, MqttSourceClientIds, ResourceId};
 use wait_timeout::ChildExt;
-use tenon_transport::{Transport, UdsConnection, UdsTransportConfig, UdsTransportProvider};
+use tenon_transport::{
+    Requester, Transport, UdsRequester, UdsTransportConfig, UdsTransportProvider,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerHandle {
@@ -128,19 +130,19 @@ impl WorkerManager for UdsWorkerManager {
         prepare_socket(&self.config.socket_dir, &socket_path)?;
 
         let child = self.spawn_worker(&id, &socket_path)?;
-        let mut stream = match connect_worker(&socket_path, self.config.connect_timeout).await {
-            Ok(stream) => stream,
+        let requester = match connect_worker(&socket_path, self.config.connect_timeout).await {
+            Ok(requester) => requester,
             Err(error) => {
                 cleanup_failed_worker(child, &socket_path);
                 return Err(error);
             }
         };
-        if let Err(error) = handshake_worker(&mut stream, &id, self.config.connect_timeout).await {
+        if let Err(error) = handshake_worker(&requester, &id, self.config.connect_timeout).await {
             cleanup_failed_worker(child, &socket_path);
             return Err(error);
         }
         let response = request_worker_response(
-            &mut stream,
+            &requester,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
                     plan: Some(deployment.plan),
@@ -161,7 +163,7 @@ impl WorkerManager for UdsWorkerManager {
             id,
             UdsWorkerProcess {
                 child,
-                stream,
+                requester,
                 socket_path,
                 status: WorkerStatus::Running,
             },
@@ -199,7 +201,7 @@ impl WorkerManager for UdsWorkerManager {
         };
         process.status = WorkerStatus::Stopping;
         let response_result = request_worker_response(
-            &mut process.stream,
+            &process.requester,
             WorkerEnvelope {
                 payload: Some(worker_envelope::Payload::StopWorker(StopWorkerRequest {})),
             },
@@ -271,14 +273,14 @@ impl UdsWorkerManager {
         timeout: Duration,
     ) -> DaemonResult<WorkerResponseEnvelope> {
         let process = self.worker_mut(worker)?;
-        request_worker_response(&mut process.stream, request, timeout).await
+        request_worker_response(&process.requester, request, timeout).await
     }
 
     async fn reconnect_worker(&mut self, worker: &WorkerHandle) -> DaemonResult<()> {
         let socket_path = self.worker_mut(worker)?.socket_path.clone();
-        let mut stream = connect_worker(&socket_path, self.config.connect_timeout).await?;
-        handshake_worker(&mut stream, &worker.id, self.config.connect_timeout).await?;
-        self.worker_mut(worker)?.stream = stream;
+        let requester = connect_worker(&socket_path, self.config.connect_timeout).await?;
+        handshake_worker(&requester, &worker.id, self.config.connect_timeout).await?;
+        self.worker_mut(worker)?.requester = requester;
         Ok(())
     }
 
@@ -322,7 +324,7 @@ impl UdsWorkerManager {
 #[derive(Debug)]
 struct UdsWorkerProcess {
     child: Child,
-    stream: UdsConnection,
+    requester: UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>,
     socket_path: PathBuf,
     status: WorkerStatus,
 }
@@ -355,14 +357,14 @@ fn cleanup_socket(socket_path: &Path) {
 async fn connect_worker(
     path: &Path,
     timeout: Duration,
-) -> DaemonResult<UdsConnection> {
+) -> DaemonResult<UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>> {
     let path = path.to_owned();
     let display_path = path.clone();
     let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig {
         connect_timeout: timeout,
         ..UdsTransportConfig::default()
     });
-    provider.connect(path).await.map_err(|error| {
+    provider.connect::<WorkerEnvelope, WorkerResponseEnvelope>(path).await.map_err(|error| {
         DaemonError::worker(format!(
             "failed to connect to worker UDS {}: {error}",
             display_path.display()
@@ -371,12 +373,12 @@ async fn connect_worker(
 }
 
 async fn handshake_worker(
-    stream: &mut UdsConnection,
+    requester: &UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>,
     worker_id: &str,
     timeout: Duration,
 ) -> DaemonResult<()> {
     let response = request_worker_response(
-        stream,
+        requester,
         WorkerEnvelope {
             payload: Some(worker_envelope::Payload::WorkerHello(WorkerHelloRequest {
                 worker_id: worker_id.to_string(),
@@ -411,17 +413,6 @@ fn check_worker_hello(
     Ok(())
 }
 
-#[cfg(test)]
-async fn send_worker_envelope(
-    stream: &mut UdsConnection,
-    envelope: WorkerEnvelope,
-) -> DaemonResult<()> {
-    stream
-        .send(&envelope)
-        .await
-        .map_err(|error| DaemonError::worker(format!("failed to send worker frame: {error}")))
-}
-
 enum WorkerResponseKind {
     Start,
     Reload,
@@ -431,19 +422,15 @@ enum WorkerResponseKind {
 const WORKER_PROTOCOL_VERSION: u32 = 1;
 
 async fn request_worker_response(
-    stream: &mut UdsConnection,
+    requester: &UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>,
     request: WorkerEnvelope,
     timeout: Duration,
 ) -> DaemonResult<WorkerResponseEnvelope> {
     let result = tokio::time::timeout(timeout, async move {
-        stream
-            .send(&request)
+        requester
+            .request(request)
             .await
-            .map_err(|error| DaemonError::worker(format!("failed to send worker request: {error}")))?;
-        stream
-            .receive::<WorkerResponseEnvelope>()
-            .await
-            .map_err(|error| DaemonError::worker(format!("failed to read worker response: {error}")))
+            .map_err(|error| DaemonError::worker(format!("worker request failed: {error}")))
     })
     .await;
     result.map_err(|_| DaemonError::worker("timed out waiting for worker response"))?
@@ -516,8 +503,7 @@ mod tests {
         WorkerEnvelope, WorkerResponseEnvelope, WorkerState,
     };
     use tenon_message::plan::MqttSourceClientIds;
-    use tenon_transport::TransportConfig;
-    use tokio::net::UnixStream;
+    use tenon_transport::{test_support, Responder, UdsResponder};
 
     fn block_on<F: Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
@@ -528,28 +514,29 @@ mod tests {
     }
 
     #[test]
-    fn send_worker_envelope_writes_length_prefixed_proto_frame() {
+    fn uds_requester_sends_worker_envelope() {
         block_on(async {
-            let (daemon_stream, worker_stream) =
-                UnixStream::pair().expect("create socket pair");
-            let mut daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
-            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
+            let (daemon_stream, mut worker_stream) = worker_pair();
             let plan = plan();
             let deployment = deployment(plan.clone());
-
-            send_worker_envelope(
-                &mut daemon_stream,
-                WorkerEnvelope {
+            let responder = tokio::spawn(async move {
+                let envelope = worker_stream.receive().await.expect("decode frame");
+                worker_stream
+                    .respond(WorkerResponseEnvelope::default())
+                    .await
+                    .expect("response");
+                envelope
+            });
+            daemon_stream
+                .request(WorkerEnvelope {
                     payload: Some(worker_envelope::Payload::StartWorker(StartWorkerRequest {
                         plan: Some(plan.clone()),
                         source_client_ids: deployment.source_client_ids.clone(),
                     })),
-                },
-            )
-            .await
-            .expect("send frame");
-
-            let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
+                })
+                .await
+                .expect("request");
+            let envelope = responder.await.expect("responder");
             match envelope.payload {
                 Some(worker_envelope::Payload::StartWorker(request)) => {
                     assert_eq!(request.plan, Some(plan));
@@ -572,11 +559,8 @@ mod tests {
         let plan = plan();
         let expected_plan = plan.clone();
         block_on(async {
-            let (daemon_stream, worker_stream) =
-                UnixStream::pair().expect("create socket pair");
-            let daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
+            let (daemon_stream, mut worker_stream) = worker_pair();
             let responder = tokio::spawn(async move {
-            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
             let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             match envelope.payload {
                 Some(worker_envelope::Payload::ReloadWorker(request)) => {
@@ -633,11 +617,8 @@ mod tests {
             id: "worker-stop".to_string(),
         };
         block_on(async {
-            let (daemon_stream, worker_stream) =
-                UnixStream::pair().expect("create socket pair");
-            let daemon_stream = UdsConnection::from_stream(daemon_stream, TransportConfig::default());
+            let (daemon_stream, mut worker_stream) = worker_pair();
             let responder = tokio::spawn(async move {
-            let mut worker_stream = UdsConnection::from_stream(worker_stream, TransportConfig::default());
             let envelope: WorkerEnvelope = worker_stream.receive().await.expect("decode frame");
             assert!(matches!(
                 envelope.payload,
@@ -696,14 +677,14 @@ mod tests {
     async fn insert_test_worker(
         manager: &mut UdsWorkerManager,
         id: &str,
-        stream: UdsConnection,
+        requester: UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>,
     ) -> WorkerHandle {
         let handle = WorkerHandle { id: id.to_string() };
         manager.workers.insert(
             handle.id.clone(),
             UdsWorkerProcess {
                 child: spawn_sleep_child(),
-                stream,
+                requester,
                 socket_path: unique_socket_path(id),
                 status: WorkerStatus::Running,
             },
@@ -719,10 +700,18 @@ mod tests {
     }
 
     async fn send_worker_response(
-        stream: &mut UdsConnection,
+        stream: &mut UdsResponder<WorkerEnvelope, WorkerResponseEnvelope>,
         response: WorkerResponseEnvelope,
     ) {
-        stream.send(&response).await.expect("write response");
+        stream.respond(response).await.expect("write response");
+    }
+
+    fn worker_pair() -> (
+        UdsRequester<WorkerEnvelope, WorkerResponseEnvelope>,
+        UdsResponder<WorkerEnvelope, WorkerResponseEnvelope>,
+    ) {
+        let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig::default());
+        test_support::uds_pair(&provider).expect("create UDS transport pair")
     }
 
     fn plan() -> DeploymentPlan {

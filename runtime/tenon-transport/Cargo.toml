@@ -3,9 +3,12 @@ name = "tenon-transport"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+test-support = []
+
 [dependencies]
 prost = "0.14"
-tokio = { version = "1.35", features = ["io-util", "net", "sync", "time"] }
+tokio = { version = "1.35", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["macros", "rt", "io-util", "sync", "time"] }

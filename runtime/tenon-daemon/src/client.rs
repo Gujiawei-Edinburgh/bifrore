@@ -7,8 +7,8 @@ use tenon_message::daemon::v1::{
     PutPipelineResponse, StopPipelineRequest, StopPipelineResponse,
 };
 use tenon_transport::{
-    InProcClient, InProcRequest, InProcServer, InProcTransportConfig,
-    InProcTransportProvider, Transport,
+    InProcRequester, InProcResponder, InProcTransportConfig, InProcTransportProvider, Requester,
+    Responder, Transport,
 };
 
 pub trait DaemonClient {
@@ -54,12 +54,12 @@ pub trait DaemonServer {
 
 #[derive(Clone)]
 pub struct InProcDaemonClient {
-    transport: InProcClient<DaemonRequest, DaemonResponse>,
+    transport: InProcRequester<DaemonRequest, DaemonResponse>,
 }
 
 pub struct InProcDaemonServer<L, S> {
     service: DaemonService<L, S>,
-    transport: InProcServer<DaemonRequest, DaemonResponse>,
+    transport: InProcResponder<DaemonRequest, DaemonResponse>,
 }
 
 pub fn create_in_proc_daemon<L, S>(
@@ -71,10 +71,7 @@ where
     S: DaemonStore,
 {
     let provider = Transport::provide::<InProcTransportProvider>(config);
-    let (transport, server_transport) = provider.create::<
-            DaemonRequest,
-            DaemonResponse,
-        >();
+    let (transport, server_transport) = provider.pair::<DaemonRequest, DaemonResponse>();
     (
         InProcDaemonClient { transport },
         InProcDaemonServer {
@@ -154,13 +151,7 @@ where
     L: WorkerManager,
     S: DaemonStore,
 {
-    async fn handle_command(
-        &mut self,
-        mut command: InProcRequest<DaemonRequest, DaemonResponse>,
-    ) {
-        let request = command
-            .take_request()
-            .expect("in-process request was already taken");
+    async fn handle_command(&mut self, request: DaemonRequest) {
         let response = match request {
             DaemonRequest::PutPipeline(request) => {
                 let response = self.service.handle_put_pipeline(request).await;
@@ -191,7 +182,7 @@ where
                 DaemonResponse::GetPipelineStatus(response)
             }
         };
-        let _ = command.respond(response);
+        let _ = self.transport.respond(response).await;
     }
 
     pub fn service(&self) -> &DaemonService<L, S> {
@@ -209,8 +200,8 @@ where
     S: DaemonStore,
 {
     async fn serve(mut self) {
-        while let Some(command) = self.transport.receive().await {
-            self.handle_command(command).await;
+        while let Ok(request) = self.transport.receive().await {
+            self.handle_command(request).await;
         }
     }
 }

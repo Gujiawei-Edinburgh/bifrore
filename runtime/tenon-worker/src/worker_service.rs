@@ -1,14 +1,15 @@
 use crate::{ActivePipeline, WorkerConfig, WorkerError, WorkerResult};
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 use tenon_message::daemon::v1::{
     worker_envelope, worker_response_envelope, GetWorkerStatsResponse, ReloadWorkerRequest,
     ReloadWorkerResponse, StartWorkerRequest, StartWorkerResponse, StopWorkerRequest,
     StopWorkerResponse, WorkerEnvelope, WorkerHelloResponse, WorkerResponseEnvelope, WorkerState,
     WorkerStats,
 };
-use tenon_transport::{Transport, UdsConnection, UdsTransportConfig, UdsTransportProvider};
+use tenon_transport::{
+    Responder, Transport, UdsResponder, UdsTransportConfig, UdsTransportProvider,
+};
 
 #[derive(Debug)]
 pub struct WorkerService {
@@ -40,67 +41,57 @@ impl WorkerService {
         }
         let _ = fs::remove_file(socket_path);
         let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig::default());
-        let listener = provider.bind(socket_path).map_err(|error| {
+        let mut responder = provider
+            .bind::<WorkerEnvelope, WorkerResponseEnvelope>(socket_path)
+            .map_err(|error| {
             WorkerError::control(format!(
                 "failed to bind worker socket {}: {error}",
                 socket_path.display()
             ))
         })?;
         let mut active = None;
-        let mut stream: Option<UdsConnection> = None;
+        let mut handshake_complete = false;
 
         loop {
-            if stream.is_none() {
-                let candidate = listener.accept().await.map_err(|error| {
-                    WorkerError::control(format!("failed to accept daemon worker connection: {error}"))
-                })?;
-                let mut candidate = candidate;
-                if let Err(error) = accept_handshake(&mut candidate, worker_id, &active).await {
-                    log::warn!("rejecting worker control connection: {error}");
+            let envelope = match responder.receive().await {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    log::warn!("worker control connection closed: {error}");
+                    handshake_complete = false;
                     continue;
                 }
-                stream = Some(candidate);
+            };
+            if !handshake_complete {
+                if let Err(error) = accept_handshake(&mut responder, envelope, worker_id, &active).await {
+                    log::warn!("rejecting worker control connection: {error}");
+                    responder.disconnect();
+                    continue;
+                }
+                handshake_complete = true;
                 continue;
             }
-
-            let current = stream.as_mut().expect("active worker stream");
-            tokio::select! {
-                accepted = listener.accept() => {
-                    match accepted {
-                        Ok(_extra) => log::warn!("rejecting additional worker control connection"),
-                        Err(error) => log::warn!("failed to accept additional worker connection: {error}"),
-                    }
-                }
-                result = current.receive::<WorkerEnvelope>() => {
-                    match result {
-                        Ok(envelope) => match handle_worker_envelope(
-                            current,
-                            envelope,
-                            &mut active,
-                            &self.config,
-                        ).await {
-                            Ok(ConnectionResult::Stop) => break,
-                            Ok(ConnectionResult::Continue) => {}
-                            Err(error) => {
-                                if let Some(failure) = active.as_ref().and_then(ActivePipeline::failure) {
-                                    let fatal = WorkerError::pipeline(format!(
-                                        "worker failure tracker reported {:?} failure: {}",
-                                        failure.component, failure.message
-                                    ));
-                                    if let Some(pipeline) = active.take() {
-                                        let _ = pipeline.stop();
-                                    }
-                                    return Err(fatal);
-                                }
-                                log::warn!("worker control connection closed: {error}");
-                                stream = None;
-                            }
-                        },
-                        Err(error) => {
-                            log::warn!("worker control connection closed: {error}");
-                            stream = None;
+            match handle_worker_envelope(
+                &mut responder,
+                envelope,
+                &mut active,
+                &self.config,
+            ).await {
+                Ok(ConnectionResult::Stop) => break,
+                Ok(ConnectionResult::Continue) => {}
+                Err(error) => {
+                    if let Some(failure) = active.as_ref().and_then(ActivePipeline::failure) {
+                        let fatal = WorkerError::pipeline(format!(
+                            "worker failure tracker reported {:?} failure: {}",
+                            failure.component, failure.message
+                        ));
+                        if let Some(pipeline) = active.take() {
+                            let _ = pipeline.stop();
                         }
+                        return Err(fatal);
                     }
+                    log::warn!("worker control request failed: {error}");
+                    responder.disconnect();
+                    handshake_complete = false;
                 }
             }
         }
@@ -116,14 +107,11 @@ enum ConnectionResult {
 }
 
 async fn accept_handshake(
-    stream: &mut UdsConnection,
+    responder: &mut UdsResponder<WorkerEnvelope, WorkerResponseEnvelope>,
+    envelope: WorkerEnvelope,
     worker_id: &str,
     active: &Option<ActivePipeline>,
 ) -> WorkerResult<()> {
-    let envelope = tokio::time::timeout(Duration::from_secs(10), stream.receive::<WorkerEnvelope>())
-        .await
-        .map_err(|_| WorkerError::control("timed out waiting for worker hello"))?
-        .map_err(|error| WorkerError::control(format!("failed to read worker hello: {error}")))?;
     let Some(worker_envelope::Payload::WorkerHello(request)) = envelope.payload else {
         return Err(WorkerError::control("worker hello is required before control requests"));
     };
@@ -134,7 +122,7 @@ async fn accept_handshake(
     } else {
         None
     };
-    stream.send(&WorkerResponseEnvelope {
+    responder.respond(WorkerResponseEnvelope {
             payload: Some(worker_response_envelope::Payload::WorkerHello(
                 WorkerHelloResponse {
                     worker_id: worker_id.to_string(),
@@ -157,7 +145,7 @@ async fn accept_handshake(
 }
 
 async fn handle_worker_envelope(
-    stream: &mut UdsConnection,
+    responder: &mut UdsResponder<WorkerEnvelope, WorkerResponseEnvelope>,
     envelope: WorkerEnvelope,
     active: &mut Option<ActivePipeline>,
     config: &WorkerConfig,
@@ -174,7 +162,7 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Running, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    stream.send(&WorkerResponseEnvelope {
+                    responder.respond(WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::StartWorker(
                                 StartWorkerResponse {
                                     state: state as i32,
@@ -189,7 +177,7 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Running, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    stream.send(&WorkerResponseEnvelope {
+                    responder.respond(WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::ReloadWorker(
                                 ReloadWorkerResponse {
                                     state: state as i32,
@@ -204,7 +192,7 @@ async fn handle_worker_envelope(
                         Ok(()) => (WorkerState::Stopped, String::new()),
                         Err(error) => (WorkerState::Error, error.message),
                     };
-                    stream.send(&WorkerResponseEnvelope {
+                    responder.respond(WorkerResponseEnvelope {
                             payload: Some(worker_response_envelope::Payload::StopWorker(
                                 StopWorkerResponse {
                                     state: state as i32,
@@ -222,7 +210,7 @@ async fn handle_worker_envelope(
                             stats: Some(WorkerStats::default()),
                             error: "worker has no active pipeline".to_string(),
                         });
-                    stream.send(&WorkerResponseEnvelope {
+                    responder.respond(WorkerResponseEnvelope {
                             payload: Some(
                                 tenon_message::daemon::v1::worker_response_envelope::Payload::WorkerStats(response),
                             ),
@@ -309,8 +297,7 @@ fn stop_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::UnixStream;
-    use tenon_transport::{FramedTransport, TransportConfig};
+    use tenon_transport::{test_support, Requester};
     use tenon_message::daemon::v1::{
         worker_envelope, worker_response_envelope, StopWorkerRequest, WorkerEnvelope,
         WorkerHelloRequest, WorkerResponseEnvelope,
@@ -333,24 +320,26 @@ mod tests {
             .build()
             .expect("runtime")
             .block_on(async {
-                let (daemon_stream, worker_stream) =
-                    UnixStream::pair().expect("socket pair");
-                let mut daemon_stream = FramedTransport::new(daemon_stream, TransportConfig::default());
-                let mut worker_stream = FramedTransport::new(worker_stream, TransportConfig::default());
+                let provider = Transport::provide::<UdsTransportProvider>(UdsTransportConfig::default());
+                let (daemon, mut worker) = test_support::uds_pair::<
+                    WorkerEnvelope,
+                    WorkerResponseEnvelope,
+                >(&provider)
+                    .expect("socket pair");
                 let request = WorkerEnvelope {
                     payload: Some(worker_envelope::Payload::WorkerHello(WorkerHelloRequest {
                         worker_id: "worker-1".to_string(),
                         protocol_version: 1,
                     })),
                 };
-                daemon_stream.send(&request).await.expect("write hello");
-                accept_handshake(&mut worker_stream, "worker-1", &None)
+                let response = tokio::spawn(async move {
+                    daemon.request(request).await
+                });
+                let envelope = worker.receive().await.expect("read hello");
+                accept_handshake(&mut worker, envelope, "worker-1", &None)
                     .await
                     .expect("accept handshake");
-                let response = daemon_stream
-                    .receive::<WorkerResponseEnvelope>()
-                    .await
-                    .expect("read response");
+                let response = response.await.expect("request task").expect("read response");
                 assert!(matches!(
                     response.payload,
                     Some(worker_response_envelope::Payload::WorkerHello(_))
